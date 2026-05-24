@@ -18,6 +18,7 @@ configs/providers.yaml
 
 # Environment
 .env
+.claude/
 CLAUDE.md
 
 # Test
