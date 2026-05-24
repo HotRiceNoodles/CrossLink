@@ -1,0 +1,50 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deployments/docker/Dockerfile
+    ports:
+      - "${CL_SERVER_PORT:-8080}:8080"
+    environment:
+      - CL_DATABASE_HOST=postgres
+      - CL_DATABASE_PORT=5432
+      - CL_DATABASE_USER=crosslink
+      - CL_DATABASE_PASSWORD=crosslink_dev
+      - CL_DATABASE_DBNAME=crosslink
+      - CL_DATABASE_SSLMODE=disable
+      - CL_REDIS_HOST=redis
+      - CL_REDIS_PORT=6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: crosslink
+      POSTGRES_PASSWORD: crosslink_dev
+      POSTGRES_DB: crosslink
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crosslink"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

@@ -1,0 +1,47 @@
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 120s
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: crosslink
+  sslmode: disable
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+gateway:
+  auth_key: "lgw-change-me"
+
+rate_limit:
+  rpm: 60
+  tpm: 100000
+
+logging:
+  level: info
+  format: json
+
+admin:
+  username: admin
+  password: admin123
+  jwt_secret: "dev-secret-change-in-production"
+  token_expiry: 24
+
+secret_manager:
+  encryption_key: "aU8za9Ezj+PMGvWr0F2YLb1oLiNxD7nEq4CbdWsP5ek="    # gm: 3DYiFuVMEbi77ENlkqyWqg==
+
+crypto:
+  mode: standard          # standard (SHA-256/RSA/AES) or gm (SM3/SM2/SM4)
+
+license:
+  # server_url: "http://localhost:8090"   # License Server address
+  # license_key: ""                        # Filled after online activation
+  heartbeat_enabled: true
+  heartbeat_interval: 24h

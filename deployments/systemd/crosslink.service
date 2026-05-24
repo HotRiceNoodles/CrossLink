@@ -1,0 +1,46 @@
+[Unit]
+Description=CrossLink - API Gateway for LLM Providers
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=crosslink
+Group=crosslink
+WorkingDirectory=/opt/crosslink/current
+
+ExecStart=/opt/crosslink/current/crosslink
+
+# Graceful shutdown
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Secrets from environment file (root:crosslink, mode 640)
+EnvironmentFile=-/opt/crosslink/current/configs/env
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/crosslink/current
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crosslink
+
+[Install]
+WantedBy=multi-user.target

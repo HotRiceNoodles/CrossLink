@@ -1,0 +1,83 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deployments/docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - CL_DATABASE_HOST=postgres
+      - CL_DATABASE_PORT=5432
+      - CL_DATABASE_USER=${DB_USER:-crosslink}
+      - CL_DATABASE_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
+      - CL_DATABASE_DBNAME=${DB_NAME:-crosslink}
+      - CL_DATABASE_SSLMODE=${DB_SSLMODE:-require}
+      - CL_REDIS_HOST=redis
+      - CL_REDIS_PORT=6379
+      - CL_REDIS_PASSWORD=${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      - CL_GATEWAY_AUTH_KEY=${GATEWAY_AUTH_KEY:?Set GATEWAY_AUTH_KEY}
+      - CL_ADMIN_JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET}
+      - CL_ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-crosslink}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-crosslink}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-crosslink}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Don't expose postgres port externally in production
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Don't expose redis port externally in production
+
+  # Reverse proxy for TLS termination
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

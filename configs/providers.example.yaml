@@ -1,0 +1,95 @@
+providers:
+  # --- OpenAI Compatible ---
+  - name: deepseek
+    display_name: DeepSeek
+    adapter_type: openai_compatible
+    base_url: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+    models:
+      - model_name: claude-sonnet-4-20250514
+        provider_model: deepseek-chat
+        weight: 3
+        priority: 1
+        input_price: 0.0014
+        output_price: 0.0028
+
+  # Embeddings model example:
+  # - model_name: text-embedding-3-small
+  #   provider_model: text-embedding-3-small
+  #   weight: 1
+  #   priority: 1
+  #   input_price: 0.00002
+  #   output_price: 0
+
+  # --- Ollama (local) ---
+  # - name: ollama
+  #   display_name: Ollama Local
+  #   adapter_type: ollama
+  #   base_url: http://localhost:11434
+  #   api_key: "unused"
+  #   models:
+  #     - model_name: llama3
+  #       provider_model: llama3
+  #       weight: 1
+
+  # --- Anthropic ---
+  # - name: anthropic
+  #   display_name: Anthropic
+  #   adapter_type: anthropic
+  #   base_url: https://api.anthropic.com
+  #   api_key: ${ANTHROPIC_API_KEY}
+  #   extra_config:
+  #     api_version: "2023-06-01"
+  #   models:
+  #     - model_name: claude-sonnet-4-20250514
+  #       provider_model: claude-sonnet-4-20250514
+  #       weight: 1
+  #       input_price: 0.003
+  #       output_price: 0.015
+
+  # --- Azure OpenAI ---
+  # - name: azure
+  #   display_name: Azure OpenAI
+  #   adapter_type: azure_openai
+  #   base_url: https://myresource.openai.azure.com
+  #   api_key: ${AZURE_OPENAI_API_KEY}
+  #   extra_config:
+  #     deployment_name: "my-gpt4-deployment"
+  #     api_version: "2024-02-01"
+  #   models:
+  #     - model_name: gpt-4
+  #       provider_model: gpt-4
+  #       weight: 1
+
+  # --- AWS Bedrock ---
+  # - name: bedrock
+  #   display_name: AWS Bedrock
+  #   adapter_type: aws_bedrock
+  #   base_url: ""  # unused
+  #   api_key: ""   # unused
+  #   extra_config:
+  #     region: "us-east-1"
+  #     model_id: "anthropic.claude-sonnet-4-20250514-v1:0"
+  #     access_key_id: ${AWS_ACCESS_KEY_ID}
+  #     secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+  #   models:
+  #     - model_name: claude-sonnet-4-20250514
+  #       provider_model: claude-sonnet-4-20250514
+  #       weight: 1
+
+  # --- Google Vertex AI ---
+  # - name: vertex
+  #   display_name: Google Vertex AI
+  #   adapter_type: google_vertex
+  #   base_url: ""  # unused
+  #   api_key: ""   # unused
+  #   extra_config:
+  #     project_id: "my-gcp-project"
+  #     region: "us-central1"
+  #     model: "gemini-2.0-flash"
+  #     access_token: ${VERTEX_ACCESS_TOKEN}
+  #     # or use service_account_key with the JSON key file content
+  #   models:
+  #     - model_name: gemini-2.0-flash
+  #       provider_model: gemini-2.0-flash
+  #       weight: 1

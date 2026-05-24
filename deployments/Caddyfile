@@ -1,0 +1,24 @@
+# Replace YOUR_DOMAIN with your actual domain
+# Caddy will automatically provision TLS certificates via Let's Encrypt
+
+YOUR_DOMAIN {
+	reverse_proxy gateway:8080
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	# Compress responses
+	encode gzip
+}
+
+# HTTP to HTTPS redirect
+http://YOUR_DOMAIN {
+	redir https://YOUR_DOMAIN{uri} permanent
+}

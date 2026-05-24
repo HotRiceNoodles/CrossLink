@@ -1,0 +1,27 @@
+# Binaries
+bin/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config with secrets
+configs/config.yaml
+configs/providers.yaml
+
+# Environment
+.env
+CLAUDE.md
+
+# Test
+coverage.out
+
+# Build
+dist/

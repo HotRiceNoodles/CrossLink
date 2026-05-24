@@ -1,0 +1,70 @@
+# GM (国密) deployment — GmSSL/Nginx proxy + CrossLink
+#
+# Usage:
+#   1. Generate SM2 certificates:
+#      go run ../../cmd/certgen --mode=sm2 --out-dir=./certs --host=gateway.internal
+#
+#   2. Generate SM4 encryption key:
+#      openssl rand -base64 16
+#
+#   3. Create .env file:
+#      cat > .env <<EOF
+#      GM_ENCRYPTION_KEY=<base64-encoded 16-byte key>
+#      CL_DATABASE_DSN=postgres://crosslink:password@postgres:5432/crosslink?sslmode=disable
+#      CL_ADMIN_API_KEY=your-secure-admin-key
+#      EOF
+#
+#   4. Start:
+#      docker compose up -d
+
+services:
+  gm-proxy:
+    image: gmssl/nginx:latest
+    ports:
+      - "443:443"
+    volumes:
+      - ./certs:/etc/gm/certs:ro
+      - ./nginx-gm.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  gateway:
+    image: crosslink:latest
+    environment:
+      - CL_CRYPTO_MODE=gm
+      - CL_ENCRYPTION_KEY=${GM_ENCRYPTION_KEY}
+      - CL_DATABASE_DSN=${CL_DATABASE_DSN}
+      - CL_ADMIN_API_KEY=${CL_ADMIN_API_KEY}
+      - CL_REDIS_ADDR=redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=crosslink
+      - POSTGRES_USER=crosslink
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crosslink"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:

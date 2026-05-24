@@ -1,0 +1,1 @@
+ALTER TABLE usage_logs ALTER COLUMN cost TYPE DECIMAL(16,8);
