@@ -161,6 +161,14 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 		return nil, ErrKeyExpired
 	}
 
+	// Update last_used_at once per day (date-level granularity)
+	now := time.Now()
+	if key.LastUsedAt == nil || key.LastUsedAt.UTC().Format("2006-01-02") != now.UTC().Format("2006-01-02") {
+		today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+		s.db.WithContext(ctx).Model(key).Update("last_used_at", today)
+		key.LastUsedAt = &today
+	}
+
 	// Cache the result
 	if s.rdb != nil {
 		if data, err := json.Marshal(key); err == nil {
