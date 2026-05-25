@@ -105,7 +105,7 @@ func (s *BudgetService) ReportUsage(ctx context.Context, scope, targetID, period
 	ttl := PeriodTTL(period)
 	pipe := s.rdb.Pipeline()
 	pipe.IncrByFloat(ctx, key, cost)
-	pipe.ExpireNX(ctx, key, ttl)
+	pipe.Expire(ctx, key, ttl)
 	if _, err := pipe.Exec(ctx); err != nil {
 		slog.Warn("budget report redis pipeline failed", "key", key, "error", err)
 	}

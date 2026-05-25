@@ -45,8 +45,8 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			cost = inputPrice*float64(inputTokens)/1000 + outputPrice*float64(outputTokens)/1000
 		}
 		if cost <= 0 {
-			return
-		}
+				return
+			}
 
 		// Use background context for all post-response Redis calls;
 		// c.Request.Context() may be cancelled after response is written.
