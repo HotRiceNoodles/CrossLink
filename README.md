@@ -32,7 +32,7 @@ Unified LLM proxy with load balancing, fallback, rate limiting, caching, and MCP
 - **Crypto Flexibility** — Standard (SHA-256/RSA/AES) or Chinese national cryptography (SM3/SM2/SM4)
 - **Multi-Instance** — Provider registry sync via Redis Pub/Sub, distributed round-robin, and encryption key rotation
 - **Graceful Shutdown** — Multi-phase drain for in-flight SSE streams
-- **Vue 3 Admin Dashboard** — Built-in web UI for management and monitoring
+- **Vue 3 Admin Dashboard** — Built-in web UI for management and monitoring ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard))
 
 ## Architecture
 

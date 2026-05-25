@@ -32,7 +32,7 @@
 - **国密支持** — 支持国际标准（SHA-256/RSA/AES）和国密算法（SM3/SM2/SM4）
 - **多实例部署** — 通过 Redis Pub/Sub 同步供应商注册、分布式轮询和密钥轮换
 - **优雅关闭** — 多阶段排空处理进行中的 SSE 流
-- **Vue 3 管理后台** — 内置 Web 管理界面
+- **Vue 3 管理后台** — 内置 Web 管理界面（[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）
 
 ## 架构
 
