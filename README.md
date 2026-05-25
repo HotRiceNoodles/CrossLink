@@ -321,6 +321,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 See [SECURITY.md](SECURITY.md) for our security policy and vulnerability reporting instructions.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date)](https://star-history.com/#HotRiceNoodles/CrossLink&Date)
+
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).

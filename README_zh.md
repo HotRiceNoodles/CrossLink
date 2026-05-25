@@ -321,6 +321,10 @@ make release        # 构建发布版本
 
 请参阅 [SECURITY.md](SECURITY.md) 了解安全政策和漏洞报告方式。
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date)](https://star-history.com/#HotRiceNoodles/CrossLink&Date)
+
 ## 许可证
 
 本项目基于 [Apache License 2.0](LICENSE) 许可。
