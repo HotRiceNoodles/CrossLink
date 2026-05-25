@@ -94,6 +94,7 @@ type UsageEntry struct {
 	OutputPrice    float64
 	Currency       string
 	LatencyMs      int64
+	FirstTokenMs   int64
 	StatusCode     int
 	ErrorType      string
 	UserMessage    string
@@ -127,7 +128,7 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 		Currency:       model.ValidCurrency(entry.Currency),
 		LatencyMs:      int(entry.LatencyMs),
 		StatusCode:     entry.StatusCode,
-		ErrorType:      entry.ErrorType,
+		ErrorType:     entry.ErrorType,
 		FallbackCount:      entry.FallbackCount,
 		RetryCount:         entry.RetryCount,
 		GuardrailTriggered: entry.GuardrailTriggered,
@@ -135,6 +136,10 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 		CacheHit:           entry.CacheHit,
 		AgentType:          entry.AgentType,
 		SecurityEvents:     entry.SecurityEvents,
+	}
+	if entry.FirstTokenMs > 0 {
+		ms := int(entry.FirstTokenMs)
+		log.FirstTokenMs = &ms
 	}
 	if entry.ProviderID > 0 {
 		log.ProviderID = &entry.ProviderID

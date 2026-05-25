@@ -429,6 +429,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	var outputEstimate int
 	var modelRespBuf strings.Builder
 	var gotDone bool
+	var firstTokenAt time.Time
 
 	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
@@ -502,6 +503,9 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 				}
 				if content != "" {
 					outputEstimate += token.Estimate(content)
+					if firstTokenAt.IsZero() {
+						firstTokenAt = time.Now()
+					}
 				}
 			}
 		}
@@ -561,6 +565,9 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 				}
 				if content != "" {
 					outputEstimate += token.Estimate(content)
+					if firstTokenAt.IsZero() {
+						firstTokenAt = time.Now()
+					}
 				}
 			}
 		}
@@ -608,6 +615,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			OutputPrice:    route.OutputPrice,
 			StatusCode:     http.StatusOK,
 			LatencyMs:      latency,
+			FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     totalRetries,
 		}
@@ -643,3 +651,10 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }
+func firstTokenMsValue(start time.Time, firstTokenAt time.Time) int64 {
+	if firstTokenAt.IsZero() {
+		return 0
+	}
+	return firstTokenAt.Sub(start).Milliseconds()
+}
+

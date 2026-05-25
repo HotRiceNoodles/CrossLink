@@ -312,6 +312,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Status(http.StatusOK)
 
 	var modelRespBuf strings.Builder
+	var firstTokenAt time.Time
 	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		apiKeyID = key.ID
@@ -333,41 +334,49 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		default:
 		}
 
-		// Response-side stream guardrail check
-		if grWrapper != nil && event.Event == "content_block_delta" {
+		// Extract text from content_block_delta events (parsed once, used for TTFT + guardrail + content log)
+		var deltaText string
+		if event.Event == "content_block_delta" {
 			var delta struct {
 				Delta struct {
 					Text string `json:"text"`
 				} `json:"delta"`
 			}
-			if json.Unmarshal([]byte(event.Data), &delta) == nil && delta.Delta.Text != "" {
-				grWrapper.Append(delta.Delta.Text)
-				if grWrapper.BufferLen() >= grWrapper.WindowSize() {
-					blocked, grResult := grWrapper.CheckText(ctx, grWrapper.BufferText())
-					grWrapper.Slide()
-					if blocked {
-						c.Set("guardrail_triggered", true)
-						c.Set("guardrail_rule", grResult.RuleName)
-						if grResult.Action == "mask" && grResult.MaskedContent != "" {
-							maskData, _ := json.Marshal(map[string]any{
-								"type": "content_block_delta",
-								"delta": map[string]any{"type": "text_delta", "text": grResult.MaskedContent},
-							})
-							fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData)
-							flusher.Flush()
-							return true
-						}
-						reason := "blocked by guardrail"
-						errData, _ := json.Marshal(map[string]any{
-							"type":  "error",
-							"error": map[string]any{"type": "guardrail_blocked", "message": reason},
-						})
-						fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
-						fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			if json.Unmarshal([]byte(event.Data), &delta) == nil {
+				deltaText = delta.Delta.Text
+			}
+			if deltaText != "" && firstTokenAt.IsZero() {
+				firstTokenAt = time.Now()
+			}
+		}
 
+		// Response-side stream guardrail check
+		if grWrapper != nil && deltaText != "" {
+			grWrapper.Append(deltaText)
+			if grWrapper.BufferLen() >= grWrapper.WindowSize() {
+				blocked, grResult := grWrapper.CheckText(ctx, grWrapper.BufferText())
+				grWrapper.Slide()
+				if blocked {
+					c.Set("guardrail_triggered", true)
+					c.Set("guardrail_rule", grResult.RuleName)
+					if grResult.Action == "mask" && grResult.MaskedContent != "" {
+						maskData, _ := json.Marshal(map[string]any{
+							"type": "content_block_delta",
+							"delta": map[string]any{"type": "text_delta", "text": grResult.MaskedContent},
+						})
+						fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData)
 						flusher.Flush()
-						return false
+						return true
 					}
+					reason := "blocked by guardrail"
+					errData, _ := json.Marshal(map[string]any{
+						"type":  "error",
+						"error": map[string]any{"type": "guardrail_blocked", "message": reason},
+					})
+					fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+					flusher.Flush()
+					return false
 				}
 			}
 		}
@@ -379,15 +388,8 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			messageStopSent = true
 		}
 
-		if h.usageSvc.IsContentLogEnabled() && event.Event == "content_block_delta" {
-			var delta struct {
-				Delta struct {
-					Text string `json:"text"`
-				} `json:"delta"`
-			}
-			if json.Unmarshal([]byte(event.Data), &delta) == nil && delta.Delta.Text != "" && modelRespBuf.Len() < maxResponseBuffer {
-				modelRespBuf.WriteString(delta.Delta.Text)
-			}
+		if h.usageSvc.IsContentLogEnabled() && deltaText != "" && modelRespBuf.Len() < maxResponseBuffer {
+			modelRespBuf.WriteString(deltaText)
 		}
 		return true
 	}, sessionID)
@@ -457,6 +459,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			OutputPrice:    result.OutputPrice,
 			Currency:       result.Currency,
 			LatencyMs:      result.LatencyMs,
+			FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
 			StatusCode:     http.StatusOK,
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     result.RetryCount,
