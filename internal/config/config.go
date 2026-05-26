@@ -69,6 +69,7 @@ func (r RedisConfig) Addr() string {
 
 type GatewayConfig struct {
 	AuthKey string `mapstructure:"auth_key"`
+	BaseURL string `mapstructure:"base_url"`
 }
 
 type AdminConfig struct {

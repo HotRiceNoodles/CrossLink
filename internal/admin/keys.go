@@ -24,6 +24,11 @@ type KeyHandler struct {
 	auditSvc *service.AuditService
 }
 
+// OnKeyCreated is set ONCE at startup by commercial edition to dispatch key emails.
+// Nil in Community — no email is sent.
+// NOT safe for concurrent writes — do not reassign at runtime.
+var OnKeyCreated func(keyName, email, rawKey string)
+
 func NewKeyHandler(keySvc KeyService, teamRepo TeamRepository, rdb *redis.Client, auditSvc *service.AuditService) *KeyHandler {
 	return &KeyHandler{keySvc: keySvc, teamRepo: teamRepo, rdb: rdb, auditSvc: auditSvc}
 }
@@ -44,6 +49,7 @@ func (h *KeyHandler) checkKeyOwnership(c *gin.Context, key *model.APIKey) bool {
 func (h *KeyHandler) Create(c *gin.Context) {
 	var input struct {
 		Name          string   `json:"name" binding:"required,max=64"`
+		Email         string   `json:"email" binding:"omitempty,email"`
 		AllowedModels []string `json:"allowed_models"`
 		AllowedRoutes []string `json:"allowed_routes"`
 		TPMLimit      int      `json:"tpm_limit"`
@@ -83,6 +89,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	result, err := h.keySvc.Create(c.Request.Context(), &service.CreateKeyInput{
 		Name:          input.Name,
+		Email:         input.Email,
 		AllowedModels: input.AllowedModels,
 		AllowedRoutes: input.AllowedRoutes,
 		TPMLimit:      input.TPMLimit,
@@ -100,10 +107,18 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"after": map[string]any{"name": input.Name, "key_prefix": result.KeyPrefix}}))
 	}
+
+	emailSent := false
+	if input.Email != "" && OnKeyCreated != nil {
+		OnKeyCreated(input.Name, input.Email, result.APIKey)
+		emailSent = true
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"data": gin.H{
 			"key":        result.APIKey,
 			"key_prefix": result.KeyPrefix,
+			"email_sent": emailSent,
 			"message":    "Save this key now. It will not be shown again.",
 		},
 	})
@@ -285,10 +300,18 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "key:regenerate", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"key_name": key.Name, "key_prefix": result.KeyPrefix}))
 	}
+
+	emailSent := false
+	if key.Email != nil && *key.Email != "" && OnKeyCreated != nil {
+		OnKeyCreated(key.Name, *key.Email, result.APIKey)
+		emailSent = true
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
 			"key":        result.APIKey,
 			"key_prefix": result.KeyPrefix,
+			"email_sent": emailSent,
 			"message":    "Save this key now. It will not be shown again.",
 		},
 	})

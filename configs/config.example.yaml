@@ -19,6 +19,7 @@ redis:
 
 gateway:
   auth_key: "lgw-change-me"
+  # base_url: "https://api.your-gateway.com"  # Public URL for key delivery emails
 
 rate_limit:
   rpm: 60
@@ -39,6 +40,16 @@ secret_manager:
 
 crypto:
   mode: standard          # standard (SHA-256/RSA/AES) or gm (SM3/SM2/SM4)
+
+# SMTP mail server for key delivery emails (Pro/Enterprise)
+# Supports STARTTLS on port 587 only. Implicit TLS (port 465) is not supported.
+# Credentials can also be set via env vars: CL_SMTP_HOST, CL_SMTP_PORT, etc.
+# smtp:
+#   host: smtp.example.com
+#   port: 587
+#   username: ""
+#   password: ""
+#   from: noreply@example.com
 
 license:
   # server_url: "http://localhost:8090"   # License Server address

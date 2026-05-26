@@ -27,6 +27,7 @@ type APIKey struct {
 	CreatedByID   *int64         `gorm:"index" json:"created_by_id"`
 	TeamID        *int64         `gorm:"index" json:"team_id"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
+	Email         *string        `gorm:"size:255" json:"email,omitempty"`
 }
 
 func (APIKey) TableName() string { return "api_keys" }

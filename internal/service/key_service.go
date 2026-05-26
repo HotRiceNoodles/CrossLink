@@ -36,6 +36,7 @@ func NewKeyService(repo *repository.APIKeyRepo, hashRepo *repository.APIKeyHashR
 
 type CreateKeyInput struct {
 	Name          string
+	Email         string
 	AllowedModels []string
 	AllowedRoutes []string
 	TPMLimit      int
@@ -88,6 +89,9 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 	}
 	if input.TeamID > 0 {
 		key.TeamID = &input.TeamID
+	}
+	if input.Email != "" {
+		key.Email = &input.Email
 	}
 
 	hashRecord := &model.APIKeyHash{
