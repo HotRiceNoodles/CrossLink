@@ -27,7 +27,7 @@ type KeyHandler struct {
 // OnKeyCreated is set ONCE at startup by commercial edition to dispatch key emails.
 // Nil in Community — no email is sent.
 // NOT safe for concurrent writes — do not reassign at runtime.
-var OnKeyCreated func(keyName, email, rawKey string)
+var OnKeyCreated func(keyName, email, rawKey, lang string)
 
 func NewKeyHandler(keySvc KeyService, teamRepo TeamRepository, rdb *redis.Client, auditSvc *service.AuditService) *KeyHandler {
 	return &KeyHandler{keySvc: keySvc, teamRepo: teamRepo, rdb: rdb, auditSvc: auditSvc}
@@ -50,6 +50,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	var input struct {
 		Name          string   `json:"name" binding:"required,max=64"`
 		Email         string   `json:"email" binding:"omitempty,email"`
+		Lang          string   `json:"lang"`
 		AllowedModels []string `json:"allowed_models"`
 		AllowedRoutes []string `json:"allowed_routes"`
 		TPMLimit      int      `json:"tpm_limit"`
@@ -110,7 +111,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	emailSent := false
 	if input.Email != "" && OnKeyCreated != nil {
-		OnKeyCreated(input.Name, input.Email, result.APIKey)
+		OnKeyCreated(input.Name, input.Email, result.APIKey, input.Lang)
 		emailSent = true
 	}
 
@@ -303,7 +304,7 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 
 	emailSent := false
 	if key.Email != nil && *key.Email != "" && OnKeyCreated != nil {
-		OnKeyCreated(key.Name, *key.Email, result.APIKey)
+		OnKeyCreated(key.Name, *key.Email, result.APIKey, "")
 		emailSent = true
 	}
 

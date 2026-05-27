@@ -32,12 +32,12 @@ func applyUsageFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
 		query = query.Where("api_key_id = ?", apiKeyID)
 	}
 	if start := c.Query("start_date"); start != "" {
-		if t, err := time.Parse("2006-01-02", start); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", start, time.Local); err == nil {
 			query = query.Where("created_at >= ?", t)
 		}
 	}
 	if end := c.Query("end_date"); end != "" {
-		if t, err := time.Parse("2006-01-02", end); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", end, time.Local); err == nil {
 			query = query.Where("created_at < ?", t.AddDate(0, 0, 1))
 		}
 	}
@@ -113,28 +113,39 @@ type usageStats struct {
 }
 
 func (h *UsageHandler) Stats(c *gin.Context) {
-	var stats usageStats
-
 	base := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c)
+
+	// Determine primary currency (same pattern as DailyTrend/TeamStats)
+	primaryCurrency := "CNY"
+	var topCur struct{ Currency string }
+	base.Select("currency").
+		Group("currency").
+		Order("SUM(cost) DESC").
+		Limit(1).
+		Scan(&topCur)
+	if topCur.Currency != "" {
+		primaryCurrency = topCur.Currency
+	}
+
+	// Currency-agnostic metrics
+	var stats usageStats
 	base.Select(
-		"COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(cost), 0) as total_cost, COALESCE(AVG(latency_ms), 0) as avg_latency_ms",
+		"COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(AVG(latency_ms), 0) as avg_latency_ms",
 	).Scan(&stats)
 
-	// Sum cost grouped by currency for accurate display
+	// Cost: filtered to primary currency only
+	var costResult struct{ Total float64 }
+	base.Where("currency = ?", primaryCurrency).
+		Select("COALESCE(SUM(cost), 0) as total").
+		Scan(&costResult)
+	stats.TotalCost = costResult.Total
+	stats.Currency = primaryCurrency
+
+	// Per-currency breakdown (backward compat)
 	var currencySums []CurrencyCostSum
-	applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c).
-		Select("currency, COALESCE(SUM(cost), 0) as total").
+	base.Select("currency, COALESCE(SUM(cost), 0) as total").
 		Group("currency").
 		Scan(&currencySums)
-
-	if len(currencySums) == 1 {
-		stats.Currency = currencySums[0].Currency
-		stats.TotalCost = currencySums[0].Total
-	} else if len(currencySums) > 1 {
-		stats.Currency = currencySums[0].Currency
-	} else {
-		stats.Currency = "CNY"
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
