@@ -1,0 +1,8 @@
+.git
+*.md
+imgs/
+.env*
+.claude/
+bin/
+build/
+web/

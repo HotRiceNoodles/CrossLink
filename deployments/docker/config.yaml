@@ -1,0 +1,45 @@
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 120s
+
+database:
+  host: postgres
+  port: 5432
+  user: crosslink
+  password: crosslink_dev
+  dbname: crosslink
+  sslmode: disable
+
+redis:
+  host: redis
+  port: 6379
+  password: ""
+  db: 0
+
+gateway:
+  auth_key: "lgw-change-me"
+
+rate_limit:
+  rpm: 60
+  tpm: 100000
+
+logging:
+  level: info
+  format: json
+
+admin:
+  username: admin
+  password: admin123
+  jwt_secret: "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1"
+  token_expiry: 24
+
+secret_manager:
+  encryption_key: "aU8za9Ezj+PMGvWr0F2YLb1oLiNxD7nEq4CbdWsP5ek="
+
+crypto:
+  mode: standard
+
+license:
+  heartbeat_enabled: false
+  heartbeat_interval: 24h

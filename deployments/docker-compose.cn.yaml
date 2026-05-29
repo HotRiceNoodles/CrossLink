@@ -2,7 +2,7 @@ services:
   gateway:
     build:
       context: ..
-      dockerfile: deployments/docker/Dockerfile
+      dockerfile: deployments/docker/Dockerfile.cn
     depends_on:
       postgres:
         condition: service_healthy
@@ -12,7 +12,7 @@ services:
   frontend:
     build:
       context: ..
-      dockerfile: deployments/docker/Dockerfile.frontend
+      dockerfile: deployments/docker/Dockerfile.frontend.cn
       args:
         FRONTEND_REPO_REF: ${FRONTEND_REF:-main}
     ports:
