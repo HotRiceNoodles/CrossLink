@@ -90,7 +90,7 @@ any LLM provider:
 - **Multi-Instance** — Redis Pub/Sub for provider registry sync and distributed round-robin
 - **Graceful Shutdown** — 4-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
   background goroutine cancellation
-- **One-Command Deploy** — Docker Compose for dev and production (includes Caddy with auto-TLS)
+- **One-Command Deploy** — Docker Compose spins up gateway, frontend, PostgreSQL, and Redis in one command
 
 ---
 
@@ -112,13 +112,17 @@ any LLM provider:
 
 ### Docker Compose (Recommended)
 
+Frontend ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)) and backend are built together. One command starts everything:
+
 ```bash
 git clone https://github.com/HotRiceNoodles/CrossLink.git
-cd CrossLink/deployments
-docker compose -f docker-compose.dev.yaml up
+cd CrossLink
+docker compose -f deployments/docker-compose.dev.yaml up --build
 ```
 
-Gateway starts at `http://localhost:8080` with the admin dashboard ready to use.
+Frontend dashboard and API gateway are available at `http://localhost` (port 80).
+
+> **China network?** Use `docker compose -f deployments/docker-compose.cn.yaml up --build` with Go and npm mirrors pre-configured.
 
 ### Build from Source
 
@@ -284,11 +288,16 @@ Full API reference is available in the [documentation](docs/).
 ### Production Docker Compose
 
 ```bash
-cd deployments
-docker compose -f docker-compose.prod.yaml up -d
+docker compose -f deployments/docker-compose.prod.yaml up -d --build
 ```
 
-Includes Caddy reverse proxy with automatic TLS via Let's Encrypt.
+### China Network
+
+Use the CN variant with Go proxy (`goproxy.cn`) and npm mirror (`registry.npmmirror.com`):
+
+```bash
+docker compose -f deployments/docker-compose.cn.yaml up --build
+```
 
 ### Nginx
 

@@ -77,7 +77,7 @@ CrossLink 充当你应用与任意 LLM 供应商之间的**万能转接头**：
 - **Vue 3 管理后台** — 内置 Web 管理界面，供应商、模型、Key、用量、MCP 一站式管理（[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）
 - **多实例部署** — Redis Pub/Sub 供应商注册同步、分布式轮询、密钥轮换
 - **优雅关闭** — 4 阶段排空：SSE 流排空 → HTTP 关闭 → Worker 刷盘 → 后台协程取消
-- **一键部署** — Docker Compose 开发/生产环境，包含 Caddy 自动 TLS
+- **一键部署** — Docker Compose 一键启动网关、前端、PostgreSQL、Redis，前后端自动联动
 
 ---
 
@@ -99,13 +99,17 @@ CrossLink 充当你应用与任意 LLM 供应商之间的**万能转接头**：
 
 ### Docker Compose（推荐）
 
+前端（[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）和后端自动从 GitHub 拉取并构建，一条命令启动全部服务：
+
 ```bash
 git clone https://github.com/HotRiceNoodles/CrossLink.git
-cd CrossLink/deployments
-docker compose -f docker-compose.dev.yaml up
+cd CrossLink
+docker compose -f deployments/docker-compose.dev.yaml up --build
 ```
 
-网关启动于 `http://localhost:8080`，管理后台即可使用。
+前端管理后台和 API 网关统一入口：`http://localhost`（端口 80）。
+
+> **国内网络？** 使用 `docker compose -f deployments/docker-compose.cn.yaml up --build`，已预配置 Go 和 npm 国内镜像。
 
 ### 源码编译
 
@@ -270,11 +274,16 @@ providers:
 ### 生产环境 Docker Compose
 
 ```bash
-cd deployments
-docker compose -f docker-compose.prod.yaml up -d
+docker compose -f deployments/docker-compose.prod.yaml up -d --build
 ```
 
-包含 Caddy 反向代理，通过 Let's Encrypt 自动获取 TLS 证书。
+### 国内网络加速
+
+使用 CN 变体，已配置 Go 代理（`goproxy.cn`）和 npm 镜像（`registry.npmmirror.com`）：
+
+```bash
+docker compose -f deployments/docker-compose.cn.yaml up --build
+```
 
 ### Nginx
 
