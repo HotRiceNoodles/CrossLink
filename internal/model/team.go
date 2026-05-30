@@ -16,6 +16,7 @@ type Team struct {
 	RPMLimit     int       `gorm:"not null;default:0" json:"rpm_limit"`
 	TPMLimit     int       `gorm:"not null;default:0" json:"tpm_limit"`
 	Status       int16     `gorm:"not null;default:1" json:"status"`
+	OrgID        *int64    `gorm:"index" json:"org_id"`
 	CreatedByID  int64     `gorm:"not null" json:"created_by_id"`
 	CreatedAt    time.Time      `gorm:"not null;default:now()" json:"created_at"`
 	UpdatedAt    time.Time      `gorm:"not null;default:now()" json:"updated_at"`

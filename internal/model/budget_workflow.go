@@ -4,6 +4,7 @@ import "time"
 
 type BudgetRecommendation struct {
 	ID               int64     `gorm:"primaryKey" json:"id"`
+	OrgID            *int64    `gorm:"index" json:"org_id,omitempty"`
 	TargetType       string    `gorm:"size:16;not null" json:"target_type"`
 	TargetID         int64     `gorm:"not null" json:"target_id"`
 	Period           string    `gorm:"size:16;not null;default:'monthly'" json:"period"`
@@ -21,6 +22,7 @@ func (BudgetRecommendation) TableName() string { return "budget_recommendations"
 
 type BudgetRequest struct {
 	ID               int64      `gorm:"primaryKey" json:"id"`
+	OrgID            *int64     `gorm:"index" json:"org_id,omitempty"`
 	TargetType       string     `gorm:"size:16;not null" json:"target_type"`
 	TargetID         int64      `gorm:"not null" json:"target_id"`
 	Period           string     `gorm:"size:16;not null;default:'monthly'" json:"period"`

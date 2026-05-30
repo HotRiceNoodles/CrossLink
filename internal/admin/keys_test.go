@@ -36,7 +36,7 @@ func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 		listByCreatorFn: func(ctx context.Context, userID int64) ([]model.APIKey, error) {
 			return nil, nil
 		},
-		listFn: func(ctx context.Context) ([]model.APIKey, error) {
+		listFn: func(ctx context.Context, orgID int64) ([]model.APIKey, error) {
 			return nil, nil
 		},
 		listByTeamFn: func(ctx context.Context, teamID int64) ([]model.APIKey, error) {
@@ -126,7 +126,7 @@ func TestKeyHandler_Create_NegativeBudget(t *testing.T) {
 func TestKeyHandler_Create_CommunityKeyLimit(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	// Simulate 5 existing keys (community limit)
-	keySvc.listFn = func(ctx context.Context) ([]model.APIKey, error) {
+	keySvc.listFn = func(ctx context.Context, orgID int64) ([]model.APIKey, error) {
 		return []model.APIKey{
 			{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5},
 		}, nil

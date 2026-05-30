@@ -16,6 +16,7 @@ type Repos struct {
 	TeamRepo              *TeamRepo
 	RoleRepo              *RoleRepo
 	BudgetAlertRepo       *BudgetAlertRepo
+	OrgRepo               *OrgRepo
 }
 
 // ProvideRepos constructs all repository instances.
@@ -31,5 +32,6 @@ func ProvideRepos(db *gorm.DB) *Repos {
 		TeamRepo:              NewTeamRepo(db),
 		RoleRepo:              NewRoleRepo(db),
 		BudgetAlertRepo:       NewBudgetAlertRepo(db),
+		OrgRepo:               NewOrgRepo(db),
 	}
 }

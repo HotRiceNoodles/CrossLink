@@ -79,6 +79,17 @@ var ValidActions = map[string]bool{
 	"mcp:permission":          true,
 	"mcp:logs":                true,
 	"mcp:stats":               true,
+	"org:list":                true,
+	"org:create":              true,
+	"org:update":              true,
+	"org:delete":              true,
+	"org:manage_members":      true,
+	"org:view_billing":        true,
+	"org:manage_billing":      true,
+	"role:list":               true,
+	"role:create":             true,
+	"role:update":             true,
+	"role:delete":             true,
 }
 
 // AdminRequiredActions are actions that must always remain on the admin role.
@@ -100,6 +111,7 @@ type Role struct {
 	Name        string         `gorm:"size:32;uniqueIndex;not null" json:"name"`
 	DisplayName string         `gorm:"size:64;not null" json:"display_name"`
 	IsSystem    bool           `gorm:"not null;default:false" json:"is_system"`
+	OrgID       *int64         `gorm:"index" json:"org_id"`
 	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }

@@ -75,6 +75,7 @@ const (
 	ErrAdminCorePermissionRemove = "admin_core_permission_remove"
 	ErrSystemRoleDelete        = "system_role_delete"
 	ErrRoleHasUsers            = "role_has_users"
+	ErrRoleNameDuplicate       = "role_name_duplicate"
 
 	// Insight
 	ErrInsightNotFound  = "insight_not_found"

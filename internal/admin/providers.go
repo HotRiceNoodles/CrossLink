@@ -42,7 +42,8 @@ func NewProviderHandler(repo ProviderRepository, modelRepo ProviderModelReposito
 }
 
 func (h *ProviderHandler) List(c *gin.Context) {
-	providers, err := h.repo.List(c.Request.Context())
+	orgID := GetOrgID(c)
+	providers, err := h.repo.List(c.Request.Context(), orgID)
 	if err != nil {
 		internalErr(c, err, "list providers failed")
 		return
@@ -81,7 +82,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		return
 	}
 	if license.G().CurrentTier() == license.TierCommunity {
-		providers, err := h.repo.List(c.Request.Context())
+		providers, err := h.repo.List(c.Request.Context(), 0)
 		if err != nil {
 			internalErr(c, err, "count providers failed")
 			return
@@ -128,12 +129,13 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Update(c *gin.Context) {
+	orgID := GetOrgID(c)
 	id := parseID(c.Param("id"))
 	if id == 0 {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
-	p, err := h.repo.GetByID(c.Request.Context(), id)
+	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
@@ -210,12 +212,13 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Delete(c *gin.Context) {
+	orgID := GetOrgID(c)
 	id := parseID(c.Param("id"))
 	if id == 0 {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
-	p, err := h.repo.GetByID(c.Request.Context(), id)
+	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
@@ -286,12 +289,13 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 }
 
 func (h *ProviderHandler) Test(c *gin.Context) {
+	orgID := GetOrgID(c)
 	id := parseID(c.Param("id"))
 	if id == 0 {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
-	p, err := h.repo.GetByID(c.Request.Context(), id)
+	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return

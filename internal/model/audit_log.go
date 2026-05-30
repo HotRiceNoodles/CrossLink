@@ -8,6 +8,7 @@ import (
 
 type AuditLog struct {
 	ID           int64          `gorm:"primaryKey" json:"id"`
+	OrgID        *int64         `gorm:"index" json:"org_id,omitempty"`
 	UserID       int64          `gorm:"not null;index" json:"user_id"`
 	Username     string         `gorm:"size:64;not null" json:"username"`
 	Action       string         `gorm:"size:64;not null;index" json:"action"`

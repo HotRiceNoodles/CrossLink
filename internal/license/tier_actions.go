@@ -76,7 +76,18 @@ var enterpriseExtraActions = map[string]bool{
 	"audit:list":             true,
 	"audit:export":           true,
 	"budget:manage":          true,
-		"insight:manage":         true,
+	"insight:manage":         true,
+	"org:list":           true,
+	"org:create":         true,
+	"org:update":         true,
+	"org:delete":         true,
+	"org:manage_members": true,
+	"org:view_billing":   true,
+	"org:manage_billing": true,
+	"role:list":          true,
+	"role:create":        true,
+	"role:update":        true,
+	"role:delete":        true,
 }
 
 // TierActionSet maps each tier name to its fully enumerated set of allowed actions.

@@ -82,6 +82,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Background task context (for graceful shutdown)
 	appCtx, appCancel := context.WithCancel(context.Background())
 	teamCache := middleware.NewTeamCache(repos.TeamRepo, appCtx)
+		orgCache := middleware.NewOrgCache(repos.OrgRepo, appCtx)
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 
@@ -155,6 +156,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		KeySvc:         svcs.KeySvc,
 		DebugStore:     debugStore,
 		Crypto:         cryptoProvider,
+		OrgCache:       orgCache,
 	}
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
@@ -223,7 +225,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	serveFrontend(r)
 
 	// Login endpoint (no auth, rate limited)
-	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, cfg.Admin, nil, cryptoProvider))
+	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, nil, cryptoProvider))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
 	r.GET("/admin/api/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -234,6 +236,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Admin API (JWT auth required)
 	adminGroup := r.Group("/admin/api")
 	adminGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
+	adminGroup.Use(middleware.OrgResolve())
 	adminGroup.Use(middleware.AdminRateLimit(rdb, 120, time.Minute, ""))
 	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	{
@@ -307,13 +310,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
 	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb))
 	gwGroup.Use(middleware.RequireModel())
+	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider))
 	gwGroup.Use(middleware.RateLimit(rdb, cfg.RateLimit.RPM, teamCache))
 	gwGroup.Use(middleware.TPMLimit(rdb, cfg.RateLimit.TPM, teamCache))
-	gwGroup.Use(middleware.BudgetCheck(svcs.BudgetSvc, teamCache))
+	gwGroup.Use(middleware.BudgetCheck(svcs.BudgetSvc, teamCache, orgCache))
 	gwGroup.Use(middleware.ReportTokens(rdb))
-	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache))
+	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
 	// Commercial middleware extension point
 	for _, mw := range ext.ExtraMiddlewares {
 		mw(gwGroup, ext)

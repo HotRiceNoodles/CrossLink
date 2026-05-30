@@ -28,6 +28,7 @@ func buildAuth(db *gorm.DB, cfg *config.Config) {
 		os.Exit(1)
 	}
 	ensureAdminUser(db, &cfg.Admin)
+	ensureDefaultOrganization(db)
 	syncAdminPermissions(db)
 }
 
@@ -125,5 +126,67 @@ func buildSecrets(db *gorm.DB, cfg *config.Config, ext *Extensions, cp crypto.Cr
 		EncStore:       encStore,
 		ActiveKeyPtr:   activeKeyPtr,
 		CleanupCancel:  cleanupCancel,
+	}
+}
+
+func ensureDefaultOrganization(db *gorm.DB) {
+	var org model.Organization
+	if err := db.Where("name = ?", "default").First(&org).Error; err != nil {
+		org = model.Organization{
+			Name:        "default",
+			DisplayName: "Default Organization",
+			Status:      1,
+		}
+		if err := db.Create(&org).Error; err != nil {
+			slog.Error("failed to create default organization", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("created default organization", "id", org.ID)
+	}
+	// Always run backfill — idempotent (WHERE org_id IS NULL)
+	var adminUser model.User
+	db.Where("role_id = (SELECT id FROM roles WHERE name = ?)", model.RoleAdmin).First(&adminUser)
+	backfillOrgID(db, org.ID, adminUser.ID)
+}
+
+func backfillOrgID(db *gorm.DB, defaultOrgID int64, adminUserID int64) {
+	db.Model(&model.Team{}).Where("org_id IS NULL AND deleted_at IS NULL").Update("org_id", defaultOrgID)
+	db.Model(&model.APIKey{}).Where("org_id IS NULL AND deleted_at IS NULL").Update("org_id", defaultOrgID)
+	db.Model(&model.Provider{}).Where("org_id IS NULL AND deleted_at IS NULL").Update("org_id", defaultOrgID)
+	db.Model(&model.Role{}).Where("is_system = false AND org_id IS NULL AND deleted_at IS NULL").Update("org_id", defaultOrgID)
+	// Non-admin users get org_id
+	db.Model(&model.User{}).Where("org_id IS NULL AND id != ? AND deleted_at IS NULL", adminUserID).Update("org_id", defaultOrgID)
+	// Register all non-admin users as org members
+	var users []model.User
+	db.Where("id != ? AND deleted_at IS NULL", adminUserID).Find(&users)
+	for _, u := range users {
+		db.FirstOrCreate(&model.OrgMember{}, model.OrgMember{OrgID: defaultOrgID, UserID: u.ID})
+	}
+	// Phase 2 tables
+	db.Model(&model.BudgetAlert{}).Where("org_id IS NULL AND deleted_at IS NULL").Update("org_id", defaultOrgID)
+	// Phase 4 small tables
+	db.Exec("UPDATE insights SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
+	db.Exec("UPDATE optimization_actions SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
+	db.Exec("UPDATE budget_recommendations SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
+	db.Exec("UPDATE budget_requests SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
+	db.Exec("UPDATE budget_snapshots SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
+	db.Exec("UPDATE mcp_servers SET org_id = ? WHERE org_id IS NULL AND deleted_at IS NULL", defaultOrgID)
+	// Phase 4 large tables: batch backfill
+	backfillLargeTableOrgID(db, "usage_logs", defaultOrgID)
+	backfillLargeTableOrgID(db, "mcp_tool_call_logs", defaultOrgID)
+}
+
+func backfillLargeTableOrgID(db *gorm.DB, table string, defaultOrgID int64) {
+	const batchSize = 5000
+	for {
+		result := db.Table(table).Where("org_id IS NULL").Limit(batchSize).Update("org_id", defaultOrgID)
+		if result.Error != nil {
+			slog.Warn("batch backfill error", "table", table, "error", result.Error)
+			return
+		}
+		if result.RowsAffected == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }

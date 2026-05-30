@@ -30,10 +30,12 @@ type Claims struct {
 	RoleID   int64  `json:"role_id"`
 	RoleName string `json:"role_name"`
 	TeamID   int64  `json:"team_id,omitempty"`
+	OrgID    int64  `json:"org_id,omitempty"`
+	OrgRole  string `json:"org_role,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(user *model.User, roleName string, teamID int64, cfg config.AdminConfig, cp crypto.CryptoProvider) (string, error) {
+func GenerateToken(user *model.User, roleName string, teamID int64, orgID int64, orgRole string, cfg config.AdminConfig, cp crypto.CryptoProvider) (string, error) {
 	expiry := time.Duration(cfg.TokenExpiry) * time.Hour
 	claims := Claims{
 		UserID:   user.ID,
@@ -41,6 +43,8 @@ func GenerateToken(user *model.User, roleName string, teamID int64, cfg config.A
 		RoleID:   user.RoleID,
 		RoleName: roleName,
 		TeamID:   teamID,
+		OrgID:    orgID,
+		OrgRole:  orgRole,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -108,6 +112,8 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		c.Set("role_id", roleID)
 		c.Set("role_name", roleName)
 		c.Set("team_id", claims.TeamID)
+		c.Set("org_id", claims.OrgID)
+		c.Set("org_role", claims.OrgRole)
 
 		// Enforce absolute maximum session lifetime (7 days)
 		if claims.IssuedAt != nil && time.Since(claims.IssuedAt.Time) > 7*24*time.Hour {
@@ -118,7 +124,7 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		// Auto-refresh token if expiring within 5 minutes
 		if claims.ExpiresAt != nil && time.Until(claims.ExpiresAt.Time) < 5*time.Minute {
 			u := &model.User{ID: claims.UserID, Username: claims.Username, RoleID: roleID}
-			if newToken, err := GenerateToken(u, roleName, claims.TeamID, cfg, cp); err == nil {
+			if newToken, err := GenerateToken(u, roleName, claims.TeamID, claims.OrgID, claims.OrgRole, cfg, cp); err == nil {
 				c.Header("X-Token-Refresh", newToken)
 				c.SetCookie("admin_token", newToken, cfg.TokenExpiry*3600, "/", "", true, true)
 			}
@@ -131,7 +137,7 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 // dummyBcryptHash is used to normalize response timing when a username is not found.
 const dummyBcryptHash = "$2a$10$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
-func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider) gin.HandlerFunc {
+func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input struct {
 			Username string `json:"username" binding:"required"`
@@ -212,7 +218,24 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 			}
 		}
 
-		token, err := GenerateToken(user, roleName, teamID, cfg, cp)
+		// Resolve org membership for JWT claim
+		var orgID int64
+		var orgRole string
+		var orgName string
+		// Super Admins (system admin role) operate globally — org_id stays 0
+		if orgRepo != nil && roleName != model.RoleAdmin {
+			member, err := orgRepo.GetMemberByUserID(c.Request.Context(), user.ID)
+			if err == nil && member != nil {
+				orgID = member.OrgID
+				orgRole = member.Role
+				org, err := orgRepo.GetByID(c.Request.Context(), orgID)
+				if err == nil && org != nil {
+					orgName = org.DisplayName
+				}
+			}
+		}
+
+		token, err := GenerateToken(user, roleName, teamID, orgID, orgRole, cfg, cp)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 			return
@@ -255,6 +278,9 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 					"display_name": user.DisplayName,
 					"role_id":      user.RoleID,
 					"role_name":    roleName,
+					"org_id":      orgID,
+					"org_name":    orgName,
+					"org_role":    orgRole,
 				},
 				"permissions": perms,
 				"tier":        license.G().CurrentTier(),
@@ -312,6 +338,24 @@ func GetTeamID(c *gin.Context) int64 {
 		return v
 	}
 	return 0
+}
+
+func GetOrgID(c *gin.Context) int64 {
+	if v, ok := c.Get("org_id"); ok {
+		if id, ok := v.(int64); ok {
+			return id
+		}
+	}
+	return 0
+}
+
+func GetOrgRole(c *gin.Context) string {
+	if v, ok := c.Get("org_role"); ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func IsAdmin(c *gin.Context) bool {

@@ -43,6 +43,9 @@ func (s *BudgetCalibrationService) CalibrateOnce(ctx context.Context) error {
 	if err := s.calibrateTeams(ctx); err != nil {
 		return err
 	}
+	if err := s.calibrateOrgs(ctx); err != nil {
+		return err
+	}
 	return s.calibrateKeys(ctx)
 }
 
@@ -51,6 +54,9 @@ func (s *BudgetCalibrationService) calibrateAll(ctx context.Context) {
 	defer s.mu.Unlock()
 	if err := s.calibrateTeams(ctx); err != nil {
 		slog.Warn("budget calibration: teams failed", "error", err)
+	}
+	if err := s.calibrateOrgs(ctx); err != nil {
+		slog.Warn("budget calibration: orgs failed", "error", err)
 	}
 	if err := s.calibrateKeys(ctx); err != nil {
 		slog.Warn("budget calibration: keys failed", "error", err)
@@ -104,6 +110,56 @@ func (s *BudgetCalibrationService) calibrateTeams(ctx context.Context) error {
 		for _, team := range periodTeams {
 			spent := spendMap[team.ID]
 			s.syncRedisAndSnapshot(ctx, "team", team.ID, pk, period, spent, team.BudgetLimit)
+		}
+	}
+	return nil
+}
+
+func (s *BudgetCalibrationService) calibrateOrgs(ctx context.Context) error {
+	var orgs []model.Organization
+	if err := s.db.WithContext(ctx).Where("budget_limit > 0 AND deleted_at IS NULL").Find(&orgs).Error; err != nil {
+		return fmt.Errorf("query orgs: %w", err)
+	}
+	if len(orgs) == 0 {
+		return nil
+	}
+
+	type spendRow struct {
+		OrgID int64 `gorm:"column:org_id"`
+		Spent float64
+	}
+	byPeriod := make(map[string][]model.Organization)
+	for _, o := range orgs {
+		pk := PeriodKey(o.BudgetPeriod)
+		byPeriod[pk+"|"+o.BudgetPeriod] = append(byPeriod[pk+"|"+o.BudgetPeriod], o)
+	}
+	for key, periodOrgs := range byPeriod {
+		parts := strings.SplitN(key, "|", 2)
+		pk, period := parts[0], parts[1]
+		start, end := periodBoundaries(period)
+		ids := make([]int64, len(periodOrgs))
+		for i, o := range periodOrgs {
+			ids[i] = o.ID
+		}
+		qCtx, qCancel := context.WithTimeout(ctx, 30*time.Second)
+		var periodRows []spendRow
+		err := s.db.WithContext(qCtx).Model(&model.UsageLog{}).
+			Select("org_id, COALESCE(SUM(cost), 0) as spent").
+			Where("org_id IN ? AND created_at >= ? AND created_at < ?", ids, start, end).
+			Group("org_id").
+			Scan(&periodRows).Error
+		qCancel()
+		if err != nil {
+			slog.Warn("budget calibration: failed to aggregate org spend", "period", period, "error", err)
+			continue
+		}
+		spendMap := make(map[int64]float64, len(periodRows))
+		for _, r := range periodRows {
+			spendMap[r.OrgID] = r.Spent
+		}
+		for _, org := range periodOrgs {
+			spent := spendMap[org.ID]
+			s.syncRedisAndSnapshot(ctx, "org", org.ID, pk, period, spent, org.BudgetLimit)
 		}
 	}
 	return nil

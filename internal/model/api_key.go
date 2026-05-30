@@ -26,6 +26,7 @@ type APIKey struct {
 	CreatedBy     string         `gorm:"size:64;not null;default:'admin'" json:"created_by"`
 	CreatedByID   *int64         `gorm:"index" json:"created_by_id"`
 	TeamID        *int64         `gorm:"index" json:"team_id"`
+	OrgID         *int64         `gorm:"index" json:"org_id"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 	Email         *string        `gorm:"size:255" json:"email,omitempty"`
 }

@@ -95,6 +95,8 @@ func Middleware(store *Store) gin.HandlerFunc {
 			InputTokens:  c.GetInt("input_tokens"),
 			OutputTokens: c.GetInt("output_tokens"),
 		}
+		orgID, _ := c.Get("org_id")
+		entry.OrgID, _ = orgID.(int64)
 		store.Add(entry)
 	}
 }

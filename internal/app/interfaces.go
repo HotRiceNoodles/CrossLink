@@ -49,6 +49,7 @@ type AppDeps struct {
 	KeySvc         *service.KeyService
 	DebugStore     *debug.Store
 	Crypto         crypto.CryptoProvider
+	OrgCache       *middleware.OrgCache
 }
 
 // Extensions holds Commercial-only plugins injected at startup.

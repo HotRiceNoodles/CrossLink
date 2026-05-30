@@ -35,7 +35,12 @@ type debugEntrySummary struct {
 }
 
 func (h *DebugHandler) List(c *gin.Context) {
-	entries := h.store.List()
+	var entries []*debug.Entry
+	if orgID := GetOrgID(c); orgID != 0 {
+		entries = h.store.ListByOrg(orgID)
+	} else {
+		entries = h.store.List()
+	}
 	summaries := make([]debugEntrySummary, 0, len(entries))
 	for _, e := range entries {
 		summaries = append(summaries, debugEntrySummary{
@@ -78,6 +83,11 @@ func (h *DebugHandler) Get(c *gin.Context) {
 		return
 	}
 
+	if orgID := GetOrgID(c); orgID != 0 && entry.OrgID != orgID {
+		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
+		return
+	}
+
 	reqBody := tryPrettyJSON(entry.ReqBody)
 	respBody := string(entry.RespBody)
 	if !entry.Stream {
@@ -103,7 +113,11 @@ func (h *DebugHandler) Get(c *gin.Context) {
 }
 
 func (h *DebugHandler) Clear(c *gin.Context) {
-	h.store.Clear()
+	if orgID := GetOrgID(c); orgID != 0 {
+		h.store.ClearByOrg(orgID)
+	} else {
+		h.store.Clear()
+	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "debug:clear", "debug", "", "", nil)
 	}

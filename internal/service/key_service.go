@@ -183,8 +183,8 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 	return key, nil
 }
 
-func (s *KeyService) List(ctx context.Context) ([]model.APIKey, error) {
-	return s.repo.List(ctx)
+func (s *KeyService) List(ctx context.Context, orgID int64) ([]model.APIKey, error) {
+	return s.repo.List(ctx, orgID)
 }
 
 func (s *KeyService) ListByTeam(ctx context.Context, teamID int64) ([]model.APIKey, error) {
@@ -196,7 +196,7 @@ func (s *KeyService) ListByCreator(ctx context.Context, userID int64) ([]model.A
 }
 
 func (s *KeyService) GetByID(ctx context.Context, id int64) (*model.APIKey, error) {
-	return s.repo.GetByID(ctx, id)
+	return s.repo.GetByID(ctx, 0, id)
 }
 
 func (s *KeyService) Update(ctx context.Context, key *model.APIKey) error {
@@ -208,7 +208,7 @@ func (s *KeyService) Update(ctx context.Context, key *model.APIKey) error {
 }
 
 func (s *KeyService) Delete(ctx context.Context, id int64) error {
-	key, err := s.repo.GetByID(ctx, id)
+	key, err := s.repo.GetByID(ctx, 0, id)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (s *KeyService) Delete(ctx context.Context, id int64) error {
 }
 
 func (s *KeyService) Rotate(ctx context.Context, apiKeyID int64, gracePeriod time.Duration) (*RotateResult, error) {
-	key, err := s.repo.GetByID(ctx, apiKeyID)
+	key, err := s.repo.GetByID(ctx, 0, apiKeyID)
 	if err != nil {
 		return nil, fmt.Errorf("lookup key: %w", err)
 	}

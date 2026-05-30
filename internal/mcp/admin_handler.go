@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/secret"
 	"gorm.io/datatypes"
 )
@@ -47,6 +48,8 @@ func (h *AdminHandler) Create(c *gin.Context) {
 		return
 	}
 
+	orgID := admin.GetOrgID(c)
+
 	srv := &MCPServer{
 		Name:          input.Name,
 		DisplayName:   input.DisplayName,
@@ -56,6 +59,9 @@ func (h *AdminHandler) Create(c *gin.Context) {
 		AuthType:      input.AuthType,
 		Enabled:       true,
 		Status:        1,
+	}
+	if orgID != 0 {
+		srv.OrgID = &orgID
 	}
 	if srv.AuthType == "" {
 		srv.AuthType = "none"
@@ -91,7 +97,8 @@ func (h *AdminHandler) Create(c *gin.Context) {
 }
 
 func (h *AdminHandler) List(c *gin.Context) {
-	servers, err := h.svc.ListServers(c.Request.Context())
+	orgID := admin.GetOrgID(c)
+	servers, err := h.svc.ListServers(c.Request.Context(), orgID)
 	if err != nil {
 		slog.Error("list MCP servers", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -104,8 +111,9 @@ func (h *AdminHandler) List(c *gin.Context) {
 }
 
 func (h *AdminHandler) Get(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
-	srv, err := h.svc.GetServer(c.Request.Context(), id)
+	srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
@@ -126,8 +134,9 @@ type updateServerInput struct {
 }
 
 func (h *AdminHandler) Update(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
-	srv, err := h.svc.GetServer(c.Request.Context(), id)
+	srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
@@ -192,8 +201,9 @@ func (h *AdminHandler) Update(c *gin.Context) {
 }
 
 func (h *AdminHandler) Delete(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
-	if err := h.svc.DeleteServer(c.Request.Context(), id); err != nil {
+	if err := h.svc.DeleteServer(c.Request.Context(), orgID, id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
 	}
@@ -201,8 +211,9 @@ func (h *AdminHandler) Delete(c *gin.Context) {
 }
 
 func (h *AdminHandler) Test(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
-	if err := h.svc.TestServer(c.Request.Context(), id); err != nil {
+	if err := h.svc.TestServer(c.Request.Context(), orgID, id); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "healthy": false})
 		return
 	}
@@ -210,8 +221,9 @@ func (h *AdminHandler) Test(c *gin.Context) {
 }
 
 func (h *AdminHandler) GetTools(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
-	srv, err := h.svc.GetServer(c.Request.Context(), id)
+	srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
@@ -323,6 +335,7 @@ func (h *AdminHandler) DeletePermission(c *gin.Context) {
 }
 
 func (h *AdminHandler) ListLogs(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -335,7 +348,7 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 
 	var serverID int64
 	if id > 0 {
-		srv, err := h.svc.GetServer(c.Request.Context(), id)
+		srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 			return
@@ -343,7 +356,7 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 		serverID = srv.ID
 	}
 
-	logs, total, err := h.svc.repo.ListToolCallLogs(c.Request.Context(), serverID, page, pageSize)
+	logs, total, err := h.svc.repo.ListToolCallLogs(c.Request.Context(), orgID, serverID, page, pageSize)
 	if err != nil {
 		slog.Error("list MCP logs", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -356,6 +369,7 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 }
 
 func (h *AdminHandler) GetStats(c *gin.Context) {
+	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
 	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
 	if days < 1 {
@@ -367,7 +381,7 @@ func (h *AdminHandler) GetStats(c *gin.Context) {
 
 	var serverID int64
 	if id > 0 {
-		srv, err := h.svc.GetServer(c.Request.Context(), id)
+		srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 			return
@@ -375,19 +389,19 @@ func (h *AdminHandler) GetStats(c *gin.Context) {
 		serverID = srv.ID
 	}
 
-	stats, err := h.svc.repo.GetToolCallStats(c.Request.Context(), serverID, days)
+	stats, err := h.svc.repo.GetToolCallStats(c.Request.Context(), orgID, serverID, days)
 	if err != nil {
 		slog.Error("get MCP stats", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	topTools, err := h.svc.repo.GetTopTools(c.Request.Context(), serverID, days, 10)
+	topTools, err := h.svc.repo.GetTopTools(c.Request.Context(), orgID, serverID, days, 10)
 	if err != nil {
 		slog.Error("get MCP top tools", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	callsByDay, err := h.svc.repo.GetCallsByDay(c.Request.Context(), serverID, days)
+	callsByDay, err := h.svc.repo.GetCallsByDay(c.Request.Context(), orgID, serverID, days)
 	if err != nil {
 		slog.Error("get MCP calls by day", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})

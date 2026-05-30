@@ -10,6 +10,7 @@ import (
 // MCPServer stores registered MCP server configurations.
 type MCPServer struct {
 	ID              int64          `gorm:"primaryKey" json:"id"`
+	OrgID           *int64         `gorm:"index" json:"org_id,omitempty"`
 	Name            string         `gorm:"uniqueIndex;size:64;not null" json:"name"`
 	DisplayName     string         `gorm:"size:128" json:"display_name"`
 	Description     string         `gorm:"size:512" json:"description"`
@@ -50,6 +51,7 @@ func (MCPServerPermission) TableName() string { return "mcp_server_permissions" 
 // Uses PostgreSQL monthly partitioning; no gorm:"primaryKey" tag.
 type MCPToolCallLog struct {
 	ID         int64     `json:"id"`
+	OrgID      *int64    `gorm:"index" json:"org_id,omitempty"`
 	RequestID  string    `gorm:"index;size:36" json:"request_id"`
 	ServerID   int64     `gorm:"index" json:"server_id"`
 	ServerName string    `gorm:"size:64" json:"server_name"`

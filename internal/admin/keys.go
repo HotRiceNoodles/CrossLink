@@ -74,7 +74,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		var keys []model.APIKey
 		var err error
 		if IsAdmin(c) {
-			keys, err = h.keySvc.List(c.Request.Context())
+			keys, err = h.keySvc.List(c.Request.Context(), GetOrgID(c))
 		} else {
 			keys, err = h.keySvc.ListByTeam(c.Request.Context(), GetTeamID(c))
 		}
@@ -129,7 +129,7 @@ func (h *KeyHandler) List(c *gin.Context) {
 	var keys []model.APIKey
 	var err error
 	if IsAdmin(c) {
-		keys, err = h.keySvc.List(c.Request.Context())
+		keys, err = h.keySvc.List(c.Request.Context(), GetOrgID(c))
 	} else {
 		keys, err = h.keySvc.ListByTeam(c.Request.Context(), GetTeamID(c))
 	}

@@ -47,7 +47,7 @@ type BudgetService interface {
 type KeyService interface {
 	GetByID(ctx context.Context, id int64) (*model.APIKey, error)
 	ListByCreator(ctx context.Context, userID int64) ([]model.APIKey, error)
-	List(ctx context.Context) ([]model.APIKey, error)
+	List(ctx context.Context, orgID int64) ([]model.APIKey, error)
 	ListByTeam(ctx context.Context, teamID int64) ([]model.APIKey, error)
 	Create(ctx context.Context, input *service.CreateKeyInput) (*service.CreateKeyResult, error)
 	Update(ctx context.Context, key *model.APIKey) error
@@ -64,8 +64,8 @@ type CalibrateService interface {
 
 // ProviderRepository defines the repository methods needed by ProviderHandler.
 type ProviderRepository interface {
-	List(ctx context.Context) ([]model.Provider, error)
-	GetByID(ctx context.Context, id int64) (*model.Provider, error)
+	List(ctx context.Context, orgID int64) ([]model.Provider, error)
+	GetByID(ctx context.Context, orgID, id int64) (*model.Provider, error)
 	Create(ctx context.Context, provider *model.Provider) error
 	Update(ctx context.Context, provider *model.Provider) error
 	Delete(ctx context.Context, id int64) error

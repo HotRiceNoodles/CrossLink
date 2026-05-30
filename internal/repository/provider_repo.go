@@ -15,15 +15,23 @@ func NewProviderRepo(db *gorm.DB) *ProviderRepo {
 	return &ProviderRepo{db: db}
 }
 
-func (r *ProviderRepo) List(ctx context.Context) ([]model.Provider, error) {
+func (r *ProviderRepo) baseQuery(orgID int64) *gorm.DB {
+	q := r.db.Model(&model.Provider{})
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	return q
+}
+
+func (r *ProviderRepo) List(ctx context.Context, orgID int64) ([]model.Provider, error) {
 	var providers []model.Provider
-	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&providers).Error
+	err := r.baseQuery(orgID).WithContext(ctx).Order("created_at DESC").Find(&providers).Error
 	return providers, err
 }
 
-func (r *ProviderRepo) GetByID(ctx context.Context, id int64) (*model.Provider, error) {
+func (r *ProviderRepo) GetByID(ctx context.Context, orgID, id int64) (*model.Provider, error) {
 	var p model.Provider
-	if err := r.db.WithContext(ctx).First(&p, id).Error; err != nil {
+	if err := r.baseQuery(orgID).WithContext(ctx).First(&p, id).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil

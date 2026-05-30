@@ -32,6 +32,7 @@ type UsageLog struct {
 	CacheHit           bool       `gorm:"not null;default:false" json:"cache_hit"`
 	AgentType          string     `gorm:"size:32" json:"agent_type,omitempty"`
 	SecurityEvents     datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"security_events,omitempty"`
+	OrgID              *int64     `gorm:"index" json:"org_id"`
 	CreatedAt          time.Time  `gorm:"not null;default:now();index" json:"created_at"`
 }
 

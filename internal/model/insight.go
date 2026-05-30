@@ -4,6 +4,7 @@ import "time"
 
 type Insight struct {
 	ID          int64     `gorm:"primaryKey" json:"id"`
+	OrgID       *int64    `gorm:"index" json:"org_id,omitempty"`
 	Period      string    `gorm:"size:16;not null;default:'monthly'" json:"period"`
 	PeriodKey   string    `gorm:"size:16;not null" json:"period_key"`
 	Scope       string    `gorm:"size:16;not null;default:'global'" json:"scope"`

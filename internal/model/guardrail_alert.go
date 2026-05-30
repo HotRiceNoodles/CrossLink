@@ -8,6 +8,7 @@ import (
 
 type GuardrailAlertRule struct {
 	ID              int64          `gorm:"primaryKey" json:"id"`
+	OrgID           *int64         `gorm:"index" json:"org_id,omitempty"`
 	RuleID          int64          `gorm:"uniqueIndex;not null" json:"rule_id"`
 	TeamID          *int64         `gorm:"index" json:"team_id,omitempty"`
 	Channels        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"channels"`
@@ -22,6 +23,7 @@ func (GuardrailAlertRule) TableName() string { return "guardrail_alert_rules" }
 
 type GuardrailAlertLog struct {
 	ID             int64     `gorm:"primaryKey" json:"id"`
+	OrgID          *int64    `gorm:"index" json:"org_id,omitempty"`
 	RuleID         int64     `gorm:"not null" json:"rule_id"`
 	AlertRuleID    int64     `json:"alert_rule_id"`
 	RuleName       string    `gorm:"size:255" json:"rule_name"`

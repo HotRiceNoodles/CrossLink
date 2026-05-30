@@ -33,9 +33,17 @@ func (r *APIKeyRepo) Create(ctx context.Context, key *model.APIKey) error {
 	return r.db.WithContext(ctx).Create(key).Error
 }
 
-func (r *APIKeyRepo) List(ctx context.Context) ([]model.APIKey, error) {
+func (r *APIKeyRepo) baseQuery(orgID int64) *gorm.DB {
+	q := r.db.Model(&model.APIKey{})
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	return q
+}
+
+func (r *APIKeyRepo) List(ctx context.Context, orgID int64) ([]model.APIKey, error) {
 	var keys []model.APIKey
-	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&keys).Error
+	err := r.baseQuery(orgID).WithContext(ctx).Order("created_at DESC").Find(&keys).Error
 	return keys, err
 }
 
@@ -59,9 +67,9 @@ func (r *APIKeyRepo) Delete(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&model.APIKey{}, id).Error
 }
 
-func (r *APIKeyRepo) GetByID(ctx context.Context, id int64) (*model.APIKey, error) {
+func (r *APIKeyRepo) GetByID(ctx context.Context, orgID, id int64) (*model.APIKey, error) {
 	var key model.APIKey
-	if err := r.db.WithContext(ctx).First(&key, id).Error; err != nil {
+	if err := r.baseQuery(orgID).WithContext(ctx).First(&key, id).Error; err != nil {
 		return nil, err
 	}
 	return &key, nil

@@ -112,12 +112,12 @@ func (s *MCPService) CreateServer(ctx context.Context, srv *MCPServer) error {
 	return nil
 }
 
-func (s *MCPService) GetServer(ctx context.Context, id int64) (*MCPServer, error) {
-	return s.repo.GetByID(ctx, id)
+func (s *MCPService) GetServer(ctx context.Context, orgID int64, id int64) (*MCPServer, error) {
+	return s.repo.GetByID(ctx, orgID, id)
 }
 
-func (s *MCPService) ListServers(ctx context.Context) ([]MCPServer, error) {
-	return s.repo.List(ctx)
+func (s *MCPService) ListServers(ctx context.Context, orgID int64) ([]MCPServer, error) {
+	return s.repo.List(ctx, orgID)
 }
 
 func (s *MCPService) UpdateServer(ctx context.Context, srv *MCPServer) error {
@@ -129,8 +129,8 @@ func (s *MCPService) UpdateServer(ctx context.Context, srv *MCPServer) error {
 	return s.registry.Register(ctx, srv, tr)
 }
 
-func (s *MCPService) DeleteServer(ctx context.Context, id int64) error {
-	srv, err := s.repo.GetByID(ctx, id)
+func (s *MCPService) DeleteServer(ctx context.Context, orgID int64, id int64) error {
+	srv, err := s.repo.GetByID(ctx, orgID, id)
 	if err != nil {
 		return err
 	}
@@ -158,8 +158,8 @@ func (s *MCPService) ForwardRequest(ctx context.Context, serverName string, req 
 	return tr.Send(ctx, req)
 }
 
-func (s *MCPService) TestServer(ctx context.Context, id int64) error {
-	srv, err := s.repo.GetByID(ctx, id)
+func (s *MCPService) TestServer(ctx context.Context, orgID int64, id int64) error {
+	srv, err := s.repo.GetByID(ctx, orgID, id)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (s *MCPService) InvalidatePermCache(serverID int64) {
 }
 
 func (s *MCPService) LoadFromDB(ctx context.Context) error {
-	servers, err := s.repo.List(ctx)
+	servers, err := s.repo.List(ctx, 0)
 	if err != nil {
 		return err
 	}

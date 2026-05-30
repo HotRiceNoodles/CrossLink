@@ -37,10 +37,10 @@ func (noopCacheInvalidator) Invalidate() {}
 // defaultProviderMocks returns provider handler dependencies with permissive defaults.
 func defaultProviderMocks() (*mockProviderRepo, *mockProviderModelRepo) {
 	repo := &mockProviderRepo{
-		listFn: func(ctx context.Context) ([]model.Provider, error) {
+		listFn: func(ctx context.Context, orgID int64) ([]model.Provider, error) {
 			return nil, nil
 		},
-		getByIDFn: func(ctx context.Context, id int64) (*model.Provider, error) {
+		getByIDFn: func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
 			return &model.Provider{ID: id, Name: "test-provider", Status: 1}, nil
 		},
 		createFn: func(ctx context.Context, p *model.Provider) error {
@@ -95,7 +95,7 @@ func TestProviderHandler_Create_InvalidURL(t *testing.T) {
 func TestProviderHandler_Create_CommunityLimit(t *testing.T) {
 	repo, _ := defaultProviderMocks()
 	// Simulate 3 existing providers (community limit)
-	repo.listFn = func(ctx context.Context) ([]model.Provider, error) {
+	repo.listFn = func(ctx context.Context, orgID int64) ([]model.Provider, error) {
 		return []model.Provider{
 			{ID: 1, Name: "p1"},
 			{ID: 2, Name: "p2"},
@@ -200,7 +200,7 @@ func TestProviderHandler_Delete_Success(t *testing.T) {
 
 func TestProviderHandler_Delete_NotFound(t *testing.T) {
 	repo, modelRepo := defaultProviderMocks()
-	repo.getByIDFn = func(ctx context.Context, id int64) (*model.Provider, error) {
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
 		return nil, errors.New("not found")
 	}
 	h := newProviderHandler(repo, modelRepo)

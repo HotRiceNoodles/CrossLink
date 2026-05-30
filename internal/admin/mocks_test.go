@@ -31,7 +31,7 @@ func (m *mockTeamRepo) ListByUserID(ctx context.Context, userID int64) ([]model.
 type mockKeySvc struct {
 	getByIDFn       func(ctx context.Context, id int64) (*model.APIKey, error)
 	listByCreatorFn func(ctx context.Context, userID int64) ([]model.APIKey, error)
-	listFn          func(ctx context.Context) ([]model.APIKey, error)
+	listFn          func(ctx context.Context, orgID int64) ([]model.APIKey, error)
 	listByTeamFn    func(ctx context.Context, teamID int64) ([]model.APIKey, error)
 	createFn        func(ctx context.Context, input *service.CreateKeyInput) (*service.CreateKeyResult, error)
 	updateFn        func(ctx context.Context, key *model.APIKey) error
@@ -49,8 +49,8 @@ func (m *mockKeySvc) ListByCreator(ctx context.Context, userID int64) ([]model.A
 	return m.listByCreatorFn(ctx, userID)
 }
 
-func (m *mockKeySvc) List(ctx context.Context) ([]model.APIKey, error) {
-	return m.listFn(ctx)
+func (m *mockKeySvc) List(ctx context.Context, orgID int64) ([]model.APIKey, error) {
+	return m.listFn(ctx, orgID)
 }
 
 func (m *mockKeySvc) ListByTeam(ctx context.Context, teamID int64) ([]model.APIKey, error) {
@@ -83,19 +83,19 @@ func (m *mockKeySvc) ListHashes(ctx context.Context, apiKeyID int64) ([]model.AP
 
 // mockProviderRepo implements ProviderRepository for testing.
 type mockProviderRepo struct {
-	listFn    func(ctx context.Context) ([]model.Provider, error)
-	getByIDFn func(ctx context.Context, id int64) (*model.Provider, error)
+	listFn    func(ctx context.Context, orgID int64) ([]model.Provider, error)
+	getByIDFn func(ctx context.Context, orgID, id int64) (*model.Provider, error)
 	createFn  func(ctx context.Context, provider *model.Provider) error
 	updateFn  func(ctx context.Context, provider *model.Provider) error
 	deleteFn  func(ctx context.Context, id int64) error
 }
 
-func (m *mockProviderRepo) List(ctx context.Context) ([]model.Provider, error) {
-	return m.listFn(ctx)
+func (m *mockProviderRepo) List(ctx context.Context, orgID int64) ([]model.Provider, error) {
+	return m.listFn(ctx, orgID)
 }
 
-func (m *mockProviderRepo) GetByID(ctx context.Context, id int64) (*model.Provider, error) {
-	return m.getByIDFn(ctx, id)
+func (m *mockProviderRepo) GetByID(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+	return m.getByIDFn(ctx, orgID, id)
 }
 
 func (m *mockProviderRepo) Create(ctx context.Context, provider *model.Provider) error {

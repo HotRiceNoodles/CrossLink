@@ -28,6 +28,8 @@ func (r *BudgetAlertRepo) ListByTarget(ctx context.Context, scope string, target
 	q := r.db.WithContext(ctx)
 	if scope == "team" {
 		q = q.Where("team_id = ?", targetID)
+	} else if scope == "org" {
+		q = q.Where("org_id = ?", targetID)
 	} else {
 		q = q.Where("key_id = ?", targetID)
 	}

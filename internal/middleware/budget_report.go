@@ -10,7 +10,7 @@ import (
 	"github.com/crosslink/internal/service"
 )
 
-func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc service.BudgetAlertServiceInterface, teamCache *TeamCache) gin.HandlerFunc {
+func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc service.BudgetAlertServiceInterface, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 
@@ -99,13 +99,30 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 				}
 			}
 		}
+
+		// 3. Org-level reporting
+		if orgCache != nil && cost > 0 {
+			if orgID := c.GetInt64("org_id"); orgID != 0 {
+				orgPd, _ := c.Get("org_budget_period")
+				if orgPeriod, ok := orgPd.(string); ok && orgPeriod != "" {
+					budgetSvc.ReportUsage(bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost)
+					go func() {
+						defer func() { recover() }()
+						org := orgCache.Get(context.Background(), orgID)
+						if org != nil && org.BudgetLimit > 0 {
+							alertSvc.CheckAndAlert(context.Background(), "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
+						}
+					}()
+				}
+			}
+		}
 	}
 }
 
-// AdminReportBudgetUsage reports team budget usage for admin/playground routes.
-// It reads team_id from JWT context instead of api_key.
+// AdminReportBudgetUsage reports team and org budget usage for admin/playground routes.
+// It reads team_id/org_id from JWT context instead of api_key.
 // Pass nil budgetSvc to disable (Community mode).
-func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc service.BudgetAlertServiceInterface, teamCache *TeamCache) gin.HandlerFunc {
+func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc service.BudgetAlertServiceInterface, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 
@@ -143,31 +160,46 @@ func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc s
 		defer bgCancel()
 
 		team := teamCache.Get(bgCtx, tid)
-		if team == nil || team.BudgetLimit <= 0 {
-			return
-		}
+		if team != nil && team.BudgetLimit > 0 {
+			teamPeriod, _ := c.Get("team_budget_period")
+			p, _ := teamPeriod.(string)
+			if p == "" {
+				p = team.BudgetPeriod
+			}
 
-		teamPeriod, _ := c.Get("team_budget_period")
-		p, _ := teamPeriod.(string)
-		if p == "" {
-			p = team.BudgetPeriod
-		}
+			budgetSvc.ReportUsage(bgCtx, "team",
+				fmt.Sprintf("%d", team.ID), p, cost)
 
-		budgetSvc.ReportUsage(bgCtx, "team",
-			fmt.Sprintf("%d", team.ID), p, cost)
-
-		spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "team",
-			fmt.Sprintf("%d", team.ID), team.BudgetPeriod, team.BudgetLimit)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Warn("admin budget alert goroutine panic", "error", r)
-				}
+			spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "team",
+				fmt.Sprintf("%d", team.ID), team.BudgetPeriod, team.BudgetLimit)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("admin budget alert goroutine panic", "error", r)
+					}
+				}()
+				alertCtx, alertCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer alertCancel()
+				alertSvc.CheckAndAlert(alertCtx, "team",
+					fmt.Sprintf("%d", team.ID), team.BudgetPeriod, spent, limit)
 			}()
-			alertCtx, alertCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer alertCancel()
-			alertSvc.CheckAndAlert(alertCtx, "team",
-				fmt.Sprintf("%d", team.ID), team.BudgetPeriod, spent, limit)
-		}()
+		}
+
+		// Org-level reporting
+		if orgCache != nil && cost > 0 {
+			if orgID := c.GetInt64("org_id"); orgID != 0 {
+				orgPd, _ := c.Get("org_budget_period")
+				if orgPeriod, ok := orgPd.(string); ok && orgPeriod != "" {
+					budgetSvc.ReportUsage(bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost)
+					go func() {
+						defer func() { recover() }()
+						org := orgCache.Get(context.Background(), orgID)
+						if org != nil && org.BudgetLimit > 0 {
+							alertSvc.CheckAndAlert(context.Background(), "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
+						}
+					}()
+				}
+			}
+		}
 	}
 }

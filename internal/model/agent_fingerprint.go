@@ -8,6 +8,7 @@ import (
 
 type AgentFingerprint struct {
 	ID             int64          `gorm:"primaryKey" json:"id"`
+	OrgID          *int64         `gorm:"index" json:"org_id,omitempty"`
 	Name           string         `gorm:"size:64;not null" json:"name"`
 	SourceType     string         `gorm:"size:16;not null;default:'header'" json:"source_type"`
 	SourceField    string         `gorm:"size:128;not null;default:''" json:"source_field"`

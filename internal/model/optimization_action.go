@@ -7,6 +7,7 @@ import (
 
 type OptimizationAction struct {
 	ID             int64           `gorm:"primaryKey" json:"id"`
+	OrgID          *int64          `gorm:"index" json:"org_id,omitempty"`
 	ActionType     string          `gorm:"size:32;not null" json:"action_type"`
 	Title          string          `gorm:"type:text;not null" json:"title"`
 	Description    string          `gorm:"type:text;not null" json:"description"`

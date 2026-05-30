@@ -73,11 +73,20 @@ func applyTeamScope(query *gorm.DB, c *gin.Context) *gorm.DB {
 	return query
 }
 
+// applyOrgScope restricts query to the caller's org when org context is set.
+func applyOrgScope(query *gorm.DB, c *gin.Context) *gorm.DB {
+	orgID := GetOrgID(c)
+	if orgID != 0 {
+		query = query.Where("org_id = ?", orgID)
+	}
+	return query
+}
+
 func (h *UsageHandler) List(c *gin.Context) {
-	query := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Order("created_at DESC"), c), c)
+	query := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Order("created_at DESC"), c), c), c)
 
 	var total int64
-	applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c).Count(&total)
+	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c), c).Count(&total)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -113,7 +122,7 @@ type usageStats struct {
 }
 
 func (h *UsageHandler) Stats(c *gin.Context) {
-	base := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c)
+	base := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c), c)
 
 	// Determine primary currency (same pattern as DailyTrend/TeamStats)
 	primaryCurrency := "CNY"
@@ -181,10 +190,10 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 	// Filter to primary currency for consistent daily cost comparison
 	primaryCurrency := "CNY"
 	var topCur struct{ Currency string }
-	currencyQuery := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+	currencyQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}).
 		Select("currency").
-		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)), c), c).
+		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)), c), c), c).
 		Group("currency").
 		Order("SUM(cost) DESC").
 		Limit(1)
@@ -193,8 +202,8 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 		primaryCurrency = topCur.Currency
 	}
 
-	dataQuery := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
-		Model(&model.UsageLog{}), c), c).
+	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+		Model(&model.UsageLog{}), c), c), c).
 		Select("DATE(created_at) as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ? AND currency = ?", time.Now().AddDate(0, 0, -days).Truncate(24*time.Hour), primaryCurrency).
 		Group("DATE(created_at)").
@@ -234,8 +243,8 @@ func (h *UsageHandler) ModelDistribution(c *gin.Context) {
 	}
 	var results []ModelDist
 
-	applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
-		Model(&model.UsageLog{}), c), c).
+	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+		Model(&model.UsageLog{}), c), c), c).
 		Select("model_requested as model, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)).
 		Group("model_requested").
@@ -266,9 +275,9 @@ func (h *UsageHandler) TeamStats(c *gin.Context) {
 	// Determine primary currency (same pattern as DailyTrend)
 	primaryCurrency := "CNY"
 	var topCur struct{ Currency string }
-	currencyQuery := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+	currencyQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}).
-		Select("currency"), c), c)
+		Select("currency"), c), c), c)
 	if days > 0 {
 		currencyQuery = currencyQuery.Where("created_at >= ?", time.Now().AddDate(0, 0, -days))
 	}
@@ -278,8 +287,8 @@ func (h *UsageHandler) TeamStats(c *gin.Context) {
 	}
 
 	var results []TeamStat
-	query := applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
-		Model(&model.UsageLog{}), c), c).
+	query := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+		Model(&model.UsageLog{}), c), c), c).
 		Select("usage_logs.team_id, COALESCE(teams.display_name, 'Unknown') as team_name, COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(usage_logs.cost), 0) as total_cost").
 		Joins("LEFT JOIN teams ON teams.id = usage_logs.team_id").
 		Where("usage_logs.currency = ?", primaryCurrency)

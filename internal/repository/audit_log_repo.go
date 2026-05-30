@@ -25,6 +25,7 @@ type AuditFilter struct {
 	Action       string
 	ResourceType string
 	UserID       int64
+	OrgID        int64
 	Status       string
 	Q            string
 	StartDate    string
@@ -42,6 +43,9 @@ func (f *AuditFilter) apply(query *gorm.DB) *gorm.DB {
 	}
 	if f.UserID > 0 {
 		query = query.Where("user_id = ?", f.UserID)
+	}
+	if f.OrgID != 0 {
+		query = query.Where("org_id = ?", f.OrgID)
 	}
 	if f.Status != "" {
 		query = query.Where("status = ?", f.Status)

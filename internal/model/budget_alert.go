@@ -10,6 +10,7 @@ type BudgetAlert struct {
 	ID              int64          `gorm:"primaryKey" json:"id"`
 	TeamID          *int64         `gorm:"index" json:"team_id"`
 	KeyID           *int64         `gorm:"index" json:"key_id"`
+	OrgID           *int64         `gorm:"index" json:"org_id"`
 	ThresholdPct    int16          `gorm:"not null" json:"threshold_pct"`
 	WebhookURL      string         `gorm:"size:512;not null" json:"webhook_url"`
 	LastTriggeredAt *time.Time     `json:"last_triggered_at"`
@@ -21,6 +22,7 @@ func (BudgetAlert) TableName() string { return "budget_alerts" }
 
 type BudgetSnapshot struct {
 	ID         int64     `gorm:"primaryKey" json:"id"`
+	OrgID      *int64    `gorm:"index" json:"org_id,omitempty"`
 	TargetType string    `gorm:"size:16;not null;uniqueIndex:idx_snapshots_unique" json:"target_type"`
 	TargetID   int64     `gorm:"not null;uniqueIndex:idx_snapshots_unique" json:"target_id"`
 	PeriodKey  string    `gorm:"size:16;not null;uniqueIndex:idx_snapshots_unique" json:"period_key"`

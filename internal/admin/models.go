@@ -23,7 +23,7 @@ func errorResp(c *gin.Context, status int, code string, msg string) {
 // internalErr logs the error and returns a generic 500 response.
 func internalErr(c *gin.Context, err error, msg string) {
 	slog.Error(msg, "error", err, "path", c.Request.URL.Path)
-	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error", "error_code": "internal_error"})
 }
 
 type CacheInvalidator interface {

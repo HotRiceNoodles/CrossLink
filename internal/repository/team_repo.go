@@ -41,9 +41,17 @@ func (r *TeamRepo) Delete(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&model.Team{}, id).Error
 }
 
-func (r *TeamRepo) List(ctx context.Context) ([]model.Team, error) {
+func (r *TeamRepo) baseQuery(orgID int64) *gorm.DB {
+	q := r.db.Model(&model.Team{})
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	return q
+}
+
+func (r *TeamRepo) List(ctx context.Context, orgID int64) ([]model.Team, error) {
 	var teams []model.Team
-	err := r.db.WithContext(ctx).Where("status = 1").Order("created_at DESC").Find(&teams).Error
+	err := r.baseQuery(orgID).WithContext(ctx).Where("status = 1").Order("created_at DESC").Find(&teams).Error
 	return teams, err
 }
 

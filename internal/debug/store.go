@@ -9,6 +9,7 @@ import (
 
 type Entry struct {
 	ID          string
+	OrgID       int64
 	Timestamp   time.Time
 	Duration    time.Duration
 	Method      string
@@ -93,6 +94,40 @@ func (s *Store) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = s.entries[:0]
+}
+
+func (s *Store) ListByOrg(orgID int64) []*Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var filtered []*Entry
+	for _, e := range s.entries {
+		if e.OrgID == orgID {
+			filtered = append(filtered, e)
+		}
+	}
+
+	result := make([]*Entry, len(filtered))
+	copy(result, filtered)
+
+	// Return newest first
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+	return result
+}
+
+func (s *Store) ClearByOrg(orgID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]*Entry, 0, len(s.entries))
+	for _, e := range s.entries {
+		if e.OrgID != orgID {
+			filtered = append(filtered, e)
+		}
+	}
+	s.entries = filtered
 }
 
 func (s *Store) Count() int {

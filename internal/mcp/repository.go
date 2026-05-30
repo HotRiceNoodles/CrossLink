@@ -16,6 +16,14 @@ func NewMCPRepo(db *gorm.DB) *MCPRepo {
 	return &MCPRepo{db: db}
 }
 
+func (r *MCPRepo) baseQuery(orgID int64) *gorm.DB {
+	q := r.db.Model(&MCPServer{})
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	return q
+}
+
 func (r *MCPRepo) Create(ctx context.Context, srv *MCPServer) error {
 	return r.db.WithContext(ctx).Create(srv).Error
 }
@@ -36,25 +44,33 @@ func (r *MCPRepo) CreateWithLimit(ctx context.Context, srv *MCPServer, maxServer
 	})
 }
 
-func (r *MCPRepo) GetByID(ctx context.Context, id int64) (*MCPServer, error) {
+func (r *MCPRepo) GetByID(ctx context.Context, orgID int64, id int64) (*MCPServer, error) {
 	var srv MCPServer
-	if err := r.db.WithContext(ctx).First(&srv, id).Error; err != nil {
+	q := r.db.WithContext(ctx)
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	if err := q.First(&srv, id).Error; err != nil {
 		return nil, err
 	}
 	return &srv, nil
 }
 
-func (r *MCPRepo) GetByName(ctx context.Context, name string) (*MCPServer, error) {
+func (r *MCPRepo) GetByName(ctx context.Context, orgID int64, name string) (*MCPServer, error) {
 	var srv MCPServer
-	if err := r.db.WithContext(ctx).Where("name = ?", name).First(&srv).Error; err != nil {
+	q := r.db.WithContext(ctx).Where("name = ?", name)
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	if err := q.First(&srv).Error; err != nil {
 		return nil, err
 	}
 	return &srv, nil
 }
 
-func (r *MCPRepo) List(ctx context.Context) ([]MCPServer, error) {
+func (r *MCPRepo) List(ctx context.Context, orgID int64) ([]MCPServer, error) {
 	var servers []MCPServer
-	if err := r.db.WithContext(ctx).Limit(500).Find(&servers).Error; err != nil {
+	if err := r.baseQuery(orgID).WithContext(ctx).Limit(500).Find(&servers).Error; err != nil {
 		return nil, err
 	}
 	return servers, nil
@@ -71,9 +87,9 @@ func (r *MCPRepo) Delete(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&MCPServer{}, id).Error
 }
 
-func (r *MCPRepo) CountActive(ctx context.Context) (int64, error) {
+func (r *MCPRepo) CountActive(ctx context.Context, orgID int64) (int64, error) {
 	var count int64
-	if err := r.db.WithContext(ctx).Model(&MCPServer{}).Count(&count).Error; err != nil {
+	if err := r.baseQuery(orgID).WithContext(ctx).Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -131,9 +147,12 @@ func (r *MCPRepo) DeletePermission(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&MCPServerPermission{}, id).Error
 }
 
-func (r *MCPRepo) ListToolCallLogs(ctx context.Context, serverID int64, page, pageSize int) ([]MCPToolCallLog, int64, error) {
+func (r *MCPRepo) ListToolCallLogs(ctx context.Context, orgID int64, serverID int64, page, pageSize int) ([]MCPToolCallLog, int64, error) {
 	var total int64
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{})
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
 	if serverID > 0 {
 		q = q.Where("server_id = ?", serverID)
 	}
@@ -148,10 +167,13 @@ func (r *MCPRepo) ListToolCallLogs(ctx context.Context, serverID int64, page, pa
 	return logs, total, nil
 }
 
-func (r *MCPRepo) GetToolCallStats(ctx context.Context, serverID int64, days int) (*MCPToolCallStats, error) {
+func (r *MCPRepo) GetToolCallStats(ctx context.Context, orgID int64, serverID int64, days int) (*MCPToolCallStats, error) {
 	since := time.Now().AddDate(0, 0, -days)
 	stats := &MCPToolCallStats{}
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).Where("created_at >= ?", since)
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
 	if serverID > 0 {
 		q = q.Where("server_id = ?", serverID)
 	}
@@ -173,12 +195,15 @@ func (r *MCPRepo) GetToolCallStats(ctx context.Context, serverID int64, days int
 	return stats, nil
 }
 
-func (r *MCPRepo) GetTopTools(ctx context.Context, serverID int64, days int, limit int) ([]MCPTopTool, error) {
+func (r *MCPRepo) GetTopTools(ctx context.Context, orgID int64, serverID int64, days int, limit int) ([]MCPTopTool, error) {
 	since := time.Now().AddDate(0, 0, -days)
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
 		Select("tool_name as name, COUNT(*) as count, COALESCE(AVG(duration),0) as avg_dur, COALESCE(COUNT(*) FILTER (WHERE status != 1)::float / NULLIF(COUNT(*), 0), 0) as error_rate").
 		Where("created_at >= ? AND tool_name != ''", since).
 		Group("tool_name").Order("count DESC")
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
 	if serverID > 0 {
 		q = q.Where("server_id = ?", serverID)
 	}
@@ -192,12 +217,15 @@ func (r *MCPRepo) GetTopTools(ctx context.Context, serverID int64, days int, lim
 	return tools, nil
 }
 
-func (r *MCPRepo) GetCallsByDay(ctx context.Context, serverID int64, days int) ([]MCPDailyCalls, error) {
+func (r *MCPRepo) GetCallsByDay(ctx context.Context, orgID int64, serverID int64, days int) ([]MCPDailyCalls, error) {
 	since := time.Now().AddDate(0, 0, -days)
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
 		Select("DATE(created_at) as date, COUNT(*) as count, COUNT(*) FILTER (WHERE status = 1) as success, COUNT(*) FILTER (WHERE status != 1) as error").
 		Where("created_at >= ?", since).
 		Group("DATE(created_at)").Order("date ASC")
+	if orgID != 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
 	if serverID > 0 {
 		q = q.Where("server_id = ?", serverID)
 	}

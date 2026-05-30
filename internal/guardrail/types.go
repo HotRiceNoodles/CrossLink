@@ -37,6 +37,7 @@ type EngineCloser interface {
 
 type GuardrailRule struct {
 	ID          int64          `gorm:"primaryKey" json:"id"`
+	OrgID       *int64         `gorm:"index" json:"org_id,omitempty"`
 	Name        string         `gorm:"size:255;not null" json:"name"`
 	Type        string         `gorm:"size:50;not null" json:"type"`
 	Direction   string         `gorm:"size:10;not null" json:"direction"`

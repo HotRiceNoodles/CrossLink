@@ -21,7 +21,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 
 	user := &model.User{ID: 1, Username: "admin", RoleID: 1}
 	cp, _ := crypto.NewProvider("standard")
-	token, err := GenerateToken(user, model.RoleAdmin, 0, cfg, cp)
+	token, err := GenerateToken(user, model.RoleAdmin, 0, 0, "", cfg, cp)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
