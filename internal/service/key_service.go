@@ -43,6 +43,8 @@ type CreateKeyInput struct {
 	RPMLimit      int
 	MaxBudget     float64
 	BudgetPeriod  string
+	MaxCalls      int
+	CallPeriod    string
 	ExpiresAt     *time.Time
 	CreatedByID   int64
 	TeamID        int64
@@ -76,6 +78,8 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 		RPMLimit:      input.RPMLimit,
 		MaxBudget:     input.MaxBudget,
 		BudgetPeriod:  input.BudgetPeriod,
+		MaxCalls:     input.MaxCalls,
+		CallPeriod:   input.CallPeriod,
 		ExpiresAt:     input.ExpiresAt,
 	}
 	if len(input.AllowedModels) > 0 {

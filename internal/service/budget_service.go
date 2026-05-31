@@ -111,6 +111,31 @@ func (s *BudgetService) ReportUsage(ctx context.Context, scope, targetID, period
 	}
 }
 
+func (s *BudgetService) CheckCallLimit(ctx context.Context, keyID, period string, maxCalls int) (int, bool) {
+	if maxCalls <= 0 {
+		return 0, false
+	}
+	pk := PeriodKey(period)
+	key := fmt.Sprintf("calls:key:%s:%s", keyID, pk)
+	val, err := s.rdb.Get(ctx, key).Int()
+	if err != nil {
+		return 0, false
+	}
+	return val, val >= maxCalls
+}
+
+func (s *BudgetService) ReportCallUsage(ctx context.Context, keyID, period string) {
+	pk := PeriodKey(period)
+	key := fmt.Sprintf("calls:key:%s:%s", keyID, pk)
+	ttl := PeriodTTL(period)
+	pipe := s.rdb.Pipeline()
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		slog.Warn("call count report redis pipeline failed", "key", key, "error", err)
+	}
+}
+
 func (s *BudgetService) GetCurrentSpent(ctx context.Context, scope, targetID, period string) float64 {
 	pk := PeriodKey(period)
 	key := fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk)

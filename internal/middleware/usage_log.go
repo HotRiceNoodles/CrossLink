@@ -76,6 +76,9 @@ func mapStatusToErrorType(c *gin.Context, status int) string {
 		if _, ok := c.Get("budget_exceeded"); ok {
 			return "budget_exceeded"
 		}
+		if _, ok := c.Get("call_limit_exceeded"); ok {
+			return "call_limit_exceeded"
+		}
 		return "rate_limit"
 	}
 	switch {

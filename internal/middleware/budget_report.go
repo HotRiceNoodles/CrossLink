@@ -29,6 +29,14 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 		outPrice, _ := c.Get("output_price")
 
 		_, hasPrecomputedCost := c.Get("cost")
+
+		// Report call count usage — independent of cost calculation
+		if apiKey.MaxCalls > 0 {
+			callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			budgetSvc.ReportCallUsage(callCtx, fmt.Sprintf("%d", apiKey.ID), apiKey.CallPeriod)
+			callCancel()
+		}
+
 		if inTok == nil && outTok == nil && !hasPrecomputedCost {
 			return
 		}

@@ -8,6 +8,8 @@ import "context"
 type BudgetServiceInterface interface {
 	CheckBudget(ctx context.Context, scope, targetID, period string, budgetLimit float64) (spent, limit float64, exceeded bool)
 	ReportUsage(ctx context.Context, scope, targetID, period string, cost float64)
+	CheckCallLimit(ctx context.Context, keyID, period string, maxCalls int) (current int, exceeded bool)
+	ReportCallUsage(ctx context.Context, keyID, period string)
 }
 
 // BudgetAlertServiceInterface decouples middleware from BudgetAlertService implementation.

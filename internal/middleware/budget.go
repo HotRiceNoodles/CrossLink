@@ -39,6 +39,22 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 			c.Set("key_budget_period", apiKey.BudgetPeriod)
 		}
 
+		if apiKey.MaxCalls > 0 {
+			current, exceeded := budgetSvc.CheckCallLimit(
+				c.Request.Context(), fmt.Sprintf("%d", apiKey.ID),
+				apiKey.CallPeriod, apiKey.MaxCalls,
+			)
+			if exceeded {
+				c.Set("call_limit_exceeded", true)
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "call_limit_exceeded", "message": fmt.Sprintf("API key call limit exceeded: %d/%d", current, apiKey.MaxCalls)},
+				})
+				c.Abort()
+				return
+			}
+		}
+
 		if apiKey.TeamID != nil && *apiKey.TeamID > 0 {
 			team := teamCache.Get(c.Request.Context(), *apiKey.TeamID)
 			if team != nil && team.BudgetLimit > 0 {

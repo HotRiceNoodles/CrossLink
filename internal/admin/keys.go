@@ -57,6 +57,8 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		RPMLimit      int      `json:"rpm_limit"`
 		MaxBudget     float64  `json:"max_budget"`
 		BudgetPeriod  string   `json:"budget_period"`
+		MaxCalls      int      `json:"max_calls"`
+		CallPeriod    string   `json:"call_period"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
@@ -68,6 +70,14 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	}
 	if input.MaxBudget < 0 {
 		errorResp(c, http.StatusBadRequest, ErrBudgetNegative, "max_budget must be >= 0")
+		return
+	}
+	if input.CallPeriod != "" && !isValidPeriod(input.CallPeriod) {
+		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "call_period must be daily, weekly, or monthly")
+		return
+	}
+	if input.MaxCalls < 0 {
+		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
 	if license.G().CurrentTier() == license.TierCommunity {
@@ -97,6 +107,8 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		RPMLimit:      input.RPMLimit,
 		MaxBudget:     input.MaxBudget,
 		BudgetPeriod:  input.BudgetPeriod,
+		MaxCalls:      input.MaxCalls,
+		CallPeriod:    input.CallPeriod,
 		CreatedByID:   GetUserID(c),
 		TeamID:        GetTeamID(c),
 	})
@@ -106,7 +118,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	}
 
 	if h.auditSvc != nil {
-		h.auditSvc.LogFromContext(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"after": map[string]any{"name": input.Name, "key_prefix": result.KeyPrefix}}))
+		h.auditSvc.LogFromContext(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"after": map[string]any{"name": input.Name, "key_prefix": result.KeyPrefix, "max_calls": input.MaxCalls, "call_period": input.CallPeriod}}))
 	}
 
 	emailSent := false
@@ -153,6 +165,8 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		RPMLimit      *int      `json:"rpm_limit"`
 		MaxBudget     *float64  `json:"max_budget"`
 		BudgetPeriod  *string   `json:"budget_period"`
+		MaxCalls      *int      `json:"max_calls"`
+		CallPeriod    *string   `json:"call_period"`
 		AllowedModels *[]string `json:"allowed_models"`
 		AllowedRoutes *[]string `json:"allowed_routes"`
 	}
@@ -163,6 +177,14 @@ func (h *KeyHandler) Update(c *gin.Context) {
 
 	if input.BudgetPeriod != nil && !isValidPeriod(*input.BudgetPeriod) {
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "budget_period must be daily, weekly, or monthly")
+		return
+	}
+	if input.CallPeriod != nil && !isValidPeriod(*input.CallPeriod) {
+		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "call_period must be daily, weekly, or monthly")
+		return
+	}
+	if input.MaxCalls != nil && *input.MaxCalls < 0 {
+		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
 
@@ -177,7 +199,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes)}
+	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod}
 
 	if input.Status != nil {
 		key.Status = *input.Status
@@ -193,6 +215,12 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 	if input.BudgetPeriod != nil {
 		key.BudgetPeriod = *input.BudgetPeriod
+	}
+	if input.MaxCalls != nil {
+		key.MaxCalls = *input.MaxCalls
+	}
+	if input.CallPeriod != nil {
+		key.CallPeriod = *input.CallPeriod
 	}
 	if input.AllowedModels != nil {
 		data, err := json.Marshal(*input.AllowedModels)
@@ -215,7 +243,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	if h.auditSvc != nil {
-		h.auditSvc.LogFromContext(c, "key:update", "key", fmt.Sprintf("%d", key.ID), key.Name, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes)}}))
+		h.auditSvc.LogFromContext(c, "key:update", "key", fmt.Sprintf("%d", key.ID), key.Name, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod}}))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": key})
 }
@@ -238,21 +266,26 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Clear Redis budget counters for this key
+	// Clear Redis budget and call counters for this key
 	if h.rdb != nil {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		var cursor uint64
-		for {
-			keys, next, err := h.rdb.Scan(bgCtx, cursor, fmt.Sprintf("budget:key:%d:*", id), 100).Result()
-			if err != nil {
-				break
-			}
-			for _, k := range keys {
-				h.rdb.Del(bgCtx, k)
-			}
-			cursor = next
-			if cursor == 0 {
-				break
+		for _, pattern := range []string{
+			fmt.Sprintf("budget:key:%d:*", id),
+			fmt.Sprintf("calls:key:%d:*", id),
+		} {
+			var cursor uint64
+			for {
+				keys, next, err := h.rdb.Scan(bgCtx, cursor, pattern, 100).Result()
+				if err != nil {
+					break
+				}
+				for _, k := range keys {
+					h.rdb.Del(bgCtx, k)
+				}
+				cursor = next
+				if cursor == 0 {
+					break
+				}
 			}
 		}
 		cancel()

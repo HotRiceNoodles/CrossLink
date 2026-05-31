@@ -1,0 +1,2 @@
+ALTER TABLE api_keys DROP COLUMN IF EXISTS call_period;
+ALTER TABLE api_keys DROP COLUMN IF EXISTS max_calls;
