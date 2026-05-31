@@ -42,7 +42,8 @@ func NewModelHandler(repo *repository.ProviderModelCRUDRepo, cache CacheInvalida
 }
 
 func (h *ModelHandler) List(c *gin.Context) {
-	models, err := h.repo.List(c.Request.Context())
+	orgID := GetOrgID(c)
+	models, err := h.repo.List(c.Request.Context(), orgID)
 	if err != nil {
 		internalErr(c, err, "list models failed")
 		return
@@ -93,7 +94,8 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		ExtraConfig:     datatypes.JSON(input.ExtraConfig),
 		Status:          1,
 	}
-	if err := h.repo.Create(c.Request.Context(), m); err != nil {
+	orgID := GetOrgID(c)
+	if err := h.repo.Create(c.Request.Context(), m, orgID); err != nil {
 		internalErr(c, err, "create model failed")
 		return
 	}
@@ -113,12 +115,13 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 		return
 	}
 	// Fetch model name before deletion for cache invalidation
-	m, err := h.repo.GetByID(c.Request.Context(), id)
+	orgID := GetOrgID(c)
+	m, err := h.repo.GetByID(c.Request.Context(), id, orgID)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
-	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
+	if err := h.repo.Delete(c.Request.Context(), id, orgID); err != nil {
 		internalErr(c, err, "delete model failed")
 		return
 	}
@@ -161,7 +164,8 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		return
 	}
 
-	m, err := h.repo.GetByID(c.Request.Context(), id)
+	orgID := GetOrgID(c)
+	m, err := h.repo.GetByID(c.Request.Context(), id, orgID)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
@@ -193,7 +197,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		m.ExtraConfig = datatypes.JSON(input.ExtraConfig)
 	}
 
-	if err := h.repo.Update(c.Request.Context(), m); err != nil {
+	if err := h.repo.Update(c.Request.Context(), m, orgID); err != nil {
 		internalErr(c, err, "update model failed")
 		return
 	}

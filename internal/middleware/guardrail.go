@@ -84,6 +84,11 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			}
 		}
 
+		var orgID int64
+		if v := c.GetInt64("org_id"); v != 0 {
+			orgID = v
+		}
+
 		checkCtx := &guardrail.CheckContext{Metadata: make(map[string]string)}
 		if apiKeyID > 0 {
 			checkCtx.Metadata["api_key_id"] = fmt.Sprintf("%d", apiKeyID)
@@ -102,6 +107,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			Model:     probe.Model,
 			APIKeyID:  apiKeyID,
 			TeamID:    teamID,
+			OrgID:     orgID,
 		})
 		if err != nil {
 			if svc.IsFailOpen() {

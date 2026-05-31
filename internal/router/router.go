@@ -32,7 +32,7 @@ type cacheEntry struct {
 }
 
 type ProviderModelRepo interface {
-	FindByModelName(ctx context.Context, modelName string) ([]model.ProviderModel, error)
+	FindByModelName(ctx context.Context, modelName string, orgID int64) ([]model.ProviderModel, error)
 }
 
 type ActiveRequestsProvider interface {
@@ -73,9 +73,10 @@ func NewResolver(
 	}
 }
 
-func (r *Resolver) Resolve(ctx context.Context, modelName string) ([]*RouteResult, error) {
+func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
 	// Check cache
-	if v, ok := r.cache.Load(modelName); ok {
+	cacheKey := fmt.Sprintf("%s:%d", modelName, orgID)
+	if v, ok := r.cache.Load(cacheKey); ok {
 		entry := v.(*cacheEntry)
 		if time.Now().Before(entry.expire) {
 			// Filter out unhealthy providers from cached results
@@ -94,10 +95,10 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string) ([]*RouteResul
 				return entry.results, nil
 			}
 		}
-		r.cache.Delete(modelName)
+		r.cache.Delete(cacheKey)
 	}
 
-	models, err := r.repo.FindByModelName(ctx, modelName)
+	models, err := r.repo.FindByModelName(ctx, modelName, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("query model mappings: %w", err)
 	}
@@ -218,7 +219,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string) ([]*RouteResul
 	_, ordered := strategy.Select(ctx, routeCandidates)
 
 	// Store in cache
-	r.cache.Store(modelName, &cacheEntry{
+	r.cache.Store(cacheKey, &cacheEntry{
 		results: ordered,
 		expire:  time.Now().Add(r.ttl),
 	})
@@ -242,8 +243,8 @@ func (r *Resolver) Health() *provider.HealthTracker {
 }
 
 // ResolveSingle is a convenience method that returns the first (best) route.
-func (r *Resolver) ResolveSingle(ctx context.Context, modelName string) (*RouteResult, error) {
-	candidates, err := r.Resolve(ctx, modelName)
+func (r *Resolver) ResolveSingle(ctx context.Context, modelName string, orgID int64) (*RouteResult, error) {
+	candidates, err := r.Resolve(ctx, modelName, orgID)
 	if err != nil {
 		return nil, err
 	}

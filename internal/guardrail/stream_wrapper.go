@@ -15,18 +15,20 @@ type StreamGuardrailWrapper struct {
 	model      string
 	apiKeyID   int64
 	teamID     int64
+	orgID      int64
 	buf        strings.Builder
 	windowSize int
 	failOpen   bool
 }
 
-func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService, model string, apiKeyID, teamID int64) *StreamGuardrailWrapper {
+func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService, model string, apiKeyID, teamID, orgID int64) *StreamGuardrailWrapper {
 	return &StreamGuardrailWrapper{
 		ch:         ch,
 		svc:        svc,
 		model:      model,
 		apiKeyID:   apiKeyID,
 		teamID:     teamID,
+		orgID:      orgID,
 		windowSize: 2048,
 		failOpen:   svc.IsFailOpen(),
 	}
@@ -59,6 +61,7 @@ func (w *StreamGuardrailWrapper) Next(ctx context.Context) StreamResult {
 				Model:     w.model,
 				APIKeyID:  w.apiKeyID,
 				TeamID:    w.teamID,
+				OrgID:     w.orgID,
 			})
 			if err != nil {
 				if !w.failOpen {
@@ -89,6 +92,7 @@ func (w *StreamGuardrailWrapper) Next(ctx context.Context) StreamResult {
 			Model:     w.model,
 			APIKeyID:  w.apiKeyID,
 			TeamID:    w.teamID,
+			OrgID:     w.orgID,
 		})
 			if err != nil {
 				if !w.failOpen {
@@ -111,17 +115,19 @@ type CallbackStreamGuardrail struct {
 	model      string
 	apiKeyID   int64
 	teamID     int64
+	orgID      int64
 	buf        strings.Builder
 	windowSize int
 	failOpen   bool
 }
 
-func NewCallbackStreamGuardrail(svc *GuardrailService, model string, apiKeyID, teamID int64) *CallbackStreamGuardrail {
+func NewCallbackStreamGuardrail(svc *GuardrailService, model string, apiKeyID, teamID, orgID int64) *CallbackStreamGuardrail {
 	return &CallbackStreamGuardrail{
 		svc:        svc,
 		model:      model,
 		apiKeyID:   apiKeyID,
 		teamID:     teamID,
+		orgID:      orgID,
 		windowSize: 2048,
 		failOpen:   svc.IsFailOpen(),
 	}
@@ -134,6 +140,7 @@ func (w *CallbackStreamGuardrail) CheckText(ctx context.Context, text string) (b
 		Model:     w.model,
 		APIKeyID:  w.apiKeyID,
 		TeamID:    w.teamID,
+		OrgID:     w.orgID,
 	})
 	if err != nil {
 		if !w.failOpen {
@@ -155,6 +162,7 @@ func (w *CallbackStreamGuardrail) FinalCheck(ctx context.Context, text string) (
 		Model:     w.model,
 		APIKeyID:  w.apiKeyID,
 		TeamID:    w.teamID,
+		OrgID:     w.orgID,
 	})
 	if err != nil {
 		if !w.failOpen {

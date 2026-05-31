@@ -18,10 +18,13 @@ func NewModelsHandler(db *gorm.DB) *ModelsHandler {
 
 func (h *ModelsHandler) ListModels(c *gin.Context) {
 	var names []string
-	h.db.Table("provider_models").
+	query := h.db.Table("provider_models").
 		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.deleted_at IS NULL").
-		Where("provider_models.status = 1 AND provider_models.deleted_at IS NULL AND providers.status = 1").
-		Distinct("model_name").
+		Where("provider_models.status = 1 AND provider_models.deleted_at IS NULL AND providers.status = 1")
+	if orgID := c.GetInt64("org_id"); orgID != 0 {
+		query = query.Where("providers.org_id = ? OR providers.org_id IS NULL", orgID)
+	}
+	query.Distinct("model_name").
 		Pluck("model_name", &names)
 
 	models := make([]gin.H, len(names))

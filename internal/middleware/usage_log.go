@@ -26,6 +26,7 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 		}
 
 		var keyID, teamID int64
+		orgID := c.GetInt64("org_id")
 		if key := GetAPIKeyFromContext(c); key != nil {
 			keyID = key.ID
 			if key.TeamID != nil {
@@ -53,6 +54,7 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 				LatencyMs:      time.Since(start).Milliseconds(),
 				APIKeyID:       keyID,
 				TeamID:         teamID,
+			OrgID:          orgID,
 			})
 		}()
 	}

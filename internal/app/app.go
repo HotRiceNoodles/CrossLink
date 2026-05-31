@@ -318,10 +318,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider))
-	gwGroup.Use(middleware.RateLimit(rdb, cfg.RateLimit.RPM, teamCache))
-	gwGroup.Use(middleware.TPMLimit(rdb, cfg.RateLimit.TPM, teamCache))
+	gwGroup.Use(middleware.RateLimit(rdb, cfg.RateLimit.RPM, teamCache, orgCache))
+	gwGroup.Use(middleware.TPMLimit(rdb, cfg.RateLimit.TPM, teamCache, orgCache))
 	gwGroup.Use(middleware.BudgetCheck(svcs.BudgetSvc, teamCache, orgCache))
-	gwGroup.Use(middleware.ReportTokens(rdb))
+	gwGroup.Use(middleware.ReportTokens(rdb, orgCache))
 	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
 	// Commercial middleware extension point
 	for _, mw := range ext.ExtraMiddlewares {

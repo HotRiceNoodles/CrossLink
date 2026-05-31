@@ -58,6 +58,7 @@ type CheckRequest struct {
 	Model     string
 	APIKeyID  int64
 	TeamID    int64
+	OrgID     int64
 }
 
 type CheckResponse struct {

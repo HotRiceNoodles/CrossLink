@@ -47,6 +47,7 @@ func NewAnthropicHandler(svc *service.GatewayService, usageSvc *service.UsageSer
 func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error) {
 	var keyID int64
 	var teamID int64
+	orgID := c.GetInt64("org_id")
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		keyID = key.ID
 		if key.TeamID != nil {
@@ -74,6 +75,7 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.T
 			ProviderID:     providerID,
 			APIKeyID:       keyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			Currency:       currency,
 			StatusCode:     http.StatusBadGateway,
 			ErrorType:      "provider_error",
@@ -148,7 +150,8 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID)
+	orgID := c.GetInt64("org_id")
+	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID, orgID)
 	if err != nil {
 		h.logFailure(c, req.Model, start, err)
 		h.writeError(c, err, req.Model)
@@ -186,6 +189,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				Model:     req.Model,
 				APIKeyID:  apiKeyID,
 				TeamID:    teamID,
+				OrgID:     orgID,
 			})
 				if grErr != nil {
 					if h.guardrailSvc.IsFailOpen() {
@@ -243,6 +247,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			ProviderID:     result.ProviderID,
 			APIKeyID:       apiKeyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			InputTokens:    result.InputTokens,
 			OutputTokens:   result.OutputTokens,
 			InputPrice:     result.InputPrice,
@@ -320,11 +325,12 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			teamID = *key.TeamID
 		}
 	}
+	orgID := c.GetInt64("org_id")
 
 	var grWrapper *guardrail.CallbackStreamGuardrail
 	var messageStopSent bool
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID)
+		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
 	}
 
 	result, err := h.svc.StreamChat(c.Request.Context(), req, func(ctx context.Context, event service.StreamEvent) bool {
@@ -392,7 +398,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			modelRespBuf.WriteString(deltaText)
 		}
 		return true
-	}, sessionID)
+	}, sessionID, orgID)
 
 	// Final-drain: check any remaining buffered content after stream ends
 	if grWrapper != nil && grWrapper.BufferLen() > 0 {
@@ -453,6 +459,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			ProviderID:     result.ProviderID,
 			APIKeyID:       apiKeyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			InputTokens:    result.InputTokens,
 			OutputTokens:   result.OutputTokens,
 			InputPrice:     result.InputPrice,

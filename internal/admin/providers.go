@@ -81,8 +81,9 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
+	orgID := GetOrgID(c)
 	if license.G().CurrentTier() == license.TierCommunity {
-		providers, err := h.repo.List(c.Request.Context(), 0)
+		providers, err := h.repo.List(c.Request.Context(), orgID)
 		if err != nil {
 			internalErr(c, err, "count providers failed")
 			return
@@ -105,6 +106,9 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		APIKey:      input.APIKey,
 		ExtraConfig: datatypes.JSON(input.ExtraConfig),
 		Status:      1,
+	}
+	if orgID != 0 {
+		p.OrgID = &orgID
 	}
 	if err := h.encryptProvider(p); err != nil {
 		internalErr(c, err, "encrypt provider failed")
@@ -363,7 +367,7 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "provider:test", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{"success": true, "model": modelName, "latency_ms": latency}))
 	}
-	h.logTestUsage(p, modelName, resp, latency)
+	h.logTestUsage(p, modelName, resp, latency, orgID)
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"success":    true,
 		"status":     200,
@@ -480,7 +484,7 @@ func (h *ProviderHandler) ListAdapters(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": adapters})
 }
 
-func (h *ProviderHandler) logTestUsage(p *model.Provider, modelName string, resp *domain.OpenAIResponse, latencyMs int64) {
+func (h *ProviderHandler) logTestUsage(p *model.Provider, modelName string, resp *domain.OpenAIResponse, latencyMs int64, orgID int64) {
 	if h.usageSvc == nil {
 		return
 	}
@@ -501,6 +505,7 @@ func (h *ProviderHandler) logTestUsage(p *model.Provider, modelName string, resp
 			ModelRequested: modelName,
 			ModelUsed:      resp.Model,
 			ProviderID:     p.ID,
+			OrgID:          orgID,
 			InputTokens:    inputTokens,
 			OutputTokens:   outputTokens,
 			LatencyMs:      latencyMs,

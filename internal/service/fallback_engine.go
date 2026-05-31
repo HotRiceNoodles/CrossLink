@@ -13,7 +13,7 @@ import (
 
 // RouteResolver resolves model names to route results.
 type RouteResolver interface {
-	Resolve(ctx context.Context, modelName string) ([]*router.RouteResult, error)
+	Resolve(ctx context.Context, modelName string, orgID int64) ([]*router.RouteResult, error)
 }
 
 // FallbackAttempt records a single provider attempt during fallback.
@@ -283,7 +283,7 @@ func ResolveFallbackConfig(routes []*router.RouteResult) router.FallbackConfig {
 
 // ExpandFallbackRoutes resolves FallbackModels from the first route and appends them.
 // Deduplicates by (provider_name, provider_model) to avoid redundant attempts.
-func ExpandFallbackRoutes(ctx context.Context, resolver RouteResolver, routes []*router.RouteResult) []*router.RouteResult {
+func ExpandFallbackRoutes(ctx context.Context, resolver RouteResolver, routes []*router.RouteResult, orgID int64) []*router.RouteResult {
 	if len(routes) == 0 || resolver == nil {
 		return routes
 	}
@@ -292,7 +292,7 @@ func ExpandFallbackRoutes(ctx context.Context, resolver RouteResolver, routes []
 		seen[r.Provider.Name()+"|"+r.ProviderModel] = struct{}{}
 	}
 	for _, fbModel := range routes[0].FallbackModels {
-		fbRoutes, err := resolver.Resolve(ctx, fbModel)
+		fbRoutes, err := resolver.Resolve(ctx, fbModel, orgID)
 		if err != nil {
 			continue
 		}

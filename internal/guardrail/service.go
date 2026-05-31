@@ -251,7 +251,8 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 	for _, r := range s.rules {
 		dirMatch := r.Direction == string(req.Direction) || r.Direction == string(DirectionBoth)
 		modelMatch := r.ModelFilter == nil || modelInFilter(req.Model, *r.ModelFilter)
-		if dirMatch && modelMatch {
+		orgMatch := r.OrgID == nil || *r.OrgID == req.OrgID
+		if dirMatch && modelMatch && orgMatch {
 			rules = append(rules, r)
 		}
 	}

@@ -52,6 +52,7 @@ func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService,
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int) {
 	var keyID int64
 	var teamID int64
+	orgID := c.GetInt64("org_id")
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		keyID = key.ID
 		if key.TeamID != nil {
@@ -72,6 +73,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			ProviderID:     providerID,
 			APIKeyID:       keyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			Currency:       currency,
 			StatusCode:     statusCode,
 			ErrorType:      "provider_error",
@@ -140,7 +142,8 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	c.Set("model", req.Model)
 	c.Set("stream", req.Stream)
 
-	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model)
+	orgID := c.GetInt64("org_id")
+	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": map[string]string{"message": safeProviderError(err)}})
 		return
@@ -157,6 +160,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 }
 
 func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
+	orgID := c.GetInt64("org_id")
 	// Idempotency cache check
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		var idemKeyID int64
@@ -175,7 +179,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		}
 	}
 
-	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes)
+	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
 
@@ -253,6 +257,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				Model:     req.Model,
 				APIKeyID:  apiKeyID,
 				TeamID:    teamID,
+				OrgID:     orgID,
 			})
 				if grErr != nil {
 					if h.guardrailSvc.IsFailOpen() {
@@ -319,6 +324,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			ProviderID:     route.ProviderRow.ID,
 			APIKeyID:       apiKeyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			InputTokens:    inputTokens,
 			OutputTokens:   outputTokens,
 			InputPrice:     route.InputPrice,
@@ -365,7 +371,8 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 }
 
 func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
-	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes)
+	orgID := c.GetInt64("org_id")
+	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
 
@@ -440,7 +447,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	}
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID)
+		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
 		for {
 			sr := wrapper.Next(c.Request.Context())
 			if sr.Done {
@@ -608,6 +615,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			ProviderID:     route.ProviderRow.ID,
 			APIKeyID:       apiKeyID,
 			TeamID:         teamID,
+			OrgID:          orgID,
 			InputTokens:    inputTokens,
 			OutputTokens:   outputTokens,
 			InputPrice:     route.InputPrice,

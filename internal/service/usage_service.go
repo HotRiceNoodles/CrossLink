@@ -88,6 +88,7 @@ type UsageEntry struct {
 	ProviderID     int64
 	APIKeyID       int64
 	TeamID         int64
+	OrgID          int64
 	InputTokens    int
 	OutputTokens   int
 	InputPrice     float64
@@ -149,6 +150,9 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 	}
 	if entry.TeamID > 0 {
 		log.TeamID = &entry.TeamID
+	}
+	if entry.OrgID > 0 {
+		log.OrgID = &entry.OrgID
 	}
 	if entry.UserMessage != "" {
 		log.UserMessage = &entry.UserMessage

@@ -49,15 +49,15 @@ type ChatResult struct {
 	RetryCount    int
 }
 
-func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest, sessionID string) (*ChatResult, error) {
+func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest, sessionID string, orgID int64) (*ChatResult, error) {
 	start := time.Now()
 
-	routes, err := s.resolver.Resolve(ctx, req.Model)
+	routes, err := s.resolver.Resolve(ctx, req.Model, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve route: %w", err)
 	}
 
-	routes = ExpandFallbackRoutes(ctx, s.resolver, routes)
+	routes = ExpandFallbackRoutes(ctx, s.resolver, routes, orgID)
 
 	openaiReq, err := translator.AnthropicToOpenAI(req, "")
 	if err != nil {
@@ -153,15 +153,15 @@ type StreamEvent struct {
 
 type StreamChatFunc func(ctx context.Context, event StreamEvent) bool
 
-func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRequest, fn StreamChatFunc, sessionID string) (*StreamResult, error) {
+func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRequest, fn StreamChatFunc, sessionID string, orgID int64) (*StreamResult, error) {
 	start := time.Now()
 
-	routes, err := s.resolver.Resolve(ctx, req.Model)
+	routes, err := s.resolver.Resolve(ctx, req.Model, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve route: %w", err)
 	}
 
-	routes = ExpandFallbackRoutes(ctx, s.resolver, routes)
+	routes = ExpandFallbackRoutes(ctx, s.resolver, routes, orgID)
 
 	openaiReq, err := translator.AnthropicToOpenAI(req, "")
 	if err != nil {

@@ -42,7 +42,7 @@ var reserveTPMScript = redis.NewScript(`
 	return 1
 `)
 
-func RateLimit(rdb *redis.Client, rpm int, teamCache *TeamCache) gin.HandlerFunc {
+func RateLimit(rdb *redis.Client, rpm int, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rpm <= 0 {
 			c.Next()
@@ -98,11 +98,24 @@ func RateLimit(rdb *redis.Client, rpm int, teamCache *TeamCache) gin.HandlerFunc
 			}
 		}
 
+		// Org-level RPM limiting
+		if orgCache != nil {
+			if orgID := c.GetInt64("org_id"); orgID != 0 {
+				org := orgCache.Get(c.Request.Context(), orgID)
+				if org != nil && org.RPMLimit > 0 {
+					if isRateLimited(c.Request.Context(), rdb, fmt.Sprintf("ratelimit:org:%d", org.ID), org.RPMLimit) {
+						abortRateLimit(c)
+						return
+					}
+				}
+			}
+		}
+
 		c.Next()
 	}
 }
 
-func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache) gin.HandlerFunc {
+func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit := tpm
 		// WARNING: See RateLimit() comment about TrustedProxies and ClientIP().
@@ -169,12 +182,32 @@ func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache) gin.HandlerFunc 
 			}
 		}
 
+		// Org-level TPM limiting
+		if orgCache != nil {
+			if orgID := c.GetInt64("org_id"); orgID != 0 {
+				org := orgCache.Get(ctx, orgID)
+				if org != nil && org.TPMLimit > 0 {
+					orgTPMKey := fmt.Sprintf("tpm:org:%d", org.ID)
+					orgAllowed, orgErr := reserveTPMScript.Run(ctx, rdb, []string{orgTPMKey}, org.TPMLimit).Int64()
+					if orgErr == nil && orgAllowed == 0 {
+						c.Header("Retry-After", "60")
+						c.JSON(http.StatusTooManyRequests, gin.H{
+							"type":  "error",
+							"error": gin.H{"type": "rate_limit_error", "message": "organization token rate limit exceeded"},
+						})
+						c.Abort()
+						return
+					}
+				}
+			}
+		}
+
 		c.Set("tpm_key", tpmKey)
 		c.Next()
 	}
 }
 
-func ReportTokens(rdb *redis.Client) gin.HandlerFunc {
+func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 
@@ -211,6 +244,16 @@ func ReportTokens(rdb *redis.Client) gin.HandlerFunc {
 			teamTPMKey := fmt.Sprintf("tpm:team:%d", teamID)
 			if _, err := incrByExpireScript.Run(ctx, rdb, []string{teamTPMKey}, total, int(time.Minute.Seconds())).Result(); err != nil {
 				slog.Warn("report tokens redis team atomic incrby failed", "key", teamTPMKey, "error", err)
+			}
+		}
+
+		// Report to org TPM counter
+		if orgCache != nil {
+			if orgID := c.GetInt64("org_id"); orgID != 0 {
+				orgTPMKey := fmt.Sprintf("tpm:org:%d", orgID)
+				if _, err := incrByExpireScript.Run(ctx, rdb, []string{orgTPMKey}, total, int(time.Minute.Seconds())).Result(); err != nil {
+					slog.Warn("report tokens redis org atomic incrby failed", "key", orgTPMKey, "error", err)
+				}
 			}
 		}
 	}
