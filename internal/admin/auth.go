@@ -1,11 +1,13 @@
 package admin
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -89,11 +91,13 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		roleID := claims.RoleID
 		roleName := claims.RoleName
 		userStatus := int16(1)
+		forcePasswordChange := false
 		if db != nil {
 			var user model.User
-			if err := db.WithContext(c.Request.Context()).Select("role_id", "status").First(&user, claims.UserID).Error; err == nil {
+			if err := db.WithContext(c.Request.Context()).Select("role_id", "status", "force_password_change").First(&user, claims.UserID).Error; err == nil {
 				roleID = user.RoleID
 				userStatus = user.Status
+				forcePasswordChange = user.ForcePasswordChange
 				var role model.Role
 				if err := db.WithContext(c.Request.Context()).Select("name").First(&role, roleID).Error; err == nil {
 					roleName = role.Name
@@ -114,6 +118,21 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		c.Set("team_id", claims.TeamID)
 		c.Set("org_id", claims.OrgID)
 		c.Set("org_role", claims.OrgRole)
+
+		// Force password change: only allow self-service auth endpoints
+		if forcePasswordChange {
+			path := c.Request.URL.Path
+			allowed := path == "/admin/api/auth/change-forced-password" ||
+				path == "/admin/api/auth/permissions" ||
+				path == "/admin/api/user/preferences"
+			if !allowed {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": "password change required",
+					"code":  "force_password_change",
+				})
+				return
+			}
+		}
 
 		// Enforce absolute maximum session lifetime (7 days)
 		if claims.IssuedAt != nil && time.Since(claims.IssuedAt.Time) > 7*24*time.Hour {
@@ -281,6 +300,7 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 					"org_id":      orgID,
 					"org_name":    orgName,
 					"org_role":    orgRole,
+					"force_password_change": user.ForcePasswordChange,
 				},
 				"permissions": perms,
 				"tier":        license.G().CurrentTier(),
@@ -300,6 +320,20 @@ func verifyPassword(password, hash string) bool {
 
 func isLegacyHash(hash string) bool {
 	return len(hash) == 64 && !strings.HasPrefix(hash, "$2")
+}
+
+const passwordCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
+
+func GenerateRandomPassword() (string, error) {
+	b := make([]byte, 16)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(passwordCharset))))
+		if err != nil {
+			return "", fmt.Errorf("crypto/rand unavailable: %w", err)
+		}
+		b[i] = passwordCharset[n.Int64()]
+	}
+	return string(b), nil
 }
 
 // Context helpers for downstream handlers
@@ -389,5 +423,121 @@ func LogoutHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.SetCookie("admin_token", "", -1, "/", "", true, true)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+	}
+}
+
+func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, teamRepo *repository.TeamRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input struct {
+			NewPassword     string `json:"new_password" binding:"required"`
+			ConfirmPassword string `json:"confirm_password" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil {
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid request")
+			return
+		}
+
+		if input.NewPassword != input.ConfirmPassword {
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "passwords do not match")
+			return
+		}
+		if len(input.NewPassword) < 8 {
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "password must be at least 8 characters")
+			return
+		}
+
+		userID := GetUserID(c)
+		user, err := userRepo.GetByID(c.Request.Context(), userID)
+		if err != nil {
+			errorResp(c, http.StatusNotFound, "user_not_found", "user not found")
+			return
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcryptCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+			return
+		}
+
+		user.PasswordHash = string(hash)
+		user.ForcePasswordChange = false
+		if err := userRepo.Update(c.Request.Context(), user); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update password"})
+			return
+		}
+
+		// Resolve role, team, org for new token
+		role, _ := roleRepo.GetByID(c.Request.Context(), user.RoleID)
+		roleName := ""
+		if role != nil {
+			roleName = role.Name
+		}
+		var teamID int64
+		if roleName != model.RoleAdmin {
+			teams, _ := teamRepo.ListByUserID(c.Request.Context(), user.ID)
+			if len(teams) > 0 {
+				teamID = teams[0].ID
+			}
+		}
+		var orgID int64
+		var orgRole string
+		var orgName string
+		if orgRepo != nil && roleName != model.RoleAdmin {
+			member, err := orgRepo.GetMemberByUserID(c.Request.Context(), user.ID)
+			if err == nil && member != nil {
+				orgID = member.OrgID
+				orgRole = member.Role
+				org, err := orgRepo.GetByID(c.Request.Context(), orgID)
+				if err == nil && org != nil {
+					orgName = org.DisplayName
+				}
+			}
+		}
+
+		token, err := GenerateToken(user, roleName, teamID, orgID, orgRole, cfg, cp)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+			return
+		}
+
+		dbActions, _ := roleRepo.GetPermissions(c.Request.Context(), user.RoleID)
+		perms := license.EffectiveActions(dbActions)
+
+		c.SetCookie("admin_token", token, cfg.TokenExpiry*3600, "/", "", true, true)
+
+		if auditSvc != nil {
+			auditSvc.Log(&model.AuditLog{
+				UserID:       user.ID,
+				Username:     user.Username,
+				Action:       "auth:change_forced_password",
+				ResourceType: "auth",
+				ResourceID:   fmt.Sprintf("%d", user.ID),
+				ResourceName: user.Username,
+				Detail:       service.AuditDetail(map[string]any{"method": "forced_change"}),
+				IPAddress:    c.ClientIP(),
+				UserAgent:    c.Request.UserAgent(),
+				Status:       "success",
+				CreatedAt:    time.Now().UTC(),
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"token": token,
+				"user": gin.H{
+					"id":           user.ID,
+					"username":     user.Username,
+					"display_name": user.DisplayName,
+					"role_id":      user.RoleID,
+					"role_name":    roleName,
+					"org_id":       orgID,
+					"org_name":     orgName,
+					"org_role":     orgRole,
+				},
+				"permissions":         perms,
+				"tier":                license.G().CurrentTier(),
+				"force_password_change": false,
+			},
+		})
 	}
 }

@@ -4,7 +4,7 @@ ARG FRONTEND_REPO_REF=main
 RUN git clone --depth 1 --branch ${FRONTEND_REPO_REF} \
     https://github.com/HotRiceNoodles/CrossLink-UI-Standard.git /app
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@10 --activate
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 RUN pnpm config set registry https://registry.npmmirror.com
 RUN pnpm install --frozen-lockfile
 RUN pnpm build

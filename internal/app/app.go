@@ -233,11 +233,20 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		})
 	})
 
-	// Admin API (JWT auth required)
+	// Lightweight auth endpoints (JWT required, exempt from rate limit)
+	authGroup := r.Group("/admin/api")
+	authGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
+	authGroup.Use(middleware.OrgResolve())
+	{
+		authGroup.GET("/auth/permissions", handlers.Perms)
+		authGroup.POST("/auth/change-forced-password", admin.ChangeForcedPasswordHandler(repos.UserRepo, repos.RoleRepo, repos.OrgRepo, repos.TeamRepo, cfg.Admin, nil, cryptoProvider))
+	}
+
+	// Admin API (JWT auth + rate limit)
 	adminGroup := r.Group("/admin/api")
 	adminGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
 	adminGroup.Use(middleware.OrgResolve())
-	adminGroup.Use(middleware.AdminRateLimit(rdb, 120, time.Minute, ""))
+	adminGroup.Use(middleware.AdminRateLimit(rdb, 300, time.Minute, ""))
 	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	{
 		// Providers
@@ -276,10 +285,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// License
 		adminGroup.GET("/license/status", middleware.RequireAction(permCache, "license:view"), handlers.License.Status)
-
-		// Permissions endpoint (no RequireAction — all authenticated users can query)
-		adminGroup.GET("/auth/permissions", handlers.Perms)
-
 		// User preferences (self-service, no RequireAction)
 		adminGroup.GET("/user/preferences", handlers.Preferences.Get)
 		adminGroup.PUT("/user/preferences", handlers.Preferences.Update)

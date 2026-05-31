@@ -18,8 +18,10 @@ type User struct {
 	LastLoginAt  *time.Time `json:"last_login_at"`
 	CreatedAt    time.Time      `gorm:"not null;default:now()" json:"created_at"`
 	UpdatedAt    time.Time      `gorm:"not null;default:now()" json:"updated_at"`
-	OrgID        *int64         `gorm:"index" json:"org_id"`
-	Preferences datatypes.JSON `gorm:"type:jsonb" json:"preferences,omitempty"`
+	OrgID               *int64         `gorm:"index" json:"org_id"`
+	Email               *string        `gorm:"size:255" json:"email,omitempty"`
+	ForcePasswordChange bool           `gorm:"not null;default:false" json:"force_password_change,omitempty"`
+	Preferences         datatypes.JSON `gorm:"type:jsonb" json:"preferences,omitempty"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

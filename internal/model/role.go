@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
-	RoleViewer = "viewer"
+	RoleAdmin    = "admin"
+	RoleMember   = "member"
+	RoleViewer   = "viewer"
+	RoleOrgAdmin = "org_admin"
 )
 
 // ValidActions is the canonical set of permission actions.
@@ -94,12 +95,20 @@ var ValidActions = map[string]bool{
 
 // AdminRequiredActions are actions that must always remain on the admin role.
 var AdminRequiredActions = map[string]bool{
-	"user:list":      true,
-	"user:create":    true,
-	"user:update":    true,
-	"user:delete":    true,
-	"system:view":    true,
-	"system:update":  true,
+	"user:list":     true,
+	"user:create":   true,
+	"user:update":   true,
+	"user:delete":   true,
+	"system:view":   true,
+	"system:update": true,
+}
+
+// AdminExclusiveActions are actions that ONLY the admin (super admin) role can have.
+// Unlike AdminRequiredActions (which also includes user:* for org_admin),
+// these represent system-level control that must never be delegated.
+var AdminExclusiveActions = map[string]bool{
+	"system:view":   true,
+	"system:update": true,
 }
 
 func IsValidAction(action string) bool {

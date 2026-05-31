@@ -9,7 +9,7 @@ import (
 
 type Organization struct {
 	ID          int64          `gorm:"primaryKey" json:"id"`
-	Name        string         `gorm:"size:64;uniqueIndex;not null" json:"name"`
+	Name        string         `gorm:"size:64;not null" json:"name"`
 	DisplayName string         `gorm:"size:128;not null" json:"display_name"`
 	Description string         `gorm:"type:text" json:"description"`
 	Status      int16          `gorm:"not null;default:1" json:"status"`
