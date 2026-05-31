@@ -12,12 +12,14 @@ import (
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/service"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 type SystemHandler struct {
 	db         *gorm.DB
+	rdb        *redis.Client
 	cfg        *config.AdminConfig
 	usageSvc   *service.UsageService
 	debugStore *debug.Store
@@ -26,8 +28,8 @@ type SystemHandler struct {
 	auditSvc   *service.AuditService
 }
 
-func NewSystemHandler(db *gorm.DB, cfg config.AdminConfig, usageSvc *service.UsageService, debugStore *debug.Store, health *provider.HealthTracker, budget *provider.RetryBudget, auditSvc *service.AuditService) *SystemHandler {
-	return &SystemHandler{db: db, cfg: &cfg, usageSvc: usageSvc, debugStore: debugStore, health: health, budget: budget, auditSvc: auditSvc}
+func NewSystemHandler(db *gorm.DB, rdb *redis.Client, cfg config.AdminConfig, usageSvc *service.UsageService, debugStore *debug.Store, health *provider.HealthTracker, budget *provider.RetryBudget, auditSvc *service.AuditService) *SystemHandler {
+	return &SystemHandler{db: db, rdb: rdb, cfg: &cfg, usageSvc: usageSvc, debugStore: debugStore, health: health, budget: budget, auditSvc: auditSvc}
 }
 
 // ResilienceConfig holds the resilience settings stored in system_settings.
@@ -81,9 +83,19 @@ func (h *SystemHandler) Info(c *gin.Context) {
 		dbStatus = "error"
 	}
 
+	redisStatus := "ok"
+	if h.rdb != nil {
+		if err := h.rdb.Ping(c.Request.Context()).Err(); err != nil {
+			redisStatus = "error"
+		}
+	} else {
+		redisStatus = "error"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
 			"db_status":      dbStatus,
+			"redis_status":   redisStatus,
 			"admin_username": h.cfg.Username,
 			"token_expiry":   h.cfg.TokenExpiry,
 			"version":        version.Version,

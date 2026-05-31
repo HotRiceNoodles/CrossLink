@@ -279,8 +279,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/usage/models", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.ModelDistribution)
 		adminGroup.GET("/usage/team-stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.TeamStats)
 
-		// System
-		adminGroup.GET("/system/info", middleware.RequireAction(permCache, "system:view"), handlers.System.Info)
+		// System info (self-service, no RequireAction)
+		adminGroup.GET("/system/info", handlers.System.Info)
 		adminGroup.POST("/system/password", middleware.RequireAction(permCache, "system:password"), handlers.System.ChangePassword)
 
 		// License

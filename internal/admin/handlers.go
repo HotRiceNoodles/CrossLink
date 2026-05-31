@@ -75,6 +75,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Usage: NewUsageHandler(deps.DB, ""),
 		System: NewSystemHandler(
 			deps.DB,
+			deps.RDB,
 			deps.Config.Admin,
 			deps.Svcs.UsageSvc,
 			deps.DebugStore,
