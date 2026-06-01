@@ -60,12 +60,12 @@ func BenchmarkResolver_Resolve_CacheMiss(b *testing.B) {
 	ctx := context.Background()
 
 	// Pre-warm once so the registry is ready, then clear cache.
-	r.Resolve(ctx, "gpt-4")
+	r.Resolve(ctx, "gpt-4", 0)
 	r.Invalidate()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		r.Resolve(ctx, "gpt-4")
+		r.Resolve(ctx, "gpt-4", 0)
 		r.Invalidate() // force cache miss each iteration
 	}
 }
@@ -77,11 +77,11 @@ func BenchmarkResolver_Resolve_CacheHit(b *testing.B) {
 	ctx := context.Background()
 
 	// Warm the cache.
-	r.Resolve(ctx, "gpt-4")
+	r.Resolve(ctx, "gpt-4", 0)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		r.Resolve(ctx, "gpt-4")
+		r.Resolve(ctx, "gpt-4", 0)
 	}
 }
 
@@ -90,12 +90,12 @@ func BenchmarkResolver_Resolve_ManyProviders(b *testing.B) {
 	r := buildResolver(20)
 	ctx := context.Background()
 
-	r.Resolve(ctx, "gpt-4")
+	r.Resolve(ctx, "gpt-4", 0)
 	r.Invalidate()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		r.Resolve(ctx, "gpt-4")
+		r.Resolve(ctx, "gpt-4", 0)
 		r.Invalidate()
 	}
 }

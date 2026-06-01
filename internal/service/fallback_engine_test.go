@@ -374,7 +374,7 @@ func TestResolveFallbackConfig_EmptyRoutes(t *testing.T) {
 func TestExpandFallbackRoutes(t *testing.T) {
 	// Without a resolver, routes are returned as-is
 	routes := makeRoutes("a")
-	result := ExpandFallbackRoutes(context.Background(), nil, routes)
+	result := ExpandFallbackRoutes(context.Background(), nil, routes, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(result))
 	}
@@ -403,7 +403,7 @@ type mockResolver struct {
 	routes map[string][]*router.RouteResult
 }
 
-func (m *mockResolver) Resolve(_ context.Context, modelName string) ([]*router.RouteResult, error) {
+func (m *mockResolver) Resolve(_ context.Context, modelName string, _ int64) ([]*router.RouteResult, error) {
 	r, ok := m.routes[modelName]
 	if !ok {
 		return nil, fmt.Errorf("no provider for model: %s", modelName)
@@ -420,7 +420,7 @@ func TestExpandFallbackRoutes_WithResolver(t *testing.T) {
 	routes := []*router.RouteResult{
 		{Provider: &mockProvider{name: "a"}, ProviderModel: "m1", FallbackModels: []string{"fallback-model"}},
 	}
-	result := ExpandFallbackRoutes(context.Background(), resolver, routes)
+	result := ExpandFallbackRoutes(context.Background(), resolver, routes, 0)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 routes (1 original + 2 fallback), got %d", len(result))
 	}
@@ -446,7 +446,7 @@ func TestExpandFallbackRoutes_Dedup(t *testing.T) {
 	routes := []*router.RouteResult{
 		{Provider: &mockProvider{name: "a"}, ProviderModel: "m1", FallbackModels: []string{"fb1"}},
 	}
-	result := ExpandFallbackRoutes(context.Background(), resolver, routes)
+	result := ExpandFallbackRoutes(context.Background(), resolver, routes, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 route (dedup removes duplicate 'a|m1'), got %d", len(result))
 	}
@@ -457,7 +457,7 @@ func TestExpandFallbackRoutes_ResolveError(t *testing.T) {
 	routes := []*router.RouteResult{
 		{Provider: &mockProvider{name: "a"}, ProviderModel: "m1", FallbackModels: []string{"nonexistent"}},
 	}
-	result := ExpandFallbackRoutes(context.Background(), resolver, routes)
+	result := ExpandFallbackRoutes(context.Background(), resolver, routes, 0)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 route (resolve error ignored), got %d", len(result))
 	}

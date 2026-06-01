@@ -24,6 +24,7 @@ func createTestTables(db *gorm.DB) error {
 	return db.Exec(`
 		CREATE TABLE IF NOT EXISTS mcp_servers (
 			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				org_id           INTEGER,
 			name             TEXT    NOT NULL,
 			display_name     TEXT,
 			description      TEXT,
@@ -60,6 +61,7 @@ func createTestTables(db *gorm.DB) error {
 
 			CREATE TABLE IF NOT EXISTS mcp_tool_call_logs (
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				org_id      INTEGER,
 				request_id  TEXT    DEFAULT '',
 				server_id   INTEGER DEFAULT 0,
 				server_name TEXT    DEFAULT '',
@@ -139,7 +141,7 @@ func TestMCPRepo_Create_and_GetByID(t *testing.T) {
 		t.Fatal("expected ID to be set")
 	}
 
-	got, err := repo.GetByID(testCtx, srv.ID)
+	got, err := repo.GetByID(testCtx, 0, srv.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -150,7 +152,7 @@ func TestMCPRepo_Create_and_GetByID(t *testing.T) {
 
 func TestMCPRepo_List(t *testing.T) {
 	repo := NewMCPRepo(testDB)
-	servers, err := repo.List(testCtx)
+	servers, err := repo.List(testCtx, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -173,7 +175,7 @@ func TestMCPRepo_SoftDelete(t *testing.T) {
 	if err := repo.Delete(testCtx, srv.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, err := repo.GetByID(testCtx, srv.ID)
+	_, err := repo.GetByID(testCtx, 0, srv.ID)
 	if err == nil {
 		t.Error("expected error after soft delete, got nil")
 	}
@@ -192,7 +194,7 @@ func TestMCPRepo_GetByName(t *testing.T) {
 	if err := repo.Create(testCtx, srv); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	got, err := repo.GetByName(testCtx, "by-name-server")
+	got, err := repo.GetByName(testCtx, 0, "by-name-server")
 	if err != nil {
 		t.Fatalf("GetByName: %v", err)
 	}
@@ -216,7 +218,7 @@ func TestMCPRepo_UpdateToolCount(t *testing.T) {
 	if err := repo.UpdateToolCount(testCtx, srv.ID, 42); err != nil {
 		t.Fatalf("UpdateToolCount: %v", err)
 	}
-	got, _ := repo.GetByID(testCtx, srv.ID)
+	got, _ := repo.GetByID(testCtx, 0, srv.ID)
 	if got.ToolCount != 42 {
 		t.Errorf("ToolCount = %d, want 42", got.ToolCount)
 	}
@@ -237,7 +239,7 @@ func TestMCPRepo_UpdateHealthStatus(t *testing.T) {
 	if err := repo.UpdateHealthStatus(testCtx, srv.ID, 1); err != nil {
 		t.Fatalf("UpdateHealthStatus: %v", err)
 	}
-	got, _ := repo.GetByID(testCtx, srv.ID)
+	got, _ := repo.GetByID(testCtx, 0, srv.ID)
 	if got.HealthStatus != 1 {
 		t.Errorf("HealthStatus = %d, want 1", got.HealthStatus)
 	}

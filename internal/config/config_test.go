@@ -89,9 +89,15 @@ admin:
 }
 
 func TestLoad_MissingFile(t *testing.T) {
-	_, err := Load("/nonexistent/path")
-	if err == nil {
-		t.Error("expected error for missing config file")
+	cfg, err := Load("/nonexistent/path")
+	if err != nil {
+		t.Fatalf("Load() with missing file should not error, got: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config with defaults")
+	}
+	if cfg.Server.Port != 8080 {
+		t.Errorf("default port = %d, want 8080", cfg.Server.Port)
 	}
 }
 

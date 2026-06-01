@@ -35,7 +35,7 @@ type mockRepo struct {
 	data map[string][]model.ProviderModel
 }
 
-func (m *mockRepo) FindByModelName(_ context.Context, name string) ([]model.ProviderModel, error) {
+func (m *mockRepo) FindByModelName(_ context.Context, name string, _ int64) ([]model.ProviderModel, error) {
 	return m.data[name], nil
 }
 
@@ -69,7 +69,7 @@ func TestGatewayService_Chat(t *testing.T) {
 		Messages:  makeMessages("hi"),
 	}
 
-	result, err := svc.Chat(context.Background(), req, "")
+	result, err := svc.Chat(context.Background(), req, "", 0)
 	if err != nil {
 		t.Fatalf("Chat() error: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestGatewayService_ChatNoProvider(t *testing.T) {
 		Messages:  makeMessages("hi"),
 	}
 
-	_, err := svc.Chat(context.Background(), req, "")
+	_, err := svc.Chat(context.Background(), req, "", 0)
 	if err == nil {
 		t.Error("expected error for nonexistent model")
 	}
@@ -136,7 +136,7 @@ func TestGatewayService_StreamChat(t *testing.T) {
 	result, err := svc.StreamChat(context.Background(), req, func(_ context.Context, event StreamEvent) bool {
 		events = append(events, event)
 		return true
-	}, "")
+	}, "", 0)
 
 	if err != nil {
 		t.Fatalf("StreamChat() error: %v", err)
