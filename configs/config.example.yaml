@@ -4,12 +4,16 @@ server:
   write_timeout: 120s
 
 database:
+  driver: postgres          # postgres | mysql | sqlite
+  # --- PostgreSQL / MySQL ---
   host: localhost
-  port: 5432
+  port: 5432                # PG 默认 5432，MySQL 默认 3306
   user: postgres
   password: postgres
   dbname: crosslink
-  sslmode: disable
+  sslmode: disable          # PostgreSQL only
+  # --- SQLite ---
+  # sqlite_path: ./data/crosslink.db
 
 redis:
   host: localhost

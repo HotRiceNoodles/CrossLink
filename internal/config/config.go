@@ -38,22 +38,42 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	User     string `mapstructure:"user"`
-	Password string `mapstructure:"password"`
-	DBName   string `mapstructure:"dbname"`
-	SSLMode  string `mapstructure:"sslmode"`
+	Driver     string `mapstructure:"driver"`
+	Host       string `mapstructure:"host"`
+	Port       int    `mapstructure:"port"`
+	User       string `mapstructure:"user"`
+	Password   string `mapstructure:"password"`
+	DBName     string `mapstructure:"dbname"`
+	SSLMode    string `mapstructure:"sslmode"`
+	SQLitePath string `mapstructure:"sqlite_path"`
 }
 
 func (d DatabaseConfig) DSN() string {
-	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)
+	switch d.Driver {
+	case "postgres":
+		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+			d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)
+	case "mysql":
+		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC",
+			d.User, d.Password, d.Host, d.Port, d.DBName)
+	case "sqlite":
+		return d.SQLitePath
+	default:
+		return ""
+	}
 }
 
 func (d DatabaseConfig) DSNURL() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		d.User, d.Password, d.Host, d.Port, d.DBName, d.SSLMode)
+	switch d.Driver {
+	case "postgres":
+		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+			d.User, d.Password, d.Host, d.Port, d.DBName, d.SSLMode)
+	case "mysql":
+		return fmt.Sprintf("mysql://%s:%s@tcp(%s:%d)/%s",
+			d.User, d.Password, d.Host, d.Port, d.DBName)
+	default:
+		return ""
+	}
 }
 
 type RedisConfig struct {
@@ -157,17 +177,43 @@ func (c *Config) Validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be between 1 and 65535, got %d", c.Server.Port)
 	}
-	if c.Database.Host == "" {
-		return fmt.Errorf("database.host is required")
-	}
-	if c.Database.Port < 1 || c.Database.Port > 65535 {
-		return fmt.Errorf("database.port must be between 1 and 65535, got %d", c.Database.Port)
-	}
-	if c.Database.DBName == "" {
-		return fmt.Errorf("database.dbname is required")
-	}
-	if c.Database.SSLMode != "" && !validSSLModes[c.Database.SSLMode] {
-		return fmt.Errorf("database.sslmode invalid: %q", c.Database.SSLMode)
+	switch c.Database.Driver {
+	case "", "postgres":
+		c.Database.Driver = "postgres"
+		if c.Database.Port == 0 {
+			c.Database.Port = 5432
+		}
+		if c.Database.Port < 1 || c.Database.Port > 65535 {
+			return fmt.Errorf("database.port must be between 1 and 65535, got %d", c.Database.Port)
+		}
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required for postgres")
+		}
+		if c.Database.DBName == "" {
+			return fmt.Errorf("database.dbname is required for postgres")
+		}
+		if c.Database.SSLMode != "" && !validSSLModes[c.Database.SSLMode] {
+			return fmt.Errorf("database.sslmode invalid: %q", c.Database.SSLMode)
+		}
+	case "mysql":
+		if c.Database.Port == 0 {
+			c.Database.Port = 3306
+		}
+		if c.Database.Port < 1 || c.Database.Port > 65535 {
+			return fmt.Errorf("database.port must be between 1 and 65535, got %d", c.Database.Port)
+		}
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required for mysql")
+		}
+		if c.Database.DBName == "" {
+			return fmt.Errorf("database.dbname is required for mysql")
+		}
+	case "sqlite":
+		if c.Database.SQLitePath == "" {
+			return fmt.Errorf("database.sqlite_path is required for sqlite")
+		}
+	default:
+		return fmt.Errorf("database.driver must be postgres, mysql, or sqlite, got %q", c.Database.Driver)
 	}
 	if c.Redis.Port < 1 || c.Redis.Port > 65535 {
 		return fmt.Errorf("redis.port must be between 1 and 65535, got %d", c.Redis.Port)
@@ -260,6 +306,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.read_timeout", "30s")
 	v.SetDefault("server.write_timeout", "120s")
 
+	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
 	v.SetDefault("database.user", "crosslink")

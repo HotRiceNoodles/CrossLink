@@ -18,6 +18,7 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
+	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/handler"
 	"github.com/crosslink/internal/model"
@@ -33,7 +34,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensions) {
+func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensions, dia dialect.Dialect) {
 	if ext == nil {
 		ext = NoopExtensions()
 	}
@@ -140,6 +141,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Populate extension deps for Commercial
 	ext.Deps = &AppDeps{
 		DB:             db,
+		Dialect:        dia,
 		RDB:            rdb,
 		SecretResolver: secrets.SecretResolver,
 		EncStore:       secrets.EncStore,
@@ -427,6 +429,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Phase 4: Cancel background goroutines
 	appCancel()
+
+	// Phase 5: Database cleanup
+	if err := dia.Shutdown(db); err != nil {
+		slog.Error("database shutdown error", "error", err)
+	}
+
 	slog.Info("server exited")
 }
 

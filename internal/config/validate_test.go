@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 func validConfig() *Config {
 	return &Config{
 		Server:    ServerConfig{Port: 8080, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second},
-		Database:  DatabaseConfig{Host: "localhost", Port: 5432, User: "user", Password: "pass", DBName: "testdb", SSLMode: "disable"},
+		Database:  DatabaseConfig{Driver: "postgres", Host: "localhost", Port: 5432, User: "user", Password: "pass", DBName: "testdb", SSLMode: "disable"},
 		Redis:     RedisConfig{Host: "localhost", Port: 6379, Password: "", DB: 0},
 		Admin:     AdminConfig{Username: "admin", Password: "changeme", JWTSecret: "a-very-long-secret-that-is-at-least-32-chars", TokenExpiry: 24},
 		RateLimit: RateLimitConfig{RPM: 60, TPM: 100000},
@@ -66,9 +67,9 @@ func TestValidate_Database(t *testing.T) {
 	})
 	t.Run("invalid port", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Database.Port = 0
+		cfg.Database.Port = -1
 		if err := cfg.Validate(); err == nil {
-			t.Error("port 0 should fail")
+			t.Error("port -1 should fail")
 		}
 	})
 	t.Run("invalid sslmode", func(t *testing.T) {
@@ -168,4 +169,81 @@ func TestValidate_CacheTTL(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Error("negative cache ttl should fail")
 	}
+}
+
+func TestValidate_DatabaseDriver(t *testing.T) {
+	t.Run("sqlite without path", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "sqlite"
+		cfg.Database.SQLitePath = ""
+		if err := cfg.Validate(); err == nil {
+			t.Error("sqlite without sqlite_path should fail")
+		}
+	})
+	t.Run("sqlite with path", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "sqlite"
+		cfg.Database.SQLitePath = "/tmp/test.db"
+		// This will pass database validation but may fail on Redis;
+		// we only check that no database-related error occurs.
+		err := cfg.Validate()
+		if err != nil {
+			// Should NOT be a database error
+			if strings.Contains(err.Error(), "database.") {
+				t.Errorf("sqlite with valid path should not have database error, got: %v", err)
+			}
+		}
+	})
+	t.Run("unknown driver", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "unknown"
+		if err := cfg.Validate(); err == nil {
+			t.Error("unknown driver should fail")
+		}
+	})
+	t.Run("empty driver defaults to postgres", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = ""
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("empty driver should default to postgres and pass, got: %v", err)
+		}
+		if cfg.Database.Driver != "postgres" {
+			t.Errorf("empty driver should be normalized to postgres, got: %q", cfg.Database.Driver)
+		}
+	})
+	t.Run("mysql valid config", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "mysql"
+		cfg.Database.Port = 3306
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("valid mysql config should pass, got: %v", err)
+		}
+	})
+	t.Run("mysql without host", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "mysql"
+		cfg.Database.Host = ""
+		if err := cfg.Validate(); err == nil {
+			t.Error("mysql without host should fail")
+		}
+	})
+	t.Run("mysql without dbname", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "mysql"
+		cfg.Database.DBName = ""
+		if err := cfg.Validate(); err == nil {
+			t.Error("mysql without dbname should fail")
+		}
+	})
+	t.Run("mysql port zero defaults to 3306", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Database.Driver = "mysql"
+		cfg.Database.Port = 0
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("mysql port=0 should default to 3306, got: %v", err)
+		}
+		if cfg.Database.Port != 3306 {
+			t.Errorf("mysql port should be 3306, got: %d", cfg.Database.Port)
+		}
+	})
 }

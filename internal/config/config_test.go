@@ -103,6 +103,7 @@ func TestLoad_MissingFile(t *testing.T) {
 
 func TestDSN(t *testing.T) {
 	d := DatabaseConfig{
+		Driver:   "postgres",
 		Host:     "db.example.com",
 		Port:     5433,
 		User:     "testuser",
@@ -118,6 +119,7 @@ func TestDSN(t *testing.T) {
 
 func TestDSNURL(t *testing.T) {
 	d := DatabaseConfig{
+		Driver:   "postgres",
 		Host:     "db.example.com",
 		Port:     5433,
 		User:     "testuser",

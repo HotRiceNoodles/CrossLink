@@ -5,6 +5,7 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
+	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
@@ -33,6 +34,7 @@ func (NoopGate) CurrentTier() string      { return "community" }
 // Set by Community during FullSetup, consumed by Commercial ExtraRoutes.
 type AppDeps struct {
 	DB             *gorm.DB
+	Dialect        dialect.Dialect
 	RDB            *redis.Client
 	SecretResolver *secret.SecretResolver
 	EncStore       *secret.EncryptedDBStore

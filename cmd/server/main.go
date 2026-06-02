@@ -2,19 +2,14 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/crosslink/internal/app"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
+	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/mcp"
 	"github.com/crosslink/internal/middleware"
@@ -22,8 +17,6 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/version"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func setupLogger(cfg *config.Config) {
@@ -67,13 +60,38 @@ func main() {
 	}
 	defer otelShutdown(context.Background())
 
-	db, err := initDB(cfg)
+	dia, err := dialect.New(dialect.DBConfig{
+		Driver:     cfg.Database.Driver,
+		Host:       cfg.Database.Host,
+		Port:       cfg.Database.Port,
+		User:       cfg.Database.User,
+		Password:   cfg.Database.Password,
+		DBName:     cfg.Database.DBName,
+		SSLMode:    cfg.Database.SSLMode,
+		SQLitePath: cfg.Database.SQLitePath,
+	})
+	if err != nil {
+		slog.Error("failed to create dialect", "error", err)
+		os.Exit(1)
+	}
+
+	db, err := dia.InitDB()
 	if err != nil {
 		slog.Error("failed to init database", "error", err)
 		os.Exit(1)
 	}
 
-	runMigrations(cfg)
+	release, err := dia.AcquireMigrationLock()
+	if err != nil {
+		slog.Error("failed to acquire migration lock", "error", err)
+		os.Exit(1)
+	}
+	if err := dia.RunMigrations(context.Background()); err != nil {
+		release()
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
+	}
+	release()
 
 	rdb := app.InitRedis(&cfg.Redis)
 
@@ -147,52 +165,5 @@ func main() {
 		},
 	}
 
-	app.FullSetup(cfg, db, rdb, ext)
-}
-
-func initDB(cfg *config.Config) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("get sql.DB: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetMaxIdleConns(50)
-	sqlDB.SetConnMaxLifetime(5 * time.Minute)
-	sqlDB.SetConnMaxIdleTime(time.Minute)
-
-	slog.Info("database connected", "host", cfg.Database.Host, "dbname", cfg.Database.DBName)
-	return db, nil
-}
-
-func runMigrations(cfg *config.Config) {
-	// Acquire pg_advisory_lock to prevent concurrent migration execution
-	// in multi-instance deployments. Lock auto-releases when connection closes.
-	lockDB, err := sql.Open("postgres", cfg.Database.DSNURL())
-	if err != nil {
-		slog.Error("failed to open migration lock connection", "error", err)
-		os.Exit(1)
-	}
-	defer lockDB.Close()
-
-	if _, err := lockDB.Exec("SELECT pg_advisory_lock(20260518)"); err != nil {
-		slog.Error("failed to acquire migration lock", "error", err)
-		os.Exit(1)
-	}
-	defer lockDB.Exec("SELECT pg_advisory_unlock(20260518)")
-
-	m, err := migrate.New("file://migrations", cfg.Database.DSNURL())
-	if err != nil {
-		slog.Error("failed to create migrator", "error", err)
-		os.Exit(1)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		slog.Error("failed to run migrations", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("database migrated successfully")
+	app.FullSetup(cfg, db, rdb, ext, dia)
 }
