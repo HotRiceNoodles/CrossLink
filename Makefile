@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean release
+.PHONY: build run test test-integration lint clean release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
@@ -10,6 +10,11 @@ run:
 
 test:
 	go test ./...
+
+test-integration:
+	docker compose -f deployments/docker-compose.test.yaml up -d --wait
+	go test -tags=integration ./internal/dialect/ -v -timeout 120s
+	docker compose -f deployments/docker-compose.test.yaml down -v
 
 lint:
 	golangci-lint run

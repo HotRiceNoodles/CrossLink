@@ -12,19 +12,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// mysqlDSN returns the MySQL connection string from the environment.
-// Defaults to root:root@tcp(127.0.0.1:3306)/crosslink_test if not set.
-//
-// Setup:
-//
-//	docker run -d --name mysql-test -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=crosslink_test -p 3306:3306 mysql:8.0
-//	export MYSQL_DSN="root:root@tcp(127.0.0.1:3306)/crosslink_test?charset=utf8mb4&parseTime=true&loc=UTC"
-//	go test ./internal/dialect/ -tags=mysql -v -run TestMySQLSchema
+// mysqlDSN returns the MySQL DSN from env, falling back to the test compose instance.
+// Kept for backward compatibility with the //go:build mysql tag pattern.
 func mysqlDSN() string {
 	if dsn := os.Getenv("MYSQL_DSN"); dsn != "" {
 		return dsn
 	}
-	return "root:root@tcp(127.0.0.1:3306)/crosslink_test?charset=utf8mb4&parseTime=true&loc=UTC"
+	return mysqlTestDSN()
 }
 
 // TestMySQLSchema_Up validates that the full MySQL schema file loads
@@ -176,38 +170,4 @@ func TestMySQLSchema_Down(t *testing.T) {
 	}
 
 	t.Log("OK: down migration drops all tables cleanly")
-}
-
-// dropAllTablesMySQL drops all tables in the current database for a clean slate.
-// It disables FK checks temporarily to allow dropping in any order.
-func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	db.Exec("SET FOREIGN_KEY_CHECKS = 0")
-
-	// Use a stored procedure to iterate and drop all tables
-	db.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	sql := `
-	CREATE PROCEDURE drop_all_tables()
-	BEGIN
-		DECLARE done INT DEFAULT FALSE;
-		DECLARE tname VARCHAR(128);
-		DECLARE cur CURSOR FOR SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE();
-		DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
-		OPEN cur;
-		read_loop: LOOP
-			FETCH cur INTO tname;
-			IF done THEN
-				LEAVE read_loop;
-			END IF;
-			SET @sql = CONCAT('DROP TABLE IF EXISTS ` + "`" + `' COLLATE utf8mb4_general_ci, tname, '` + "`" + `' COLLATE utf8mb4_general_ci);
-			PREPARE stmt FROM @sql;
-			EXECUTE stmt;
-			DEALLOCATE PREPARE stmt;
-		END LOOP;
-		CLOSE cur;
-	END`
-	db.Exec(sql)
-	db.Exec("CALL drop_all_tables()")
-	db.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	db.Exec("SET FOREIGN_KEY_CHECKS = 1")
 }
