@@ -50,10 +50,10 @@ type DatabaseConfig struct {
 
 func (d DatabaseConfig) DSN() string {
 	switch d.Driver {
-	case "postgres":
+	case "postgres", "kingbase", "kingbasees":
 		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 			d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)
-	case "mysql":
+	case "mysql", "oceanbase":
 		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC",
 			d.User, d.Password, d.Host, d.Port, d.DBName)
 	case "sqlite":
@@ -65,10 +65,10 @@ func (d DatabaseConfig) DSN() string {
 
 func (d DatabaseConfig) DSNURL() string {
 	switch d.Driver {
-	case "postgres":
+	case "postgres", "kingbase", "kingbasees":
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 			d.User, d.Password, d.Host, d.Port, d.DBName, d.SSLMode)
-	case "mysql":
+	case "mysql", "oceanbase":
 		return fmt.Sprintf("mysql://%s:%s@tcp(%s:%d)/%s",
 			d.User, d.Password, d.Host, d.Port, d.DBName)
 	default:
@@ -195,6 +195,23 @@ func (c *Config) Validate() error {
 		if c.Database.SSLMode != "" && !validSSLModes[c.Database.SSLMode] {
 			return fmt.Errorf("database.sslmode invalid: %q", c.Database.SSLMode)
 		}
+	case "kingbase", "kingbasees":
+		c.Database.Driver = "kingbasees"
+		if c.Database.Port == 0 {
+			c.Database.Port = 54321
+		}
+		if c.Database.Port < 1 || c.Database.Port > 65535 {
+			return fmt.Errorf("database.port must be between 1 and 65535, got %d", c.Database.Port)
+		}
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required for kingbasees")
+		}
+		if c.Database.DBName == "" {
+			return fmt.Errorf("database.dbname is required for kingbasees")
+		}
+		if c.Database.SSLMode != "" && !validSSLModes[c.Database.SSLMode] {
+			return fmt.Errorf("database.sslmode invalid: %q", c.Database.SSLMode)
+		}
 	case "mysql":
 		if c.Database.Port == 0 {
 			c.Database.Port = 3306
@@ -208,12 +225,25 @@ func (c *Config) Validate() error {
 		if c.Database.DBName == "" {
 			return fmt.Errorf("database.dbname is required for mysql")
 		}
+	case "oceanbase":
+		if c.Database.Port == 0 {
+			c.Database.Port = 2883
+		}
+		if c.Database.Port < 1 || c.Database.Port > 65535 {
+			return fmt.Errorf("database.port must be between 1 and 65535, got %d", c.Database.Port)
+		}
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required for oceanbase")
+		}
+		if c.Database.DBName == "" {
+			return fmt.Errorf("database.dbname is required for oceanbase")
+		}
 	case "sqlite":
 		if c.Database.SQLitePath == "" {
 			return fmt.Errorf("database.sqlite_path is required for sqlite")
 		}
 	default:
-		return fmt.Errorf("database.driver must be postgres, mysql, or sqlite, got %q", c.Database.Driver)
+		return fmt.Errorf("database.driver must be postgres, kingbasees, mysql, oceanbase, or sqlite, got %q", c.Database.Driver)
 	}
 	if c.Redis.Port < 1 || c.Redis.Port > 65535 {
 		return fmt.Errorf("redis.port must be between 1 and 65535, got %d", c.Redis.Port)

@@ -32,6 +32,36 @@ func TestNewDialect_MySQL(t *testing.T) {
 	}
 }
 
+func TestNewDialect_Kingbase(t *testing.T) {
+	d, err := New(DBConfig{Driver: "kingbase", Host: "h", Port: 54321, User: "u", Password: "p", DBName: "d", SSLMode: "disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.(*KingbaseDialect); !ok {
+		t.Fatalf("expected *KingbaseDialect, got %T", d)
+	}
+}
+
+func TestNewDialect_KingbaseES(t *testing.T) {
+	d, err := New(DBConfig{Driver: "kingbasees", Host: "h", Port: 54321, User: "u", Password: "p", DBName: "d", SSLMode: "disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.(*KingbaseDialect); !ok {
+		t.Fatalf("expected *KingbaseDialect for 'kingbasees', got %T", d)
+	}
+}
+
+func TestNewDialect_OceanBase(t *testing.T) {
+	d, err := New(DBConfig{Driver: "oceanbase", Host: "h", Port: 2883, User: "u", Password: "p", DBName: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.(*OceanBaseDialect); !ok {
+		t.Fatalf("expected *OceanBaseDialect, got %T", d)
+	}
+}
+
 func TestNewDialect_Unknown(t *testing.T) {
 	_, err := New(DBConfig{Driver: "oracle"})
 	if err == nil {
