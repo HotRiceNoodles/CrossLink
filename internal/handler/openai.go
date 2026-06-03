@@ -594,6 +594,15 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	if outputTokens == 0 && outputEstimate > 0 {
 		outputTokens = outputEstimate
 	}
+	// Fallback input token estimation when provider didn't send usage in stream
+	if inputTokens == 0 && req.Messages != nil {
+		for _, msg := range req.Messages {
+			inputTokens += token.Estimate(domain.ContentText(msg.Content))
+			for _, tc := range msg.ToolCalls {
+				inputTokens += token.Estimate(tc.Function.Arguments)
+			}
+		}
+	}
 
 	c.Set("input_tokens", inputTokens)
 	c.Set("output_tokens", outputTokens)
