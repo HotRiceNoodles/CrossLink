@@ -65,4 +65,7 @@ func decodeResponse(t *testing.T, w *httptest.ResponseRecorder, target any) {
 	}
 }
 
-func int64Ptr(v int64) *int64 { return &v }
+// testInt64Ptr returns a pointer to the given int64 value.
+// Named differently from int64Ptr in commercial overlay's organizations.go
+// to avoid redeclaration when the overlay is merged.
+func testInt64Ptr(v int64) *int64 { return &v }

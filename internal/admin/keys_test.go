@@ -31,7 +31,7 @@ func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 	keySvc := &mockKeySvc{
 		getByIDFn: func(ctx context.Context, id int64) (*model.APIKey, error) {
 			uid := id * 10
-			return &model.APIKey{ID: id, Name: "test-key", CreatedByID: int64Ptr(uid)}, nil
+			return &model.APIKey{ID: id, Name: "test-key", CreatedByID: testInt64Ptr(uid)}, nil
 		},
 		listByCreatorFn: func(ctx context.Context, userID int64) ([]model.APIKey, error) {
 			return nil, nil
@@ -188,7 +188,7 @@ func TestKeyHandler_Update_NonOwnerForbidden(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      nil, // no team — ownership is based on CreatedByID
 		}, nil
 	}
@@ -221,7 +221,7 @@ func TestKeyHandler_Update_OwnerSuccess(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      nil,
 		}, nil
 	}
@@ -251,7 +251,7 @@ func TestKeyHandler_Delete_Success(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      nil,
 		}, nil
 	}
@@ -281,7 +281,7 @@ func TestKeyHandler_Delete_NonOwnerForbidden(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      nil,
 		}, nil
 	}
@@ -312,7 +312,7 @@ func TestKeyHandler_Delete_TeamMemberAllowed(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "team-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      &teamID,
 		}, nil
 	}
@@ -341,7 +341,7 @@ func TestKeyHandler_Delete_TeamNonMemberForbidden(t *testing.T) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "team-key",
-			CreatedByID: int64Ptr(10),
+			CreatedByID: testInt64Ptr(10),
 			TeamID:      &teamID,
 		}, nil
 	}
