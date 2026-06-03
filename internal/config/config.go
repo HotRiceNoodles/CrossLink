@@ -77,10 +77,12 @@ func (d DatabaseConfig) DSNURL() string {
 }
 
 type RedisConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Password string `mapstructure:"password"`
-	DB       int    `mapstructure:"db"`
+	Host         string `mapstructure:"host"`
+	Port         int    `mapstructure:"port"`
+	Password     string `mapstructure:"password"`
+	DB           int    `mapstructure:"db"`
+	PoolSize     int    `mapstructure:"pool_size"`
+	MinIdleConns int    `mapstructure:"min_idle_conns"`
 }
 
 func (r RedisConfig) Addr() string {
@@ -101,8 +103,10 @@ type AdminConfig struct {
 }
 
 type RateLimitConfig struct {
-	RPM int `mapstructure:"rpm"`
-	TPM int `mapstructure:"tpm"`
+	RPM         int  `mapstructure:"rpm"`
+	TPM         int  `mapstructure:"tpm"`
+	Reservation int  `mapstructure:"tpm_reservation"`
+	FailClosed  bool `mapstructure:"fail_closed"`
 }
 
 type LoggingConfig struct {
@@ -348,14 +352,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.port", 6379)
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
+	v.SetDefault("redis.pool_size", 500)
+	v.SetDefault("redis.min_idle_conns", 50)
 
 	v.SetDefault("admin.username", "admin")
 	v.SetDefault("admin.password", "changeme")
 	v.SetDefault("admin.jwt_secret", "change-me-to-a-random-secret")
 	v.SetDefault("admin.token_expiry", 24)
 
-	v.SetDefault("rate_limit.rpm", 60)
-	v.SetDefault("rate_limit.tpm", 100000)
+	v.SetDefault("rate_limit.rpm", 0)
+	v.SetDefault("rate_limit.tpm", 0)
+	v.SetDefault("rate_limit.tpm_reservation", 2000)
+	v.SetDefault("rate_limit.fail_closed", false)
 
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "json")

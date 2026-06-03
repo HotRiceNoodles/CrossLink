@@ -25,11 +25,11 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Logging.Format != "json" {
 		t.Errorf("default logging.format = %q, want %q", cfg.Logging.Format, "json")
 	}
-	if cfg.RateLimit.RPM != 60 {
-		t.Errorf("default rpm = %d, want 60", cfg.RateLimit.RPM)
+	if cfg.RateLimit.RPM != 0 {
+		t.Errorf("default rpm = %d, want 0 (disabled)", cfg.RateLimit.RPM)
 	}
-	if cfg.RateLimit.TPM != 100000 {
-		t.Errorf("default tpm = %d, want 100000", cfg.RateLimit.TPM)
+	if cfg.RateLimit.TPM != 0 {
+		t.Errorf("default tpm = %d, want 0 (disabled)", cfg.RateLimit.TPM)
 	}
 	if cfg.Admin.TokenExpiry != 24 {
 		t.Errorf("default token_expiry = %d, want 24", cfg.Admin.TokenExpiry)

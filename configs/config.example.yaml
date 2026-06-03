@@ -20,14 +20,20 @@ redis:
   port: 6379
   password: ""
   db: 0
+  pool_size: 500        # connection pool size (increase for high concurrency)
+  min_idle_conns: 50    # minimum idle connections
 
 gateway:
   auth_key: "lgw-change-me"
   # base_url: "https://api.your-gateway.com"  # Public URL for key delivery emails
 
 rate_limit:
-  rpm: 60
-  tpm: 100000
+  # Global defaults applied when API Key / Team / Org has no explicit RPM/TPM override.
+  # Set to 0 to disable (recommended: manage limits per API Key/Team/Org instead).
+  rpm: 0               # requests per minute (0 = unlimited)
+  tpm: 0               # tokens per minute (0 = unlimited)
+  tpm_reservation: 2000 # tokens pre-reserved per request (fallback when body estimation unavailable)
+  # fail_closed: false  # when true, reject requests if Redis is unreachable
 
 logging:
   level: info
