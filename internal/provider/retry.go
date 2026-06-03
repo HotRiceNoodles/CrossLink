@@ -60,11 +60,22 @@ type RetryResult struct {
 	RetriesUsed int
 }
 
+// retryAttemptKey is the context key for the current retry attempt number.
+type retryAttemptKey struct{}
+
+// AttemptFromContext returns the 1-based attempt number from the context.
+func AttemptFromContext(ctx context.Context) int {
+	v, _ := ctx.Value(retryAttemptKey{}).(int)
+	return v
+}
+
 // WithRetry calls `call` up to 1 + cfg.NumRetries times with configurable backoff.
 // Non-retryable errors and exhausted retry budget return immediately.
-func WithRetry(ctx context.Context, cfg RetryConfig, budget *RetryBudget, call func() error) RetryResult {
+// The callback receives a context enriched with the current attempt number.
+func WithRetry(ctx context.Context, cfg RetryConfig, budget *RetryBudget, call func(ctx context.Context) error) RetryResult {
 	if cfg.NumRetries <= 0 {
-		err := call()
+		attemptCtx := context.WithValue(ctx, retryAttemptKey{}, 1)
+		err := call(attemptCtx)
 		if err != nil {
 			return RetryResult{Err: err, Attempts: 1, RetriesUsed: 0}
 		}
@@ -77,7 +88,8 @@ func WithRetry(ctx context.Context, cfg RetryConfig, budget *RetryBudget, call f
 			return RetryResult{Err: err, Attempts: attempt, RetriesUsed: attempt}
 		}
 
-		lastErr = call()
+		attemptCtx := context.WithValue(ctx, retryAttemptKey{}, attempt+1)
+		lastErr = call(attemptCtx)
 		if lastErr == nil {
 			return RetryResult{Attempts: attempt + 1, RetriesUsed: attempt}
 		}

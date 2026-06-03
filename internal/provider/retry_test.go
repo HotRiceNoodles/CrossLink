@@ -10,7 +10,7 @@ import (
 
 func TestWithRetry_NoRetries(t *testing.T) {
 	calls := 0
-	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 0}, nil, func() error {
+	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 0}, nil, func(ctx context.Context) error {
 		calls++
 		return fmt.Errorf("fail")
 	})
@@ -24,7 +24,7 @@ func TestWithRetry_NoRetries(t *testing.T) {
 
 func TestWithRetry_SuccessOnThirdAttempt(t *testing.T) {
 	calls := 0
-	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 3}, nil, func() error {
+	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 3}, nil, func(ctx context.Context) error {
 		calls++
 		if calls < 3 {
 			return &ProviderError{StatusCode: 500, ErrorType: ErrorServer, Message: "fail"}
@@ -41,7 +41,7 @@ func TestWithRetry_SuccessOnThirdAttempt(t *testing.T) {
 
 func TestWithRetry_NonRetryableStopsImmediately(t *testing.T) {
 	calls := 0
-	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 5}, nil, func() error {
+	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 5}, nil, func(ctx context.Context) error {
 		calls++
 		return &ProviderError{StatusCode: 401, ErrorType: ErrorAuth, Message: "unauthorized"}
 	})
@@ -55,7 +55,7 @@ func TestWithRetry_NonRetryableStopsImmediately(t *testing.T) {
 
 func TestWithRetry_AllRetriesExhausted(t *testing.T) {
 	calls := 0
-	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 2}, nil, func() error {
+	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 2}, nil, func(ctx context.Context) error {
 		calls++
 		return &ProviderError{StatusCode: 500, ErrorType: ErrorServer, Message: "fail"}
 	})
@@ -72,7 +72,7 @@ func TestWithRetry_ContextCancelled(t *testing.T) {
 	cancel()
 
 	calls := 0
-	rr := WithRetry(ctx, RetryConfig{NumRetries: 3}, nil, func() error {
+	rr := WithRetry(ctx, RetryConfig{NumRetries: 3}, nil, func(ctx context.Context) error {
 		calls++
 		return &ProviderError{StatusCode: 500, ErrorType: ErrorServer, Message: "fail"}
 	})
@@ -86,7 +86,7 @@ func TestWithRetry_ContextCancelled(t *testing.T) {
 
 func TestWithRetry_SuccessFirstTry(t *testing.T) {
 	calls := 0
-	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 3}, nil, func() error {
+	rr := WithRetry(context.Background(), RetryConfig{NumRetries: 3}, nil, func(ctx context.Context) error {
 		calls++
 		return nil
 	})

@@ -18,7 +18,6 @@ import (
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/pool"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const maxResponseRead = 50 << 20 // 50 MB cap on response body
@@ -34,15 +33,10 @@ type OpenAICompatibleProvider struct {
 
 func NewOpenAICompatible(name, baseURL string, timeout time.Duration) *OpenAICompatibleProvider {
 	return &OpenAICompatibleProvider{
-		name:    name,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout:   timeout,
-			Transport: otelhttp.NewTransport(newDefaultTransport()),
-		},
-		streamClient: &http.Client{
-			Transport: otelhttp.NewTransport(newStreamTransport()),
-		},
+		name:         name,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		httpClient:   newDefaultClient(timeout),
+		streamClient: newStreamClient(),
 	}
 }
 

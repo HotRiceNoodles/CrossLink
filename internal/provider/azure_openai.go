@@ -11,7 +11,6 @@ import (
 
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type AzureOpenAIProvider struct {
@@ -33,8 +32,8 @@ func NewAzureOpenAIProvider(name, baseURL, apiKey string, extraConfig []byte, ti
 		name:       name,
 		endpoint:   strings.TrimRight(baseURL, "/"),
 		apiVersion: "2024-02-15-preview",
-		httpClient:   &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(newDefaultTransport())},
-		streamClient: &http.Client{Transport: otelhttp.NewTransport(newStreamTransport())},
+		httpClient:   newDefaultClient(timeout),
+		streamClient: newStreamClient(),
 	}
 
 	if len(extraConfig) > 0 {

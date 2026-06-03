@@ -16,7 +16,6 @@ import (
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/pool"
 	"github.com/crosslink/internal/translator"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type AnthropicProvider struct {
@@ -34,17 +33,12 @@ type anthropicExtraConfig struct {
 
 func NewAnthropicProvider(name, baseURL, apiKey string, extraConfig []byte, timeout time.Duration) (*AnthropicProvider, error) {
 	p := &AnthropicProvider{
-		name:       name,
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		apiKey:     apiKey,
-		apiVersion: "2023-06-01",
-		httpClient: &http.Client{
-			Timeout:   timeout,
-			Transport: otelhttp.NewTransport(newDefaultTransport()),
-		},
-		streamClient: &http.Client{
-			Transport: otelhttp.NewTransport(newStreamTransport()),
-		},
+		name:         name,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		apiKey:       apiKey,
+		apiVersion:   "2023-06-01",
+		httpClient:   newDefaultClient(timeout),
+		streamClient: newStreamClient(),
 	}
 
 	if len(extraConfig) > 0 {
