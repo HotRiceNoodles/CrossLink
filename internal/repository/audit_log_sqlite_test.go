@@ -35,12 +35,16 @@ func setupAuditSQLiteTestDB(t *testing.T) (*gorm.DB, dialect.Dialect, func()) {
 	sqlBytes, err := os.ReadFile(filepath.Join("migrations", "sqlite", "000001_init_schema.up.sql"))
 	require.NoError(t, err)
 
-	for _, stmt := range splitSQL(string(sqlBytes)) {
+	// glebarez/sqlite returns TEXT columns as strings which can't scan into time.Time.
+	// Replace TEXT typed timestamp columns with DATETIME so the driver parses them.
+	schema := strings.ReplaceAll(string(sqlBytes), "TEXT NOT NULL DEFAULT (datetime('now'))", "DATETIME NOT NULL DEFAULT (datetime('now'))")
+
+	for _, stmt := range splitAuditSQL(schema) {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
 		}
-		require.NoError(t, db.Exec(stmt).Error, "schema statement failed: %s", truncate(stmt, 100))
+		require.NoError(t, db.Exec(stmt).Error, "schema statement failed: %s", truncateAudit(stmt, 100))
 	}
 
 	dia := dialect.NewSQLiteDialect(dialect.DBConfig{Driver: "sqlite"})
@@ -58,10 +62,11 @@ func TestAuditLogRepo_ILike_SQLite(t *testing.T) {
 	repo := NewAuditLogRepo(db, dia)
 
 	// Insert audit logs with mixed-case values
-	rows := []model.AuditLog{
-		{UserID: 1, Username: "TestUser", Action: "create", ResourceType: "key", ResourceID: "1", ResourceName: "TestResource", Status: "success", CreatedAt: time.Now()},
-		{UserID: 2, Username: "admin", Action: "delete", ResourceType: "key", ResourceID: "2", ResourceName: "Production Key", Status: "success", CreatedAt: time.Now()},
-		{UserID: 3, Username: "viewer", Action: "list", ResourceType: "key", ResourceID: "3", ResourceName: "OLD_KEY", Status: "success", CreatedAt: time.Now()},
+	now := time.Now()
+	rows := []*model.AuditLog{
+		{UserID: 1, Username: "TestUser", Action: "create", ResourceType: "key", ResourceID: "1", ResourceName: "TestResource", Status: "success", CreatedAt: now},
+		{UserID: 2, Username: "admin", Action: "delete", ResourceType: "key", ResourceID: "2", ResourceName: "Production Key", Status: "success", CreatedAt: now},
+		{UserID: 3, Username: "viewer", Action: "list", ResourceType: "key", ResourceID: "3", ResourceName: "OLD_KEY", Status: "success", CreatedAt: now},
 	}
 	require.NoError(t, repo.CreateBatch(context.Background(), rows))
 
@@ -74,7 +79,7 @@ func TestAuditLogRepo_ILike_SQLite(t *testing.T) {
 	}
 
 	// Search for "key" — should match Production Key and OLD_KEY
-	logs2, total2, err := repo.List(context.Background(), AuditFilter{Q: "key"})
+	_, total2, err := repo.List(context.Background(), AuditFilter{Q: "key"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), total2, "ILike search for 'key' should match 2 rows")
 
@@ -94,7 +99,7 @@ func TestAuditLogRepo_DateRange_SQLite(t *testing.T) {
 	repo := NewAuditLogRepo(db, dia)
 
 	now := time.Now()
-	rows := []model.AuditLog{
+	rows := []*model.AuditLog{
 		{UserID: 1, Username: "u1", Action: "create", ResourceType: "key", ResourceID: "1", ResourceName: "early", Status: "success", CreatedAt: now.AddDate(0, 0, -30)},
 		{UserID: 2, Username: "u2", Action: "create", ResourceType: "key", ResourceID: "2", ResourceName: "mid", Status: "success", CreatedAt: now.AddDate(0, 0, -10)},
 		{UserID: 3, Username: "u3", Action: "create", ResourceType: "key", ResourceID: "3", ResourceName: "recent", Status: "success", CreatedAt: now.AddDate(0, 0, -1)},
@@ -119,17 +124,17 @@ func TestAuditLogRepo_DeleteBefore_SQLite(t *testing.T) {
 	repo := NewAuditLogRepo(db, dia)
 
 	now := time.Now()
-	var rows []model.AuditLog
+	var rows []*model.AuditLog
 	// Insert 5 old rows (30 days ago)
 	for i := 0; i < 5; i++ {
-		rows = append(rows, model.AuditLog{
+		rows = append(rows, &model.AuditLog{
 			UserID: 1, Username: "u", Action: "delete", ResourceType: "log", ResourceID: fmt.Sprintf("%d", i),
 			ResourceName: "old", Status: "success", CreatedAt: now.AddDate(0, 0, -30),
 		})
 	}
 	// Insert 2 recent rows
 	for i := 0; i < 2; i++ {
-		rows = append(rows, model.AuditLog{
+		rows = append(rows, &model.AuditLog{
 			UserID: 1, Username: "u", Action: "create", ResourceType: "log", ResourceID: fmt.Sprintf("r%d", i),
 			ResourceName: "recent", Status: "success", CreatedAt: now,
 		})
@@ -148,13 +153,37 @@ func TestAuditLogRepo_DeleteBefore_SQLite(t *testing.T) {
 	assert.Equal(t, int64(2), remaining, "2 recent rows should remain")
 }
 
-// splitSQL splits a SQL file into individual statements.
-func splitSQL(sql string) []string {
-	return strings.Split(sql, ";")
+// splitAuditSQL splits a SQL file into individual statements.
+// Skips empty lines and comments (-- ...).
+func splitAuditSQL(sql string) []string {
+	var stmts []string
+	var current strings.Builder
+	for _, line := range strings.Split(sql, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+		if strings.HasSuffix(trimmed, ";") {
+			s := strings.TrimSpace(current.String())
+			if s != "" {
+				stmts = append(stmts, s)
+			}
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		s := strings.TrimSpace(current.String())
+		if s != "" {
+			stmts = append(stmts, s)
+		}
+	}
+	return stmts
 }
 
-// truncate shortens a string for error messages.
-func truncate(s string, n int) string {
+// truncateAudit shortens a string for error messages.
+func truncateAudit(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
