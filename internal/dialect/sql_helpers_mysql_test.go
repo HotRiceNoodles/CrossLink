@@ -63,7 +63,7 @@ func TestMySQL_SQLHelpers_DateTrunc(t *testing.T) {
 		granularity string
 		want        string
 	}{
-		{"day", "day", "2026-06-15"},
+		{"day", "day", "2026-06-15T00:00:00Z"},
 		{"hour", "hour", "2026-06-15 14:00:00"},
 	}
 
@@ -125,7 +125,7 @@ func TestMySQL_SQLHelpers_JSONMergePatch(t *testing.T) {
 
 	require.NoError(t, db.Exec(
 		"INSERT INTO providers (name, display_name, adapter_type, base_url, api_key, extra_config, status) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
-		"openai", "OpenAI", "openai", "https://api.openai.com", "sk-test", `{"region":"us"}`, 1,
+		"openai", "OpenAI", "openai_compatible", "https://api.openai.com", "sk-test", `{"region":"us"}`, 1,
 	).Error)
 
 	patchExpr := dia.JSONMergePatch("extra_config", `CAST('{"region":"eu","priority":1}' AS JSON)`)

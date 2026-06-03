@@ -63,7 +63,7 @@ func TestPostgres_PartitionRouting(t *testing.T) {
 	now := time.Now()
 	err := db.Exec(
 		"INSERT INTO mcp_tool_call_logs (request_id, server_id, server_name, tool_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		"req-partition-test", 1, "test-server", "test-tool", "success", now,
+		"req-partition-test", 1, "test-server", "test-tool", 1, now,
 	).Error
 	require.NoError(t, err)
 
@@ -128,7 +128,7 @@ func TestSQLite_EnsureMonthlyPartitions(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		db.Exec(
 			"INSERT INTO mcp_tool_call_logs (request_id, server_id, server_name, tool_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-			fmt.Sprintf("req-old-%d", i), 1, "test-server", "test-tool", "success",
+			fmt.Sprintf("req-old-%d", i), 1, "test-server", "test-tool", 1,
 			oldDate.Format("2006-01-02 15:04:05"),
 		)
 	}
@@ -137,7 +137,7 @@ func TestSQLite_EnsureMonthlyPartitions(t *testing.T) {
 	recentDate := time.Now().AddDate(0, 0, -10)
 	db.Exec(
 		"INSERT INTO mcp_tool_call_logs (request_id, server_id, server_name, tool_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		"req-recent", 1, "test-server", "test-tool", "success",
+		"req-recent", 1, "test-server", "test-tool", 1,
 		recentDate.Format("2006-01-02 15:04:05"),
 	)
 

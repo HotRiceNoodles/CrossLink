@@ -135,7 +135,7 @@ func TestSQLite_SQLHelpers_JSONMergePatch(t *testing.T) {
 	// Insert a provider with extra_config JSON
 	require.NoError(t, db.Exec(
 		"INSERT INTO providers (name, display_name, adapter_type, base_url, api_key, extra_config, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		"openai", "OpenAI", "openai", "https://api.openai.com", "sk-test", `{"region":"us"}`, 1,
+		"openai", "OpenAI", "openai_compatible", "https://api.openai.com", "sk-test", `{"region":"us"}`, 1,
 	).Error)
 
 	// Merge new config using JSONMergePatch helper

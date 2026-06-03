@@ -4,7 +4,6 @@ package dialect
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,9 +91,7 @@ func TestOceanBaseLifecycle_FullWorkflow(t *testing.T) {
 }
 
 func TestOceanBaseLifecycle_MigrationLock(t *testing.T) {
-	cfg := oceanbaseTestDBConfig()
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC",
-		cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.DBName)
+	d := NewOceanBaseDialect(oceanbaseTestDBConfig())
 
 	release, err := d.AcquireMigrationLock()
 	if err != nil {
@@ -106,6 +103,3 @@ func TestOceanBaseLifecycle_MigrationLock(t *testing.T) {
 
 	t.Log("OK: OceanBase migration lock works correctly")
 }
-
-// Suppress unused import
-var _ = fmt.Sprintf

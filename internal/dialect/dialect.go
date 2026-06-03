@@ -28,6 +28,8 @@ type Dialect interface {
 	DateFormat(column string, format string) string      // "%Y-%m" style → SQL expression
 	ILike(column string, param string) string            // case-insensitive LIKE
 	JSONMergePatch(column string, jsonExpr string) string // JSON merge/patch
+	ConditionalCount(column string, value string) string // PG: FILTER(WHERE), others: SUM(CASE)
+	CastFloat(expr string) string                       // PG: ::float, others: CAST(AS DOUBLE)
 
 	// Lifecycle
 	Capabilities() Capabilities
@@ -70,5 +72,6 @@ type DBConfig struct {
 	Password   string
 	DBName     string
 	SSLMode    string
+	Timezone   string // e.g. "UTC" — appended to PG/MySQL DSN
 	SQLitePath string
 }

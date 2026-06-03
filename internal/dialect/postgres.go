@@ -168,6 +168,16 @@ func (p *PostgresDialect) JSONMergePatch(column string, jsonExpr string) string 
 	return fmt.Sprintf("COALESCE(%s::jsonb, '{}') || %s::jsonb", column, jsonExpr)
 }
 
+// ConditionalCount returns a FILTER (WHERE ...) expression for conditional counting.
+func (p *PostgresDialect) ConditionalCount(column string, value string) string {
+	return fmt.Sprintf("COUNT(*) FILTER (WHERE %s = %s)", column, value)
+}
+
+// CastFloat returns a PostgreSQL float cast expression.
+func (p *PostgresDialect) CastFloat(expr string) string {
+	return expr + "::float"
+}
+
 // Shutdown closes the underlying SQL database connection.
 func (p *PostgresDialect) Shutdown(db *gorm.DB) error {
 	sqlDB, err := db.DB()
@@ -179,12 +189,20 @@ func (p *PostgresDialect) Shutdown(db *gorm.DB) error {
 
 // dsn returns the PostgreSQL keyword=value connection string.
 func (p *PostgresDialect) dsn() string {
-	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		p.cfg.Host, p.cfg.Port, p.cfg.User, p.cfg.Password, p.cfg.DBName, p.cfg.SSLMode)
+	if p.cfg.Timezone != "" {
+		s += fmt.Sprintf(" timezone=%s", p.cfg.Timezone)
+	}
+	return s
 }
 
 // dsnURL returns the postgres:// URL format for golang-migrate.
 func (p *PostgresDialect) dsnURL() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+	s := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		p.cfg.User, p.cfg.Password, p.cfg.Host, p.cfg.Port, p.cfg.DBName, p.cfg.SSLMode)
+	if p.cfg.Timezone != "" {
+		s += fmt.Sprintf("&timezone=%s", p.cfg.Timezone)
+	}
+	return s
 }

@@ -5,10 +5,8 @@ package dialect
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
@@ -71,8 +69,7 @@ func TestMySQLLifecycle_FullWorkflow(t *testing.T) {
 }
 
 func TestMySQLLifecycle_MigrationLock(t *testing.T) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC",
-		"root", "crosslink_test", "127.0.0.1", 3307, "crosslink_test_mysql")
+	dsn := mysqlTestDSN()
 
 	// First connection: acquire named lock
 	lockDB1, err := sql.Open("mysql", dsn)
@@ -138,6 +135,3 @@ func TestMySQLLifecycle_IdempotentMigrations(t *testing.T) {
 
 	t.Log("OK: MySQL idempotent migrations work correctly")
 }
-
-// Suppress unused import for fmt
-var _ = fmt.Sprintf

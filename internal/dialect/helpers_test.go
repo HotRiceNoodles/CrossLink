@@ -145,4 +145,115 @@ func TestDialectInterface(t *testing.T) {
 	var _ Dialect = &PostgresDialect{}
 	var _ Dialect = &SQLiteDialect{}
 	var _ Dialect = &MySQLDialect{}
+	var _ Dialect = &KingbaseDialect{pg: &PostgresDialect{}}
+	var _ Dialect = &OceanBaseDialect{MySQLDialect: &MySQLDialect{}}
+}
+
+func TestConditionalCount(t *testing.T) {
+	pg := &PostgresDialect{}
+	sqlite := &SQLiteDialect{}
+	mysql := &MySQLDialect{}
+	kingbase := &KingbaseDialect{pg: pg}
+	oceanbase := &OceanBaseDialect{MySQLDialect: mysql}
+
+	tests := []struct {
+		name         string
+		column       string
+		value        string
+		pgWant       string
+		sqliteWant   string
+		mysqlWant    string
+	}{
+		{
+			name:       "status column",
+			column:     "status",
+			value:      "'success'",
+			pgWant:     "COUNT(*) FILTER (WHERE status = 'success')",
+			sqliteWant: "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)",
+			mysqlWant:  "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)",
+		},
+		{
+			name:       "blocked_by column",
+			column:     "blocked_by",
+			value:      "'guardrail'",
+			pgWant:     "COUNT(*) FILTER (WHERE blocked_by = 'guardrail')",
+			sqliteWant: "SUM(CASE WHEN blocked_by = 'guardrail' THEN 1 ELSE 0 END)",
+			mysqlWant:  "SUM(CASE WHEN blocked_by = 'guardrail' THEN 1 ELSE 0 END)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pg.ConditionalCount(tt.column, tt.value); got != tt.pgWant {
+				t.Errorf("PostgresDialect.ConditionalCount() = %q, want %q", got, tt.pgWant)
+			}
+			if got := sqlite.ConditionalCount(tt.column, tt.value); got != tt.sqliteWant {
+				t.Errorf("SQLiteDialect.ConditionalCount() = %q, want %q", got, tt.sqliteWant)
+			}
+			if got := mysql.ConditionalCount(tt.column, tt.value); got != tt.mysqlWant {
+				t.Errorf("MySQLDialect.ConditionalCount() = %q, want %q", got, tt.mysqlWant)
+			}
+			// KingbaseES delegates to PG
+			if got := kingbase.ConditionalCount(tt.column, tt.value); got != tt.pgWant {
+				t.Errorf("KingbaseDialect.ConditionalCount() = %q, want %q", got, tt.pgWant)
+			}
+			// OceanBase delegates to MySQL
+			if got := oceanbase.ConditionalCount(tt.column, tt.value); got != tt.mysqlWant {
+				t.Errorf("OceanBaseDialect.ConditionalCount() = %q, want %q", got, tt.mysqlWant)
+			}
+		})
+	}
+}
+
+func TestCastFloat(t *testing.T) {
+	pg := &PostgresDialect{}
+	sqlite := &SQLiteDialect{}
+	mysql := &MySQLDialect{}
+	kingbase := &KingbaseDialect{pg: pg}
+	oceanbase := &OceanBaseDialect{MySQLDialect: mysql}
+
+	tests := []struct {
+		name       string
+		expr       string
+		pgWant     string
+		sqliteWant string
+		mysqlWant  string
+	}{
+		{
+			name:       "simple expression",
+			expr:       "SUM(duration)",
+			pgWant:     "SUM(duration)::float",
+			sqliteWant: "CAST(SUM(duration) AS DOUBLE)",
+			mysqlWant:  "CAST(SUM(duration) AS DOUBLE)",
+		},
+		{
+			name:       "division expression",
+			expr:       "total_count / 100.0",
+			pgWant:     "total_count / 100.0::float",
+			sqliteWant: "CAST(total_count / 100.0 AS DOUBLE)",
+			mysqlWant:  "CAST(total_count / 100.0 AS DOUBLE)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pg.CastFloat(tt.expr); got != tt.pgWant {
+				t.Errorf("PostgresDialect.CastFloat() = %q, want %q", got, tt.pgWant)
+			}
+			if got := sqlite.CastFloat(tt.expr); got != tt.sqliteWant {
+				t.Errorf("SQLiteDialect.CastFloat() = %q, want %q", got, tt.sqliteWant)
+			}
+			if got := mysql.CastFloat(tt.expr); got != tt.mysqlWant {
+				t.Errorf("MySQLDialect.CastFloat() = %q, want %q", got, tt.mysqlWant)
+			}
+			// KingbaseES delegates to PG
+			if got := kingbase.CastFloat(tt.expr); got != tt.pgWant {
+				t.Errorf("KingbaseDialect.CastFloat() = %q, want %q", got, tt.pgWant)
+			}
+			// OceanBase delegates to MySQL
+			if got := oceanbase.CastFloat(tt.expr); got != tt.mysqlWant {
+				t.Errorf("OceanBaseDialect.CastFloat() = %q, want %q", got, tt.mysqlWant)
+			}
+		})
+	}
 }

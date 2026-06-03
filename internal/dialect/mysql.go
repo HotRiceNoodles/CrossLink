@@ -134,7 +134,8 @@ func (m *MySQLDialect) EnsureMonthlyPartitions(ctx context.Context, db *gorm.DB,
 			table, partName, next.Format("2006-01-02 15:04:05.000"),
 		)
 		if err := db.WithContext(ctx).Exec(sql).Error; err != nil {
-			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
+			errMsg := strings.ToLower(err.Error())
+			if !strings.Contains(errMsg, "duplicate") && !strings.Contains(errMsg, "already exists") {
 				return fmt.Errorf("add partition %s: %w", partName, err)
 			}
 		}
@@ -167,6 +168,16 @@ func (m *MySQLDialect) JSONMergePatch(column string, jsonExpr string) string {
 	return fmt.Sprintf("JSON_MERGE_PATCH(COALESCE(%s, '{}'), %s)", column, jsonExpr)
 }
 
+// ConditionalCount returns a SUM(CASE WHEN ...) expression for conditional counting.
+func (m *MySQLDialect) ConditionalCount(column string, value string) string {
+	return fmt.Sprintf("SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END)", column, value)
+}
+
+// CastFloat returns a MySQL float cast expression.
+func (m *MySQLDialect) CastFloat(expr string) string {
+	return "CAST(" + expr + " AS DOUBLE)"
+}
+
 // Shutdown closes the underlying SQL database connection.
 func (m *MySQLDialect) Shutdown(db *gorm.DB) error {
 	sqlDB, err := db.DB()
@@ -178,6 +189,6 @@ func (m *MySQLDialect) Shutdown(db *gorm.DB) error {
 
 // dsn returns the MySQL connection string.
 func (m *MySQLDialect) dsn() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC",
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true",
 		m.cfg.User, m.cfg.Password, m.cfg.Host, m.cfg.Port, m.cfg.DBName)
 }

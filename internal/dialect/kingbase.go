@@ -131,6 +131,14 @@ func (k *KingbaseDialect) JSONMergePatch(column, jsonExpr string) string {
 	return k.pg.JSONMergePatch(column, jsonExpr)
 }
 
+func (k *KingbaseDialect) ConditionalCount(column, value string) string {
+	return k.pg.ConditionalCount(column, value)
+}
+
+func (k *KingbaseDialect) CastFloat(expr string) string {
+	return k.pg.CastFloat(expr)
+}
+
 // Shutdown closes the underlying SQL database connection.
 func (k *KingbaseDialect) Shutdown(db *gorm.DB) error {
 	sqlDB, err := db.DB()

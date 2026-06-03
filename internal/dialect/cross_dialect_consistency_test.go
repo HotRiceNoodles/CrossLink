@@ -272,6 +272,6 @@ func insertTestUsageLogAny(t *testing.T, db *gorm.DB, ts time.Time, cost float64
 func dbInsertProvider(db *gorm.DB, name, extraConfig string) error {
 	return db.Exec(
 		"INSERT INTO providers (name, display_name, adapter_type, base_url, api_key, extra_config, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		name, "Test", "openai", "https://api.example.com", "sk-test", extraConfig, 1,
+		name, "Test", "openai_compatible", "https://api.example.com", "sk-test", extraConfig, 1,
 	).Error
 }

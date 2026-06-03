@@ -144,15 +144,17 @@ func (s *SQLiteDialect) EnsureMonthlyPartitions(ctx context.Context, db *gorm.DB
 
 	const batchSize = 500
 	for {
-		// Move old records to archive in batches
+		// Move old records to archive in batches.
+		// Use rowid instead of id for batching because mcp_tool_call_logs uses
+		// a composite PRIMARY KEY (id, created_at) where id may be NULL.
 		result := db.WithContext(ctx).Exec(
 			"INSERT OR IGNORE INTO mcp_tool_call_logs_archive "+
 				"(id, request_id, server_id, server_name, tool_name, method, input_size, output_size, "+
 				"duration, status, error_code, error_msg, api_key_id, user_id, team_id, blocked_by, created_at) "+
 				"SELECT id, request_id, server_id, server_name, tool_name, method, input_size, output_size, "+
 				"duration, status, error_code, error_msg, api_key_id, user_id, team_id, blocked_by, created_at "+
-				"FROM mcp_tool_call_logs WHERE created_at < ? AND id IN "+
-				"(SELECT id FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?)",
+				"FROM mcp_tool_call_logs WHERE created_at < ? AND rowid IN "+
+				"(SELECT rowid FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?)",
 			cutoff, cutoff, batchSize,
 		)
 		if result.Error != nil {
@@ -164,8 +166,8 @@ func (s *SQLiteDialect) EnsureMonthlyPartitions(ctx context.Context, db *gorm.DB
 
 		// Delete archived records
 		db.WithContext(ctx).Exec(
-			"DELETE FROM mcp_tool_call_logs WHERE created_at < ? AND id IN "+
-				"(SELECT id FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?)",
+			"DELETE FROM mcp_tool_call_logs WHERE created_at < ? AND rowid IN "+
+				"(SELECT rowid FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?)",
 			cutoff, cutoff, batchSize,
 		)
 
@@ -198,6 +200,16 @@ func (s *SQLiteDialect) ILike(column string, param string) string {
 // JSONMergePatch returns a json_patch expression for SQLite.
 func (s *SQLiteDialect) JSONMergePatch(column string, jsonExpr string) string {
 	return fmt.Sprintf("json_patch(COALESCE(%s, '{}'), %s)", column, jsonExpr)
+}
+
+// ConditionalCount returns a SUM(CASE WHEN ...) expression for conditional counting.
+func (s *SQLiteDialect) ConditionalCount(column string, value string) string {
+	return fmt.Sprintf("SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END)", column, value)
+}
+
+// CastFloat returns a SQLite float cast expression.
+func (s *SQLiteDialect) CastFloat(expr string) string {
+	return "CAST(" + expr + " AS DOUBLE)"
 }
 
 // Shutdown performs WAL checkpoint and closes the connection.
