@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crosslink/internal/dialect"
 	"gorm.io/gorm"
 )
 
 type MCPRepo struct {
-	db *gorm.DB
+	db  *gorm.DB
+	dia dialect.Dialect
 }
 
-func NewMCPRepo(db *gorm.DB) *MCPRepo {
-	return &MCPRepo{db: db}
+func NewMCPRepo(db *gorm.DB, dia dialect.Dialect) *MCPRepo {
+	return &MCPRepo{db: db, dia: dia}
 }
 
 func (r *MCPRepo) baseQuery(orgID int64) *gorm.DB {
@@ -177,19 +179,24 @@ func (r *MCPRepo) GetToolCallStats(ctx context.Context, orgID int64, serverID in
 	if serverID > 0 {
 		q = q.Where("server_id = ?", serverID)
 	}
-	row := q.Select(
+	exprs := []any{
 		"COUNT(*)",
-		"COUNT(*) FILTER (WHERE status = 1)",
-		"COUNT(*) FILTER (WHERE status = 0)",
-		"COUNT(*) FILTER (WHERE status = -1)",
+		r.dia.ConditionalCount("status", "1"),
+		r.dia.ConditionalCount("status", "0"),
+		r.dia.ConditionalCount("status", "-1"),
 		"COALESCE(AVG(duration), 0)",
-		"COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration), 0)",
 		"COALESCE(SUM(input_size), 0)",
 		"COALESCE(SUM(output_size), 0)",
-	).Row()
+	}
+	if r.dia.Name() == "postgres" || r.dia.Name() == "kingbase" {
+		exprs = append(exprs, "COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration), 0)")
+	} else {
+		exprs = append(exprs, "0")
+	}
+	row := q.Select(exprs[0], exprs[1:]...).Row()
 	if err := row.Scan(&stats.TotalCalls, &stats.SuccessCount, &stats.ErrorCount,
-		&stats.BlockedCount, &stats.AvgDuration, &stats.P95Duration,
-		&stats.TotalInput, &stats.TotalOutput); err != nil {
+		&stats.BlockedCount, &stats.AvgDuration, &stats.TotalInput,
+		&stats.TotalOutput, &stats.P95Duration); err != nil {
 		return nil, err
 	}
 	return stats, nil
@@ -197,8 +204,9 @@ func (r *MCPRepo) GetToolCallStats(ctx context.Context, orgID int64, serverID in
 
 func (r *MCPRepo) GetTopTools(ctx context.Context, orgID int64, serverID int64, days int, limit int) ([]MCPTopTool, error) {
 	since := time.Now().AddDate(0, 0, -days)
+	errorCountExpr := r.dia.ConditionalCount("status", "0") + " + " + r.dia.ConditionalCount("status", "-1")
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
-		Select("tool_name as name, COUNT(*) as count, COALESCE(AVG(duration),0) as avg_dur, COALESCE(COUNT(*) FILTER (WHERE status != 1)::float / NULLIF(COUNT(*), 0), 0) as error_rate").
+		Select("tool_name as name, COUNT(*) as count, COALESCE(AVG(duration),0) as avg_dur, COALESCE(" + r.dia.CastFloat(errorCountExpr) + " / NULLIF(COUNT(*), 0), 0) as error_rate").
 		Where("created_at >= ? AND tool_name != ''", since).
 		Group("tool_name").Order("count DESC")
 	if orgID != 0 {
@@ -219,8 +227,10 @@ func (r *MCPRepo) GetTopTools(ctx context.Context, orgID int64, serverID int64, 
 
 func (r *MCPRepo) GetCallsByDay(ctx context.Context, orgID int64, serverID int64, days int) ([]MCPDailyCalls, error) {
 	since := time.Now().AddDate(0, 0, -days)
+	successExpr := r.dia.ConditionalCount("status", "1")
+	errorExpr := r.dia.ConditionalCount("status", "0") + " + " + r.dia.ConditionalCount("status", "-1")
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
-		Select("DATE(created_at) as date, COUNT(*) as count, COUNT(*) FILTER (WHERE status = 1) as success, COUNT(*) FILTER (WHERE status != 1) as error").
+		Select("DATE(created_at) as date, COUNT(*) as count, " + successExpr + " as success, " + errorExpr + " as error").
 		Where("created_at >= ?", since).
 		Group("DATE(created_at)").Order("date ASC")
 	if orgID != 0 {

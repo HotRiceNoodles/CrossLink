@@ -8,12 +8,15 @@ import (
 
 	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+
+	"github.com/crosslink/internal/dialect"
 	"gorm.io/gorm/logger"
 )
 
 var (
-	testDB  *gorm.DB
-	testCtx = context.Background()
+	testDB      *gorm.DB
+	testCtx     = context.Background()
+	testDialect dialect.Dialect = &dialect.SQLiteDialect{}
 )
 
 // createTestTables creates SQLite-compatible schema for MCPServer.
@@ -88,7 +91,7 @@ func createTestTables(db *gorm.DB) error {
 	}
 
 func TestMCPRepo_LogToolCall(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 
 	log := &MCPToolCallLog{
 		RequestID:  "test-req-1",
@@ -124,7 +127,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestMCPRepo_Create_and_GetByID(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name:          "test-server",
 		DisplayName:   "Test Server",
@@ -151,7 +154,7 @@ func TestMCPRepo_Create_and_GetByID(t *testing.T) {
 }
 
 func TestMCPRepo_List(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	servers, err := repo.List(testCtx, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -160,7 +163,7 @@ func TestMCPRepo_List(t *testing.T) {
 }
 
 func TestMCPRepo_SoftDelete(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name:          "delete-me",
 		TransportType: "http",
@@ -182,7 +185,7 @@ func TestMCPRepo_SoftDelete(t *testing.T) {
 }
 
 func TestMCPRepo_GetByName(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name:          "by-name-server",
 		TransportType: "http",
@@ -204,7 +207,7 @@ func TestMCPRepo_GetByName(t *testing.T) {
 }
 
 func TestMCPRepo_UpdateToolCount(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name:          "toolcount-server",
 		TransportType: "http",
@@ -225,7 +228,7 @@ func TestMCPRepo_UpdateToolCount(t *testing.T) {
 }
 
 func TestMCPRepo_UpdateHealthStatus(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name:          "health-server",
 		TransportType: "http",
@@ -249,7 +252,7 @@ func TestMCPRepo_UpdateHealthStatus(t *testing.T) {
 }
 
 func TestMCPRepo_DeleteLogsBefore(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	old := &MCPToolCallLog{
 		RequestID: "old", ServerName: "s", Method: "tools/call",
 		Status: 1, CreatedAt: time.Now().Add(-200 * 24 * time.Hour),
@@ -278,7 +281,7 @@ func TestMCPRepo_DeleteLogsBefore(t *testing.T) {
 }
 
 func TestMCPRepo_Permissions(t *testing.T) {
-	repo := NewMCPRepo(testDB)
+	repo := NewMCPRepo(testDB, testDialect)
 	srv := &MCPServer{
 		Name: "perm-server", TransportType: "http", URL: "http://localhost/mcp",
 		AuthType: "none", CreatedAt: time.Now(), UpdatedAt: time.Now(),

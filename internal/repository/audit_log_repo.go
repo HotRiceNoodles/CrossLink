@@ -5,16 +5,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/model"
 	"gorm.io/gorm"
 )
 
 type AuditLogRepo struct {
-	db *gorm.DB
+	db  *gorm.DB
+	dia dialect.Dialect
 }
 
-func NewAuditLogRepo(db *gorm.DB) *AuditLogRepo {
-	return &AuditLogRepo{db: db}
+func NewAuditLogRepo(db *gorm.DB, dia dialect.Dialect) *AuditLogRepo {
+	return &AuditLogRepo{db: db, dia: dia}
 }
 
 func (r *AuditLogRepo) CreateBatch(ctx context.Context, logs []*model.AuditLog) error {
@@ -34,7 +36,7 @@ type AuditFilter struct {
 	PageSize     int
 }
 
-func (f *AuditFilter) apply(query *gorm.DB) *gorm.DB {
+func (f *AuditFilter) apply(query *gorm.DB, dia dialect.Dialect) *gorm.DB {
 	if f.Action != "" {
 		query = query.Where("action = ?", f.Action)
 	}
@@ -54,7 +56,7 @@ func (f *AuditFilter) apply(query *gorm.DB) *gorm.DB {
 		escapedQ := strings.ReplaceAll(f.Q, "%", "\\%")
 		escapedQ = strings.ReplaceAll(escapedQ, "_", "\\_")
 		like := "%" + escapedQ + "%"
-		query = query.Where("resource_name ILIKE ? OR username ILIKE ?", like, like)
+		query = query.Where(dia.ILike("resource_name", "?")+" OR "+dia.ILike("username", "?"), like, like)
 	}
 	if f.StartDate != "" {
 		if t, err := time.Parse("2006-01-02", f.StartDate); err == nil {
@@ -78,7 +80,7 @@ func (r *AuditLogRepo) List(ctx context.Context, f AuditFilter) ([]model.AuditLo
 	}
 
 	base := r.db.WithContext(ctx).Model(&model.AuditLog{})
-	filtered := f.apply(base)
+	filtered := f.apply(base, r.dia)
 
 	var total int64
 	if err := filtered.Count(&total).Error; err != nil {
@@ -96,7 +98,7 @@ func (r *AuditLogRepo) List(ctx context.Context, f AuditFilter) ([]model.AuditLo
 // StreamAll calls fn for each matching row using a database cursor.
 func (r *AuditLogRepo) StreamAll(ctx context.Context, f AuditFilter, fn func(model.AuditLog) error) (int64, error) {
 	base := r.db.WithContext(ctx).Model(&model.AuditLog{})
-	filtered := f.apply(base)
+	filtered := f.apply(base, r.dia)
 
 	var total int64
 	if err := filtered.Count(&total).Error; err != nil {
