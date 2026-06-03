@@ -106,7 +106,7 @@ func main() {
 	slog.Info("license tier", "tier", gate.CurrentTier())
 
 	// Initialize MCP Gateway
-	mcpRepo := mcp.NewMCPRepo(db)
+	mcpRepo := mcp.NewMCPRepo(db, dia)
 	mcpRegistry := mcp.NewRegistry()
 	mcpSvc := mcp.NewMCPService(mcpRepo, mcpRegistry, cfg.MCP, nil)
 	mcpHandler := mcp.NewHandler(mcpSvc)
