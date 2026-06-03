@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -77,6 +78,31 @@ func dropAllTablesPG(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	db.Exec("DROP SCHEMA public CASCADE")
 	db.Exec("CREATE SCHEMA public")
+}
+
+// kingbaseTestDBConfig builds a DBConfig for the test KingbaseES instance.
+// KingbaseES is PG-compatible and uses the same connection parameters.
+func kingbaseTestDBConfig() DBConfig {
+	return DBConfig{
+		Driver:   "kingbasees",
+		Host:     envOr("KINGBASE_TEST_HOST", "localhost"),
+		Port:     envIntOr("KINGBASE_TEST_PORT", 54321),
+		User:     envOr("KINGBASE_TEST_USER", "kingbase"),
+		Password: envOr("KINGBASE_TEST_PASSWORD", "kingbase_test"),
+		DBName:   envOr("KINGBASE_TEST_DBNAME", "crosslink_test"),
+		SSLMode:  envOr("KINGBASE_TEST_SSLMODE", "disable"),
+		Timezone: envOr("KINGBASE_TEST_TIMEZONE", "UTC"),
+	}
+}
+
+// kingbaseTestDSN returns the KingbaseES connection URL from the environment.
+func kingbaseTestDSN() string {
+	if dsn := os.Getenv("KINGBASE_TEST_DSN"); dsn != "" {
+		return dsn
+	}
+	cfg := kingbaseTestDBConfig()
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.DBName, cfg.SSLMode)
 }
 
 // dropAllTablesMySQL drops all tables in the current MySQL database.
