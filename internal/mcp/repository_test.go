@@ -21,8 +21,7 @@ var (
 
 // createTestTables creates SQLite-compatible schema for MCPServer.
 // We use raw SQL instead of AutoMigrate because the model uses
-// PostgreSQL-specific "DEFAULT now()" and "type: jsonb" which
-// SQLite does not support.
+// PostgreSQL-specific "DEFAULT now()" which SQLite does not support.
 func createTestTables(db *gorm.DB) error {
 	return db.Exec(`
 		CREATE TABLE IF NOT EXISTS mcp_servers (

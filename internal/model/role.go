@@ -121,7 +121,7 @@ type Role struct {
 	DisplayName string         `gorm:"size:64;not null" json:"display_name"`
 	IsSystem    bool           `gorm:"not null;default:false" json:"is_system"`
 	OrgID       *int64         `gorm:"index" json:"org_id"`
-	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

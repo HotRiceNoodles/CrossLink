@@ -14,11 +14,11 @@ type Provider struct {
 	AdapterType string         `gorm:"size:32;not null" json:"adapter_type"`
 	BaseURL     string         `gorm:"size:512;not null" json:"base_url"`
 	APIKey      string         `gorm:"not null" json:"-"`
-	ExtraConfig datatypes.JSON `gorm:"type:jsonb" json:"extra_config"`
+	ExtraConfig datatypes.JSON `json:"extra_config"`
 	Status      int16          `gorm:"not null;default:1" json:"status"`
 	OrgID       *int64         `gorm:"index" json:"org_id"`
-	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt   time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

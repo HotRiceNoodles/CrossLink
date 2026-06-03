@@ -15,7 +15,7 @@ type BudgetRecommendation struct {
 	Confidence       float64   `gorm:"type:decimal(5,2);not null;default:0" json:"confidence"`
 	Reasoning        string    `gorm:"type:text;not null;default:''" json:"reasoning"`
 	Currency         string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
-	CreatedAt        time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt        time.Time `gorm:"not null" json:"created_at"`
 }
 
 func (BudgetRecommendation) TableName() string { return "budget_recommendations" }
@@ -35,8 +35,8 @@ type BudgetRequest struct {
 	ReviewedBy       *int64     `json:"reviewed_by,omitempty"`
 	ReviewComment    string     `gorm:"type:text;not null;default:''" json:"review_comment"`
 	ReviewedAt       *time.Time `json:"reviewed_at,omitempty"`
-	CreatedAt        time.Time  `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt        time.Time  `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt        time.Time  `gorm:"not null" json:"created_at"`
+	UpdatedAt        time.Time  `gorm:"not null" json:"updated_at"`
 }
 
 func (BudgetRequest) TableName() string { return "budget_requests" }

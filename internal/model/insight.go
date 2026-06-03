@@ -14,7 +14,7 @@ type Insight struct {
 	Content     string    `gorm:"type:text;not null" json:"content"`
 	ModelUsed   string    `gorm:"size:128;not null;default:''" json:"model_used"`
 	TokensUsed  int       `gorm:"not null;default:0" json:"tokens_used"`
-	CreatedAt   time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt   time.Time `gorm:"not null" json:"created_at"`
 }
 
 func (Insight) TableName() string { return "insights" }

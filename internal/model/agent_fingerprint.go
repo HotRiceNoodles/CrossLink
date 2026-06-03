@@ -18,9 +18,9 @@ type AgentFingerprint struct {
 	Status         string         `gorm:"size:16;not null;default:'active'" json:"status"`
 	HitCount       int64          `gorm:"not null;default:0" json:"hit_count"`
 	LastHitAt      *time.Time     `json:"last_hit_at,omitempty"`
-	DiscoveredFrom datatypes.JSON `gorm:"type:jsonb" json:"discovered_from,omitempty"`
-	CreatedAt      time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt      time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	DiscoveredFrom datatypes.JSON `json:"discovered_from,omitempty"`
+	CreatedAt      time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt      time.Time      `gorm:"not null" json:"updated_at"`
 }
 
 func (AgentFingerprint) TableName() string { return "agent_fingerprints" }

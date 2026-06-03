@@ -14,7 +14,7 @@ type BudgetAlert struct {
 	ThresholdPct    int16          `gorm:"not null" json:"threshold_pct"`
 	WebhookURL      string         `gorm:"size:512;not null" json:"webhook_url"`
 	LastTriggeredAt *time.Time     `json:"last_triggered_at"`
-	CreatedAt       time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt       time.Time      `gorm:"not null" json:"created_at"`
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
@@ -29,7 +29,7 @@ type BudgetSnapshot struct {
 	Spent      float64   `gorm:"type:decimal(16,8);not null;default:0" json:"spent"`
 	Budget     float64   `gorm:"type:decimal(12,4);not null;default:0" json:"budget"`
 	Currency   string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
-	CreatedAt  time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt  time.Time `gorm:"not null" json:"created_at"`
 }
 
 func (BudgetSnapshot) TableName() string { return "budget_snapshots" }

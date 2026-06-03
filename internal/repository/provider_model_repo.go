@@ -21,7 +21,7 @@ func (r *ProviderModelRepo) FindByModelName(ctx context.Context, modelName strin
 		Joins("Provider").
 		Where("provider_models.model_name = ? AND provider_models.status = 1", modelName)
 	if orgID != 0 {
-		q = q.Where("providers.org_id = ? OR providers.org_id IS NULL", orgID)
+		q = q.Where("\"Provider\".org_id = ? OR \"Provider\".org_id IS NULL", orgID)
 	}
 	err := q.Order("provider_models.weight DESC, provider_models.priority ASC").
 		Find(&models).Error

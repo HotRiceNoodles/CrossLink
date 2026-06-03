@@ -15,11 +15,11 @@ type AuditLog struct {
 	ResourceType string         `gorm:"size:32;not null;index" json:"resource_type"`
 	ResourceID   string         `gorm:"size:64;not null;index" json:"resource_id"`
 	ResourceName string         `gorm:"size:128" json:"resource_name"`
-	Detail       datatypes.JSON `gorm:"type:jsonb" json:"detail"`
+	Detail       datatypes.JSON `json:"detail"`
 	IPAddress    string         `gorm:"size:45" json:"ip_address"`
 	UserAgent    string         `gorm:"size:512" json:"user_agent"`
 	Status       string         `gorm:"size:16;not null;default:'success'" json:"status"`
-	CreatedAt    time.Time      `gorm:"not null;default:now();index" json:"created_at"`
+	CreatedAt    time.Time      `gorm:"not null;index" json:"created_at"`
 }
 
 func (AuditLog) TableName() string { return "audit_logs" }

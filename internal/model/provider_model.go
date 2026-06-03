@@ -20,9 +20,9 @@ type ProviderModel struct {
 	OutputPrice   float64        `gorm:"type:decimal(10,6);not null;default:0" json:"output_price"`
 	Currency        string         `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	RoutingStrategy string         `gorm:"size:32;not null;default:'weighted_random'" json:"routing_strategy"`
-	ExtraConfig     datatypes.JSON `gorm:"type:jsonb" json:"extra_config"`
-	CreatedAt     time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt     time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	ExtraConfig     datatypes.JSON `json:"extra_config"`
+	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt     time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 
 	Provider Provider `gorm:"foreignKey:ProviderID" json:"provider,omitempty"`

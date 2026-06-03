@@ -16,12 +16,12 @@ type User struct {
 	Role         Role       `gorm:"foreignKey:RoleID" json:"role,omitempty"`
 	Status       int16      `gorm:"not null;default:1" json:"status"`
 	LastLoginAt  *time.Time `json:"last_login_at"`
-	CreatedAt    time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt    time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt    time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt    time.Time      `gorm:"not null" json:"updated_at"`
 	OrgID               *int64         `gorm:"index" json:"org_id"`
 	Email               *string        `gorm:"size:255" json:"email,omitempty"`
 	ForcePasswordChange bool           `gorm:"not null;default:false" json:"force_password_change,omitempty"`
-	Preferences         datatypes.JSON `gorm:"type:jsonb" json:"preferences,omitempty"`
+	Preferences         datatypes.JSON `json:"preferences,omitempty"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

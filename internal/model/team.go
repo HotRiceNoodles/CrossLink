@@ -18,8 +18,8 @@ type Team struct {
 	Status       int16     `gorm:"not null;default:1" json:"status"`
 	OrgID        *int64    `gorm:"index" json:"org_id"`
 	CreatedByID  int64     `gorm:"not null" json:"created_by_id"`
-	CreatedAt    time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt    time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt    time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt    time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
@@ -30,7 +30,7 @@ type TeamMember struct {
 	TeamID    int64          `gorm:"not null;index" json:"team_id"`
 	UserID    int64          `gorm:"not null;index" json:"user_id"`
 	Role      string         `gorm:"size:16;not null;default:'member'" json:"role"`
-	JoinedAt  time.Time      `gorm:"not null;default:now()" json:"joined_at"`
+	JoinedAt  time.Time      `gorm:"not null" json:"joined_at"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 	Team      Team           `gorm:"foreignKey:TeamID" json:"team,omitempty"`
 	User      User           `gorm:"foreignKey:UserID" json:"user,omitempty"`

@@ -17,10 +17,10 @@ type Organization struct {
 	BudgetPeriod string        `gorm:"size:16;not null;default:'monthly'" json:"budget_period"`
 	RPMLimit    int            `gorm:"not null;default:0" json:"rpm_limit"`
 	TPMLimit    int            `gorm:"not null;default:0" json:"tpm_limit"`
-	Settings    datatypes.JSON `gorm:"type:jsonb" json:"settings"`
+	Settings    datatypes.JSON `json:"settings"`
 	CreatedByID *int64         `gorm:"index" json:"created_by_id"`
-	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt   time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt   time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
@@ -31,7 +31,7 @@ type OrgMember struct {
 	OrgID     int64          `gorm:"not null;index" json:"org_id"`
 	UserID    int64          `gorm:"not null;index" json:"user_id"`
 	Role      string         `gorm:"size:16;not null;default:'member'" json:"role"`
-	JoinedAt  time.Time      `gorm:"not null;default:now()" json:"joined_at"`
+	JoinedAt  time.Time      `gorm:"not null" json:"joined_at"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

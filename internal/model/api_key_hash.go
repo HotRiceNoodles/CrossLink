@@ -10,7 +10,7 @@ type APIKeyHash struct {
 	HashAlgo   string     `gorm:"size:10;not null;default:'sha256'" json:"hash_algo"`
 	IsPrimary  bool       `gorm:"not null;default:true" json:"is_primary"`
 	GraceUntil *time.Time `json:"grace_until"`
-	CreatedAt  time.Time  `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt  time.Time  `gorm:"not null" json:"created_at"`
 }
 
 func (APIKeyHash) TableName() string { return "api_key_hashes" }

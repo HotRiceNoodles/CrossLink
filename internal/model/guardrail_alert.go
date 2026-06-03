@@ -11,12 +11,12 @@ type GuardrailAlertRule struct {
 	OrgID           *int64         `gorm:"index" json:"org_id,omitempty"`
 	RuleID          int64          `gorm:"uniqueIndex;not null" json:"rule_id"`
 	TeamID          *int64         `gorm:"index" json:"team_id,omitempty"`
-	Channels        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"channels"`
+	Channels        datatypes.JSON `gorm:"not null;default:'[]'" json:"channels"`
 	CooldownMinutes int            `gorm:"not null;default:5" json:"cooldown_minutes"`
 	Enabled         bool           `gorm:"not null;default:true" json:"enabled"`
 	LastTriggeredAt *time.Time     `json:"last_triggered_at,omitempty"`
-	CreatedAt       time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt       time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	CreatedAt       time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt       time.Time      `gorm:"not null" json:"updated_at"`
 }
 
 func (GuardrailAlertRule) TableName() string { return "guardrail_alert_rules" }
@@ -39,7 +39,7 @@ type GuardrailAlertLog struct {
 	AgentType      string    `gorm:"size:32" json:"agent_type,omitempty"`
 	Channels       string    `gorm:"size:500" json:"channels"`
 	Status         string    `gorm:"size:20" json:"status"`
-	CreatedAt      time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt      time.Time `gorm:"not null" json:"created_at"`
 }
 
 func (GuardrailAlertLog) TableName() string { return "guardrail_alert_logs" }

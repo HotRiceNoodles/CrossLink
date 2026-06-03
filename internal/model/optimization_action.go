@@ -13,9 +13,9 @@ type OptimizationAction struct {
 	Description    string          `gorm:"type:text;not null" json:"description"`
 	Priority       string          `gorm:"size:16;not null;default:'medium'" json:"priority"`
 	Status         string          `gorm:"size:16;not null;default:'pending'" json:"status"`
-	Payload        json.RawMessage `gorm:"type:jsonb;not null;default:'{}'" json:"payload"`
+	Payload        json.RawMessage `gorm:"not null;default:'{}'" json:"payload"`
 	SavingEstimate float64         `gorm:"type:decimal(12,2);default:0" json:"saving_estimate"`
-	CreatedAt      time.Time       `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt      time.Time       `gorm:"not null" json:"created_at"`
 	AppliedAt      *time.Time      `json:"applied_at,omitempty"`
 	AppliedBy      *int64          `json:"applied_by,omitempty"`
 	DismissedAt    *time.Time      `json:"dismissed_at,omitempty"`
