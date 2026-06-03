@@ -4,29 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/middleware"
 )
-
-// sensitiveHeaders are redacted from captured request and response headers.
-var sensitiveHeaders = []string{
-	"Authorization",
-	"X-Api-Key",
-	"Cookie",
-	"Set-Cookie",
-	"Proxy-Authorization",
-}
-
-func redactHeaders(h http.Header) http.Header {
-	clone := h.Clone()
-	for _, key := range sensitiveHeaders {
-		clone.Del(key)
-	}
-	return clone
-}
 
 // extractModel reads the "model" field from a JSON request body.
 func extractModel(body []byte) string {
@@ -47,7 +30,7 @@ func Middleware(store *Store) gin.HandlerFunc {
 		}
 
 		// Capture request headers (redact sensitive ones)
-		reqHeaders := redactHeaders(c.Request.Header)
+		reqHeaders := upstream.RedactHeaders(c.Request.Header)
 
 		// Read full request body — prefer cached bytes from ReadBody middleware
 		var fullBody []byte
@@ -71,6 +54,10 @@ func Middleware(store *Store) gin.HandlerFunc {
 		wrapper := newResponseCaptureWriter(c.Writer, store.MaxBodySize())
 		c.Writer = wrapper
 
+		// Inject upstream collector into context for debugTransport
+		collector := &upstream.UpstreamCollector{}
+		c.Request = c.Request.WithContext(upstream.WithUpstreamCollector(c.Request.Context(), collector))
+
 		start := time.Now()
 		c.Next()
 		elapsed := time.Since(start)
@@ -90,11 +77,12 @@ func Middleware(store *Store) gin.HandlerFunc {
 			ReqHeaders:   reqHeaders,
 			ReqBody:      storeBody,
 			RespStatus:   wrapper.Status(),
-			RespHeaders:  redactHeaders(wrapper.Header()),
+			RespHeaders:  upstream.RedactHeaders(wrapper.Header()),
 			RespBody:     wrapper.CapturedBody(),
 			InputTokens:  c.GetInt("input_tokens"),
 			OutputTokens: c.GetInt("output_tokens"),
 		}
+		entry.UpstreamCalls = collector.Calls()
 		orgID, _ := c.Get("org_id")
 		entry.OrgID, _ = orgID.(int64)
 		store.Add(entry)

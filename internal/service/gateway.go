@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -80,9 +81,12 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 			retryCfg.NumRetries = 0
 		}
 		var openaiResp *domain.OpenAIResponse
-		rr := provider.WithRetry(ctx, retryCfg, s.budget, func() error {
+		rr := provider.WithRetry(ctx, retryCfg, s.budget, func(attemptCtx context.Context) error {
+			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
+			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
+			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
 			var callErr error
-			openaiResp, callErr = route.Provider.Chat(ctx, &reqCopy, route.ProviderRow.APIKey)
+			openaiResp, callErr = route.Provider.Chat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
 		totalRetries += rr.RetriesUsed
@@ -186,9 +190,12 @@ func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRe
 			retryCfg.NumRetries = 0
 		}
 		var ch <-chan domain.SSEChunk
-		rr := provider.WithRetry(ctx, retryCfg, s.budget, func() error {
+		rr := provider.WithRetry(ctx, retryCfg, s.budget, func(attemptCtx context.Context) error {
+			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
+			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
+			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
 			var callErr error
-			ch, callErr = route.Provider.StreamChat(ctx, &reqCopy, route.ProviderRow.APIKey)
+			ch, callErr = route.Provider.StreamChat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
 		totalRetries += rr.RetriesUsed

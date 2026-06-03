@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/crosslink/internal/debug/upstream"
 )
 
 type Entry struct {
@@ -19,11 +21,13 @@ type Entry struct {
 	Truncated   bool
 	ReqHeaders  http.Header
 	ReqBody     []byte
-	RespStatus   int
-	RespHeaders  http.Header
-	RespBody     []byte
+	RespStatus  int
+	RespHeaders http.Header
+	RespBody    []byte
 	InputTokens  int
 	OutputTokens int
+
+	UpstreamCalls []upstream.UpstreamCall // upstream HTTP call chain
 }
 
 type Store struct {

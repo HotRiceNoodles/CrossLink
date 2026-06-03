@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -97,6 +98,9 @@ func (e *FallbackEngine) ExecuteNonStream(
 
 		start := time.Now()
 		callCtx, callCancel := perProviderCtx(ctx, i, maxAttempts)
+		if i > 0 {
+				callCtx = upstream.WithFallback(callCtx, true)
+			}
 		resp, err := callFn(callCtx, route)
 		callCancel()
 		latency := time.Since(start).Milliseconds()
@@ -196,6 +200,9 @@ func (e *FallbackEngine) ExecuteStream(
 		// Use detached context for SSE reading so canceling connectCtx
 		// after the HTTP handshake does not kill the response body mid-stream.
 		streamCtx := context.WithoutCancel(connectCtx)
+		if i > 0 {
+				streamCtx = upstream.WithFallback(streamCtx, true)
+			}
 		ch, err := connectFn(streamCtx, route)
 		connectCancel()
 		if err != nil {
