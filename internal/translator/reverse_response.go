@@ -48,6 +48,12 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			PromptTokensDetails: func() *domain.PromptTokensDetails {
+				if resp.Usage.CacheReadInputTokens > 0 {
+					return &domain.PromptTokensDetails{CachedTokens: resp.Usage.CacheReadInputTokens}
+				}
+				return nil
+			}(),
 		},
 	}, nil
 }

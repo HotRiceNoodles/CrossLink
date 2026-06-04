@@ -105,10 +105,15 @@ type OpenAIUsage struct {
 	CompletionTokens        int                       `json:"completion_tokens"`
 	TotalTokens             int                       `json:"total_tokens"`
 	CompletionTokensDetails *CompletionTokensDetails  `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails     *PromptTokensDetails      `json:"prompt_tokens_details,omitempty"`
 }
 
 type CompletionTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 // OpenAIChunk is a single SSE chunk from the streaming response.
@@ -152,6 +157,7 @@ type OpenAIChunkUsage struct {
 	CompletionTokens        int                      `json:"completion_tokens"`
 	TotalTokens             int                      `json:"total_tokens"`
 	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 }
 
 // SSEChunk wraps a parsed OpenAIChunk or a [DONE] signal.

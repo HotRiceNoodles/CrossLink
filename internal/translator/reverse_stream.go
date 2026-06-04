@@ -8,11 +8,12 @@ import (
 
 // ReverseStreamTranslator converts Anthropic SSE events into OpenAI SSE chunks.
 type ReverseStreamTranslator struct {
-	messageID    string
-	model        string
-	inputTokens  int
-	outputTokens int
-	activeToolID string
+	messageID       string
+	model           string
+	inputTokens     int
+	outputTokens    int
+	cacheReadTokens int
+	activeToolID    string
 }
 
 func NewReverseStreamTranslator() *ReverseStreamTranslator {
@@ -41,7 +42,8 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage struct {
-				InputTokens int `json:"input_tokens"`
+				InputTokens          int `json:"input_tokens"`
+				CacheReadInputTokens int `json:"cache_read_input_tokens"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -52,6 +54,7 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 	t.messageID = evt.Message.ID
 	t.model = evt.Message.Model
 	t.inputTokens = evt.Message.Usage.InputTokens
+	t.cacheReadTokens = evt.Message.Usage.CacheReadInputTokens
 
 	chunk := &domain.OpenAIChunk{
 		ID:     t.messageID,
@@ -203,6 +206,12 @@ func (t *ReverseStreamTranslator) handleMessageDelta(data []byte) []domain.SSECh
 			PromptTokens:     t.inputTokens,
 			CompletionTokens: t.outputTokens,
 			TotalTokens:      t.inputTokens + t.outputTokens,
+			PromptTokensDetails: func() *domain.PromptTokensDetails {
+				if t.cacheReadTokens > 0 {
+					return &domain.PromptTokensDetails{CachedTokens: t.cacheReadTokens}
+				}
+				return nil
+			}(),
 		},
 	}
 	return []domain.SSEChunk{{Chunk: chunk}}

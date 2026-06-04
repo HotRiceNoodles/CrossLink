@@ -22,6 +22,8 @@ type StreamTranslator struct {
 	requestedModel string
 	inputTokens    int
 	outputTokens   int
+	reasoningTokens int
+	cacheReadTokens int
 	blockIndex     int
 
 	// Block type tracking: "text", "thinking", or "" (no active block)
@@ -42,8 +44,10 @@ func NewStreamTranslator(messageID, requestedModel string, inputTokens int) *Str
 	}
 }
 
-func (t *StreamTranslator) InputTokens() int  { return t.inputTokens }
-func (t *StreamTranslator) OutputTokens() int { return t.outputTokens }
+func (t *StreamTranslator) InputTokens() int     { return t.inputTokens }
+func (t *StreamTranslator) OutputTokens() int    { return t.outputTokens }
+func (t *StreamTranslator) ReasoningTokens() int { return t.reasoningTokens }
+func (t *StreamTranslator) CacheReadTokens() int { return t.cacheReadTokens }
 
 func GenerateMessageID() string { return generateMessageID() }
 
@@ -71,6 +75,12 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 		if chunk.Usage != nil {
 			t.inputTokens = chunk.Usage.PromptTokens
 			t.outputTokens = chunk.Usage.CompletionTokens
+			if chunk.Usage.CompletionTokensDetails != nil {
+				t.reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			if chunk.Usage.PromptTokensDetails != nil {
+				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 		}
 		return events
 	}
@@ -131,6 +141,12 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 			}
 			if chunk.Usage.CompletionTokens > 0 {
 				t.outputTokens = chunk.Usage.CompletionTokens
+			}
+			if chunk.Usage.CompletionTokensDetails != nil {
+				t.reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			if chunk.Usage.PromptTokensDetails != nil {
+				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
 		}
 

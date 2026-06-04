@@ -30,6 +30,12 @@ func OpenAIToAnthropic(resp *domain.OpenAIResponse, requestedModel string) (*dom
 		Usage: domain.AnthropicUsage{
 			InputTokens:  resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens,
+			CacheReadInputTokens: func() int {
+				if resp.Usage.PromptTokensDetails != nil {
+					return resp.Usage.PromptTokensDetails.CachedTokens
+				}
+				return 0
+			}(),
 		},
 	}, nil
 }
