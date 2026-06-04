@@ -50,7 +50,7 @@ func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService,
 	return h
 }
 
-func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int) {
+func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
 	var teamID int64
 	orgID := c.GetInt64("org_id")
@@ -81,6 +81,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     retryCount,
+			SessionID:      sessionID,
 		})
 	})
 }
@@ -218,7 +219,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	if result.FinalError != nil {
 		slog.Error("all openai providers failed", "model", req.Model, "attempts", len(result.Attempts))
 		statusCode := mapProviderErrorStatus(result.FinalError)
-		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries)
+		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries, sessionID)
 		c.JSON(statusCode, gin.H{"error": map[string]string{"message": safeProviderError(result.FinalError)}})
 		return
 	}
@@ -335,9 +336,12 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			Currency:       route.Currency,
 			OutputPrice:    route.OutputPrice,
 			StatusCode:     http.StatusOK,
-			LatencyMs:      latency,
-			FallbackCount:  result.FallbackCount,
-			RetryCount:     totalRetries,
+			LatencyMs:       latency,
+			FallbackCount:   result.FallbackCount,
+			RetryCount:      totalRetries,
+			ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
+			CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
+			SessionID:       sessionID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -418,7 +422,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	if result.FinalError != nil {
 		slog.Error("all stream providers failed", "model", req.Model, "attempts", len(result.Attempts))
 		statusCode := mapProviderErrorStatus(result.FinalError)
-		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries)
+		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries, sessionID)
 		c.JSON(statusCode, gin.H{"error": map[string]string{"message": safeProviderError(result.FinalError)}})
 		return
 	}
@@ -440,6 +444,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	c.Status(http.StatusOK)
 
 	var inputTokens, outputTokens int
+	var reasoningTokens, cacheReadTokens int
 	var outputEstimate int
 	var modelRespBuf strings.Builder
 	var gotDone bool
@@ -509,6 +514,12 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			if chunk.Chunk.Usage != nil {
 				inputTokens = chunk.Chunk.Usage.PromptTokens
 				outputTokens = chunk.Chunk.Usage.CompletionTokens
+				if chunk.Chunk.Usage.CompletionTokensDetails != nil {
+					reasoningTokens = chunk.Chunk.Usage.CompletionTokensDetails.ReasoningTokens
+				}
+				if chunk.Chunk.Usage.PromptTokensDetails != nil {
+					cacheReadTokens = chunk.Chunk.Usage.PromptTokensDetails.CachedTokens
+				}
 			}
 			if len(chunk.Chunk.Choices) > 0 {
 				content := chunk.Chunk.Choices[0].Delta.Content
@@ -571,6 +582,12 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			if chunk.Chunk.Usage != nil {
 				inputTokens = chunk.Chunk.Usage.PromptTokens
 				outputTokens = chunk.Chunk.Usage.CompletionTokens
+				if chunk.Chunk.Usage.CompletionTokensDetails != nil {
+					reasoningTokens = chunk.Chunk.Usage.CompletionTokensDetails.ReasoningTokens
+				}
+				if chunk.Chunk.Usage.PromptTokensDetails != nil {
+					cacheReadTokens = chunk.Chunk.Usage.PromptTokensDetails.CachedTokens
+				}
 			}
 			if len(chunk.Chunk.Choices) > 0 {
 				content := chunk.Chunk.Choices[0].Delta.Content
@@ -638,10 +655,13 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			Currency:       route.Currency,
 			OutputPrice:    route.OutputPrice,
 			StatusCode:     http.StatusOK,
-			LatencyMs:      latency,
-			FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
-			FallbackCount:  result.FallbackCount,
-			RetryCount:     totalRetries,
+			LatencyMs:       latency,
+			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
+			FallbackCount:   result.FallbackCount,
+			RetryCount:      totalRetries,
+			ReasoningTokens: reasoningTokens,
+			CacheReadTokens: cacheReadTokens,
+			SessionID:       sessionID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -675,6 +695,20 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }
+func extractReasoningTokens(d *domain.CompletionTokensDetails) int {
+	if d != nil {
+		return d.ReasoningTokens
+	}
+	return 0
+}
+
+func extractCacheReadTokens(d *domain.PromptTokensDetails) int {
+	if d != nil {
+		return d.CachedTokens
+	}
+	return 0
+}
+
 func firstTokenMsValue(start time.Time, firstTokenAt time.Time) int64 {
 	if firstTokenAt.IsZero() {
 		return 0

@@ -36,18 +36,20 @@ func NewGatewayService(resolver *router.Resolver, _ *provider.Registry, latencyS
 }
 
 type ChatResult struct {
-	Response      *domain.AnthropicResponse
-	InputTokens   int
-	OutputTokens  int
-	LatencyMs     int64
-	ProviderName  string
-	ProviderID    int64
-	ModelUsed     string
-	InputPrice    float64
-	OutputPrice   float64
-	Currency      string
-	FallbackCount int
-	RetryCount    int
+	Response        *domain.AnthropicResponse
+	InputTokens     int
+	OutputTokens    int
+	LatencyMs       int64
+	ProviderName    string
+	ProviderID      int64
+	ModelUsed       string
+	InputPrice      float64
+	OutputPrice     float64
+	Currency        string
+	FallbackCount   int
+	RetryCount      int
+	ReasoningTokens int
+	CacheReadTokens int
 }
 
 func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest, sessionID string, orgID int64) (*ChatResult, error) {
@@ -135,18 +137,20 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		s.latencySvc.RecordLatency(ctx, providerName, latency)
 	}
 	return &ChatResult{
-		Response:      anthropicResp,
-		InputTokens:   openaiResp.Usage.PromptTokens,
-		OutputTokens:  openaiResp.Usage.CompletionTokens,
-		LatencyMs:     latency,
-		ProviderName:  providerName,
-		ProviderID:    route.ProviderRow.ID,
-		ModelUsed:     route.ProviderModel,
-		InputPrice:    route.InputPrice,
-		OutputPrice:   route.OutputPrice,
-		Currency:      route.Currency,
-		FallbackCount: result.FallbackCount,
-		RetryCount:    totalRetries,
+		Response:        anthropicResp,
+		InputTokens:     openaiResp.Usage.PromptTokens,
+		OutputTokens:    openaiResp.Usage.CompletionTokens,
+		LatencyMs:       latency,
+		ProviderName:    providerName,
+		ProviderID:      route.ProviderRow.ID,
+		ModelUsed:       route.ProviderModel,
+		InputPrice:      route.InputPrice,
+		OutputPrice:     route.OutputPrice,
+		Currency:        route.Currency,
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      totalRetries,
+		ReasoningTokens: extractReasoningTokens(openaiResp.Usage.CompletionTokensDetails),
+		CacheReadTokens: extractCacheReadTokens(openaiResp.Usage.PromptTokensDetails),
 	}, nil
 }
 
@@ -257,17 +261,19 @@ loop:
 		s.latencySvc.RecordLatency(ctx, providerName, latency)
 	}
 	return &StreamResult{
-		InputTokens:   st.InputTokens(),
-		OutputTokens:  st.OutputTokens(),
-		LatencyMs:     latency,
-		ProviderName:  providerName,
-		ProviderID:    route.ProviderRow.ID,
-		ModelUsed:     route.ProviderModel,
-		InputPrice:    route.InputPrice,
-		OutputPrice:   route.OutputPrice,
-		Currency:      route.Currency,
-		FallbackCount: result.FallbackCount,
-		RetryCount:    totalRetries,
+		InputTokens:     st.InputTokens(),
+		OutputTokens:    st.OutputTokens(),
+		LatencyMs:       latency,
+		ProviderName:    providerName,
+		ProviderID:      route.ProviderRow.ID,
+		ModelUsed:       route.ProviderModel,
+		InputPrice:      route.InputPrice,
+		OutputPrice:     route.OutputPrice,
+		Currency:        route.Currency,
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      totalRetries,
+		ReasoningTokens: st.ReasoningTokens(),
+		CacheReadTokens: st.CacheReadTokens(),
 	}, nil
 }
 
@@ -289,17 +295,19 @@ func estimateInputTokens(req *domain.OpenAIRequest) int {
 }
 
 type StreamResult struct {
-	InputTokens   int
-	OutputTokens  int
-	LatencyMs     int64
-	ProviderName  string
-	ProviderID    int64
-	ModelUsed     string
-	InputPrice    float64
-	OutputPrice   float64
-	Currency      string
-	FallbackCount int
-	RetryCount    int
+	InputTokens     int
+	OutputTokens    int
+	LatencyMs       int64
+	ProviderName    string
+	ProviderID      int64
+	ModelUsed       string
+	InputPrice      float64
+	OutputPrice     float64
+	Currency        string
+	FallbackCount   int
+	RetryCount      int
+	ReasoningTokens int
+	CacheReadTokens int
 }
 
 type RouteError struct {
@@ -316,4 +324,18 @@ func (e *RouteError) Error() string {
 
 func (e *RouteError) Unwrap() error {
 	return e.Inner
+}
+
+func extractReasoningTokens(d *domain.CompletionTokensDetails) int {
+	if d != nil {
+		return d.ReasoningTokens
+	}
+	return 0
+}
+
+func extractCacheReadTokens(d *domain.PromptTokensDetails) int {
+	if d != nil {
+		return d.CachedTokens
+	}
+	return 0
 }

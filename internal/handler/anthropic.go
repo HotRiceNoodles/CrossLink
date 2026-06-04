@@ -44,7 +44,7 @@ func NewAnthropicHandler(svc *service.GatewayService, usageSvc *service.UsageSer
 	return &AnthropicHandler{svc: svc, usageSvc: usageSvc, idemCache: idemCache, guardrailSvc: guardrailSvc}
 }
 
-func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error) {
+func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error, sessionID string) {
 	var keyID int64
 	var teamID int64
 	orgID := c.GetInt64("org_id")
@@ -153,7 +153,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	orgID := c.GetInt64("org_id")
 	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID, orgID)
 	if err != nil {
-		h.logFailure(c, req.Model, start, err)
+		h.logFailure(c, req.Model, start, err, sessionID)
 		h.writeError(c, err, req.Model)
 		return
 	}
@@ -254,9 +254,12 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			OutputPrice:    result.OutputPrice,
 			Currency:       result.Currency,
 			LatencyMs:      result.LatencyMs,
-			StatusCode:     http.StatusOK,
-			FallbackCount:  result.FallbackCount,
-			RetryCount:     result.RetryCount,
+			StatusCode:      http.StatusOK,
+			FallbackCount:   result.FallbackCount,
+			RetryCount:      result.RetryCount,
+			ReasoningTokens: result.ReasoningTokens,
+			CacheReadTokens: result.CacheReadTokens,
+			SessionID:       sessionID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -434,7 +437,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 
 	if err != nil {
 		slog.Error("stream error", "error", err, "model", req.Model)
-		h.logFailure(c, req.Model, start, err)
+		h.logFailure(c, req.Model, start, err, sessionID)
 		errData, _ := json.Marshal(map[string]any{
 			"type":    "api_error",
 			"message": safeProviderError(err),
@@ -466,10 +469,13 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			OutputPrice:    result.OutputPrice,
 			Currency:       result.Currency,
 			LatencyMs:      result.LatencyMs,
-			FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
-			StatusCode:     http.StatusOK,
-			FallbackCount:  result.FallbackCount,
-			RetryCount:     result.RetryCount,
+			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
+			StatusCode:      http.StatusOK,
+			FallbackCount:   result.FallbackCount,
+			RetryCount:      result.RetryCount,
+			ReasoningTokens: result.ReasoningTokens,
+			CacheReadTokens: result.CacheReadTokens,
+			SessionID:       sessionID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {

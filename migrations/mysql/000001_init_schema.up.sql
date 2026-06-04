@@ -327,6 +327,9 @@ CREATE TABLE usage_logs (
     agent_type        VARCHAR(32),
     security_events   JSON DEFAULT ('[]'),
     org_id            BIGINT,
+    reasoning_tokens  INT NOT NULL DEFAULT 0,
+    cache_read_tokens INT NOT NULL DEFAULT 0,
+    session_id        VARCHAR(255),
     created_at        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     CONSTRAINT fk_usage_logs_key FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL,
     CONSTRAINT fk_usage_logs_provider FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE SET NULL,
@@ -348,6 +351,7 @@ CREATE INDEX idx_usage_logs_team_id ON usage_logs(team_id);
 --   idx_usage_logs_agent_type WHERE agent_type IS NOT NULL
 --   idx_usage_logs_error_type WHERE error_type IS NOT NULL
 CREATE INDEX idx_usage_logs_org_id ON usage_logs(org_id);
+CREATE INDEX idx_usage_logs_session_id ON usage_logs(session_id);
 CREATE INDEX idx_usage_logs_status_code ON usage_logs(status_code);
 
 -- ============================================================

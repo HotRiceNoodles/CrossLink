@@ -306,6 +306,9 @@ CREATE TABLE usage_logs (
     agent_type        TEXT,
     security_events   TEXT DEFAULT '[]',
     org_id            INTEGER REFERENCES organizations(id),
+    reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    session_id        TEXT,
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -319,6 +322,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_fallback ON usage_logs(fallback_count)
 CREATE INDEX IF NOT EXISTS idx_usage_logs_retry ON usage_logs(retry_count) WHERE retry_count > 0;
 CREATE INDEX IF NOT EXISTS idx_usage_logs_guardrail ON usage_logs(guardrail_triggered) WHERE guardrail_triggered = 1;
 CREATE INDEX IF NOT EXISTS idx_usage_logs_cache_hit ON usage_logs(cache_hit) WHERE cache_hit = 1;
+CREATE INDEX IF NOT EXISTS idx_usage_logs_session_id ON usage_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_agent_type ON usage_logs(agent_type) WHERE agent_type IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_usage_logs_org_id ON usage_logs(org_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_status_code ON usage_logs(status_code);

@@ -107,6 +107,9 @@ type UsageEntry struct {
 	AgentType           string
 	SecurityEvents      datatypes.JSON
 	CacheHit            bool
+	ReasoningTokens     int
+	CacheReadTokens     int
+	SessionID           string
 	PrecomputedCost float64
 }
 
@@ -137,6 +140,9 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 		CacheHit:           entry.CacheHit,
 		AgentType:          entry.AgentType,
 		SecurityEvents:     entry.SecurityEvents,
+		ReasoningTokens:    entry.ReasoningTokens,
+		CacheReadTokens:    entry.CacheReadTokens,
+		SessionID:          entry.SessionID,
 	}
 	if entry.FirstTokenMs > 0 {
 		ms := int(entry.FirstTokenMs)

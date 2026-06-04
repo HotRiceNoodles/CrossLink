@@ -33,6 +33,9 @@ type UsageLog struct {
 	AgentType          string     `gorm:"size:32" json:"agent_type,omitempty"`
 	SecurityEvents     datatypes.JSON `gorm:"default:'[]'" json:"security_events,omitempty"`
 	OrgID              *int64     `gorm:"index" json:"org_id"`
+	ReasoningTokens    int        `gorm:"default:0" json:"reasoning_tokens"`
+	CacheReadTokens    int        `gorm:"default:0" json:"cache_read_tokens"`
+	SessionID          string     `gorm:"size:255;index" json:"session_id,omitempty"`
 	CreatedAt          time.Time  `gorm:"not null;index" json:"created_at"`
 }
 
