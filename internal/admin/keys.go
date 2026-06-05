@@ -111,6 +111,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		CallPeriod:    input.CallPeriod,
 		CreatedByID:   GetUserID(c),
 		TeamID:        GetTeamID(c),
+		OrgID:         GetOrgID(c),
 	})
 	if err != nil {
 		internalErr(c, err, "create key failed")

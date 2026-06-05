@@ -48,6 +48,7 @@ type CreateKeyInput struct {
 	ExpiresAt     *time.Time
 	CreatedByID   int64
 	TeamID        int64
+	OrgID         int64
 }
 
 type CreateKeyResult struct {
@@ -93,6 +94,9 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 	}
 	if input.TeamID > 0 {
 		key.TeamID = &input.TeamID
+	}
+	if input.OrgID > 0 {
+		key.OrgID = &input.OrgID
 	}
 	if input.Email != "" {
 		key.Email = &input.Email
