@@ -156,6 +156,16 @@ func isInternalIP(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
+		// Hostname that isn't a bare IP — resolve via DNS
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return true // treat unresolvable as internal to be safe
+		}
+		for _, resolved := range ips {
+			if isInternalIPAddr(resolved) {
+				return true
+			}
+		}
 		return false
 	}
 	return isInternalIPAddr(ip)

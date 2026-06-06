@@ -97,6 +97,12 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
 		return
 	}
+	if input.BaseURL != "" {
+		if u, err := url.Parse(input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
+			errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
+			return
+		}
+	}
 
 	p := &model.Provider{
 		Name:        input.Name,
@@ -170,6 +176,12 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		p.AdapterType = *input.AdapterType
 	}
 	if input.BaseURL != nil {
+		if *input.BaseURL != "" {
+			if u, err := url.Parse(*input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
+				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
+				return
+			}
+		}
 		p.BaseURL = *input.BaseURL
 	}
 	if input.APIKey != nil {
@@ -212,7 +224,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"before": before, "after": sanitizeProviderFromModel(p)}))
 	}
-	c.JSON(http.StatusOK, gin.H{"data": p})
+	c.JSON(http.StatusOK, gin.H{"data": redactExtraConfig(p)})
 }
 
 func (h *ProviderHandler) Delete(c *gin.Context) {
