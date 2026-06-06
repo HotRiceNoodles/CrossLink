@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,11 +18,23 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// NOTE: This middleware does not rate-limit failed authentication attempts on the gateway API.
-// Admin login paths are protected by LoginRateLimit middleware. For gateway API key brute-force
-// protection, deploy a WAF or reverse proxy rate limiter in front of the gateway.
+// NOTE: This middleware enforces IP-based rate limiting on failed authentication attempts.
+// If an IP exceeds the failure threshold, it is blocked before any key validation attempt.
 func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Check if IP is temporarily blocked due to too many auth failures
+		if rdb != nil {
+			failKey := fmt.Sprintf("authfail:ip:%s", c.ClientIP())
+			if count, _ := rdb.Get(c.Request.Context(), failKey).Int(); count >= 10 {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "rate_limit_error", "message": "too many authentication failures, try again later"},
+				})
+				c.Abort()
+				return
+			}
+		}
+
 		apiKey := extractAPIKey(c)
 		if apiKey == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -54,7 +68,9 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.Han
 		// Fallback to config auth key
 		// NOTE: The config auth key has no expiration or disable mechanism.
 		// If compromised, restart the server with a new config.
+		// Warning: this key bypasses all API key-level restrictions.
 		if authKey != "" && subtle.ConstantTimeCompare([]byte(apiKey), []byte(authKey)) == 1 {
+			slog.Warn("gateway request authenticated via config auth key (not a database key); consider migrating to database-managed API keys", "ip", c.ClientIP())
 			ClearAuthFailures(rdb, c.ClientIP(), "")
 			c.Next()
 			return
