@@ -351,7 +351,8 @@ func verifyPassword(password, hash string) bool {
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
 		return true
 	}
-	// Fallback to legacy SHA-256
+	// Fallback to legacy SHA-256 — always run bcrypt against dummy first to normalize timing
+	bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
 	h := sha256.Sum256([]byte(password))
 	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(h[:])), []byte(hash)) == 1
 }

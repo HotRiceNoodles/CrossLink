@@ -27,6 +27,10 @@ func buildAuth(db *gorm.DB, cfg *config.Config) {
 		slog.Error("JWT secret must be at least 32 characters", "length", len(cfg.Admin.JWTSecret))
 		os.Exit(1)
 	}
+	if cfg.Admin.IsDefaultPassword() {
+		slog.Error("insecure default admin password detected: change admin.password in config or set CL_ADMIN_PASSWORD env var")
+		os.Exit(1)
+	}
 	ensureAdminUser(db, &cfg.Admin)
 	ensureDefaultOrganization(db)
 	syncAdminPermissions(db)

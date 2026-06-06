@@ -299,6 +299,10 @@ func (a AdminConfig) IsDefaultJWTSecret() bool {
 	return a.JWTSecret == "" || a.JWTSecret == "change-me-to-a-random-secret" || a.JWTSecret == "dev-secret-change-in-production"
 }
 
+func (a AdminConfig) IsDefaultPassword() bool {
+	return a.Password == "changeme"
+}
+
 func (a AdminConfig) IsJWTSecretInsecure() bool {
 	return len(a.JWTSecret) < 32
 }
@@ -439,7 +443,7 @@ func WriteLicenseKey(key string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, out, 0644); err != nil {
+	if err := os.WriteFile(path, out, 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil

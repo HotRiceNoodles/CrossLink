@@ -104,6 +104,13 @@ func (h *SystemHandler) Info(c *gin.Context) {
 }
 
 func (h *SystemHandler) ChangePassword(c *gin.Context) {
+	// Only admin users can change the system admin password.
+	// Non-admin users should use ChangeForcedPasswordHandler for self-service.
+	if !IsAdmin(c) {
+		errorResp(c, http.StatusForbidden, ErrInsufficientPermissions, "insufficient permissions")
+		return
+	}
+
 	var req struct {
 		OldPassword string `json:"old_password" binding:"required"`
 		NewPassword string `json:"new_password" binding:"required,min=8,max=128"`
