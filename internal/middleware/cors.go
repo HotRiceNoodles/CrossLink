@@ -49,11 +49,39 @@ func CORS(cfg ...CORSConfig) gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, X-Requested-With")
 		c.Header("Vary", "Origin")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
+		}
+		c.Next()
+	}
+}
+
+// CSRFGuard rejects state-changing requests (POST, PUT, DELETE, PATCH) to admin API
+// that lack the X-Requested-With header. HTML forms cannot set custom headers,
+// so this prevents cross-origin form-submission CSRF attacks.
+func CSRFGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		method := c.Request.Method
+		if method == "POST" || method == "PUT" || method == "DELETE" || method == "PATCH" {
+			path := c.Request.URL.Path
+			// Skip gateway API paths (authenticated via API key, not cookies)
+			if len(path) >= 3 && path[:3] == "/v1" {
+				c.Next()
+				return
+			}
+			// Skip login/logout (no JWT yet)
+			if strings.HasSuffix(path, "/auth/login") || strings.HasSuffix(path, "/auth/logout") {
+				c.Next()
+				return
+			}
+			xrw := c.GetHeader("X-Requested-With")
+			if xrw == "" {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "missing X-Requested-With header"})
+				return
+			}
 		}
 		c.Next()
 	}
