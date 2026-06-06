@@ -2,10 +2,12 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/repository"
+	"github.com/crosslink/internal/service"
 )
 
 var validModules = map[string]bool{
@@ -20,12 +22,21 @@ var validTemplates = map[string]bool{
 	"executive": true, "operations": true, "security": true,
 }
 
-type PreferencesHandler struct {
-	userRepo *repository.UserRepo
+var validPreferenceKeys = map[string]bool{
+	"overview_screen":    true,
+	"theme":              true,
+	"language":           true,
+	"sidebar_collapsed":  true,
+	"default_provider":   true,
 }
 
-func NewPreferencesHandler(userRepo *repository.UserRepo) *PreferencesHandler {
-	return &PreferencesHandler{userRepo: userRepo}
+type PreferencesHandler struct {
+	userRepo *repository.UserRepo
+	auditSvc *service.AuditService
+}
+
+func NewPreferencesHandler(userRepo *repository.UserRepo, auditSvc *service.AuditService) *PreferencesHandler {
+	return &PreferencesHandler{userRepo: userRepo, auditSvc: auditSvc}
 }
 
 func (h *PreferencesHandler) Get(c *gin.Context) {
@@ -69,6 +80,14 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Reject unknown top-level keys
+	for key := range input {
+		if !validPreferenceKeys[key] {
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "unknown preference key: "+key)
+			return
+		}
+	}
+
 	// Validate overview_screen if present
 	if os, ok := input["overview_screen"].(map[string]interface{}); ok {
 		if tmpl, ok := os["template"].(string); ok {
@@ -104,6 +123,11 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 	if err := h.userRepo.Update(c.Request.Context(), user); err != nil {
 		internalErr(c, err, "save preferences failed")
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), user.Username,
+			service.AuditDetail(map[string]any{"after": input}))
 	}
 
 	var result map[string]interface{}

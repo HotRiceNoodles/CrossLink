@@ -15,6 +15,7 @@ const (
 	ErrAccessDenied            = "access_denied"
 	ErrInvalidCredentials      = "invalid_credentials"
 	ErrTokenGenerationFailed   = "token_generation_failed"
+	ErrOrgContextRequired      = "org_context_required"
 
 	// Keys
 	ErrKeyNotFound         = "key_not_found"
