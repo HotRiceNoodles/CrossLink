@@ -180,6 +180,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		SecretResolver: secrets.SecretResolver,
 		EncStore:       secrets.EncStore,
 		DebugStore:     debugStore,
+		Crypto:         cryptoProvider,
 		Config:         cfg,
 	})
 
@@ -229,6 +230,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Login endpoint (no auth, rate limited)
 	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, nil, cryptoProvider))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
+
+	// Commercial public route extension point (SSO login, callback, metadata)
+	if ext.ExtraPublicRoutes != nil {
+		ext.ExtraPublicRoutes(r, ext)
+	}
+
 	r.GET("/admin/api/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"version": version.Version,

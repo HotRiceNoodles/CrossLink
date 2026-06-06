@@ -61,8 +61,9 @@ type Extensions struct {
 	ExtraMiddlewares []func(*gin.RouterGroup, *Extensions)
 	ExtraRoutes      func(*gin.RouterGroup, *Extensions)
 	ExtraMCPRoutes   func(*gin.RouterGroup, *Extensions) // mcpGroup (independent route group)
-	ExtraEngineRoutes func(*gin.Engine, *Extensions)     // main router (for docs, etc.)
-	MCPEncSetter     func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
+	ExtraPublicRoutes  func(*gin.Engine, *Extensions)  // public routes (no auth, e.g. SSO login)
+	ExtraEngineRoutes  func(*gin.Engine, *Extensions)  // main router (for docs, etc.)
+	MCPEncSetter       func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
 	Gate             GateInterface
 	Deps             *AppDeps
 }

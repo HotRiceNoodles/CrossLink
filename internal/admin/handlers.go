@@ -3,6 +3,7 @@ package admin
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
+	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/repository"
@@ -40,6 +41,7 @@ type AdminDeps struct {
 	SecretResolver *secret.SecretResolver
 	EncStore       *secret.EncryptedDBStore
 	DebugStore     *debug.Store
+	Crypto         crypto.CryptoProvider
 	Config         *config.Config
 }
 
