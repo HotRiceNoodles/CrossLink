@@ -127,7 +127,8 @@ func TestDSNURL(t *testing.T) {
 		DBName:   "testdb",
 		SSLMode:  "require",
 	}
-	expected := "postgres://testuser:s@cr!t@db.example.com:5433/testdb?sslmode=require"
+	expected := "postgres://testuser:s%40cr%21t@db.example.com:5433/testdb?sslmode=require"
+	// url.UserPassword properly encodes @ and ! in the password for userinfo
 	if d.DSNURL() != expected {
 		t.Errorf("DSNURL() = %q, want %q", d.DSNURL(), expected)
 	}

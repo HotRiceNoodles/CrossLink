@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -66,11 +67,17 @@ func (d DatabaseConfig) DSN() string {
 func (d DatabaseConfig) DSNURL() string {
 	switch d.Driver {
 	case "postgres", "kingbase", "kingbasees":
-		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			d.User, d.Password, d.Host, d.Port, d.DBName, d.SSLMode)
+		u := &url.URL{
+			Scheme:   "postgres",
+			User:     url.UserPassword(d.User, d.Password),
+			Host:     fmt.Sprintf("%s:%d", d.Host, d.Port),
+			Path:     d.DBName,
+			RawQuery: "sslmode=" + d.SSLMode,
+		}
+		return u.String()
 	case "mysql", "oceanbase":
-		return fmt.Sprintf("mysql://%s:%s@tcp(%s:%d)/%s",
-			d.User, d.Password, d.Host, d.Port, d.DBName)
+		return fmt.Sprintf("mysql://%s@tcp(%s:%d)/%s",
+			url.UserPassword(d.User, d.Password).String(), d.Host, d.Port, d.DBName)
 	default:
 		return ""
 	}
