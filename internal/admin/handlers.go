@@ -43,11 +43,10 @@ type AdminDeps struct {
 	DebugStore     *debug.Store
 	Crypto         crypto.CryptoProvider
 	Config         *config.Config
+	AuditSvc       *service.AuditService // set by commercial build; nil in Community
 }
 
 // ProvideAdminHandlers constructs all admin handlers from their dependencies.
-// The nil auditSvc parameters are commercial extension hooks — the commercial
-// overlay replaces them at build time.
 func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 	return &AdminHandlers{
 		Provider: NewProviderHandler(
@@ -58,7 +57,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.CacheSvc,
 			deps.SecretResolver,
 			deps.EncStore,
-			nil, // auditSvc — commercial extension hook
+			deps.AuditSvc,
 			deps.Svcs.UsageSvc,
 		deps.Svcs.LatencySvc,
 		),
@@ -66,13 +65,13 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.Repos.ProviderModelCRUDRepo,
 			deps.Resolver,
 			deps.CacheSvc,
-			nil, // auditSvc — commercial extension hook
+			deps.AuditSvc,
 		),
 		Key: NewKeyHandler(
 			deps.Svcs.KeySvc,
 			deps.Repos.TeamRepo,
 			deps.RDB,
-			nil, // auditSvc — commercial extension hook
+			deps.AuditSvc,
 		),
 		Usage: NewUsageHandler(deps.DB, ""),
 		System: NewSystemHandler(
@@ -83,14 +82,14 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.DebugStore,
 			deps.Health,
 			deps.RetryBudget,
-			nil, // auditSvc — commercial extension hook
+			deps.AuditSvc,
 		),
 		Debug: NewDebugHandler(
 			deps.DebugStore,
-			nil, // auditSvc — commercial extension hook
+			deps.AuditSvc,
 		),
 		License: NewLicenseHandler(deps.DB, deps.Config),
-		Preferences: NewPreferencesHandler(deps.Repos.UserRepo),
+		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
 		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo),
 	}
 }

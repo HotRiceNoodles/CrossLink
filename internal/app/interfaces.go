@@ -52,6 +52,7 @@ type AppDeps struct {
 	DebugStore     *debug.Store
 	Crypto         crypto.CryptoProvider
 	OrgCache       *middleware.OrgCache
+	AuditSvc       *service.AuditService // set by commercial ExtraPublicRoutes; nil in Community
 }
 
 // Extensions holds Commercial-only plugins injected at startup.

@@ -166,36 +166,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageWorkers := worker.NewPool(15, 1000)
 	handler.SetUsageWorkers(usageWorkers)
 	modelsHandler := handler.NewModelsHandler(db)
-	// Admin handlers
-	handlers := admin.ProvideAdminHandlers(&admin.AdminDeps{
-		DB:             db,
-		RDB:            rdb,
-		Repos:          repos,
-		Svcs:           svcs,
-		Resolver:       infra.Resolver,
-		Registry:       infra.Registry,
-		Health:         infra.Health,
-		RetryBudget:    infra.RetryBudget,
-		CacheSvc:       svcs.CacheSvc,
-		SecretResolver: secrets.SecretResolver,
-		EncStore:       secrets.EncStore,
-		DebugStore:     debugStore,
-		Crypto:         cryptoProvider,
-		Config:         cfg,
-	})
-
-	// Wire registry sync: notify other instances on provider mutations,
-	// subscribe for reload notifications from other instances.
-	if infra.RegistrySync != nil {
-		handlers.Provider.OnRegistryChange = func(action, providerName string) {
-			if action == "remove" {
-				infra.RegistrySync.NotifyRemove(providerName)
-			} else {
-				infra.RegistrySync.NotifyReload(providerName)
-			}
-		}
-		go infra.RegistrySync.Start(appCtx)
-	}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -227,28 +197,61 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Serve Vue3 frontend static files
 	serveFrontend(r)
 
-	// Login endpoint (no auth, rate limited)
-	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, nil, cryptoProvider))
-	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
-
 	// Commercial public route extension point (SSO login, callback, metadata)
+	// Must run BEFORE login route registration so that commercial builds can
+	// inject AuditSvc into deps for LoginHandler/ChangeForcedPasswordHandler.
 	if ext.ExtraPublicRoutes != nil {
 		ext.ExtraPublicRoutes(r, ext)
 	}
 
-	r.GET("/admin/api/version", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"version": version.Version,
-		})
+
+	// Admin handlers — created after ExtraPublicRoutes so commercial builds can inject AuditSvc.
+	handlers := admin.ProvideAdminHandlers(&admin.AdminDeps{
+		DB:             db,
+		RDB:            rdb,
+		Repos:          repos,
+		Svcs:           svcs,
+		Resolver:       infra.Resolver,
+		Registry:       infra.Registry,
+		Health:         infra.Health,
+		RetryBudget:    infra.RetryBudget,
+		CacheSvc:       svcs.CacheSvc,
+		SecretResolver: secrets.SecretResolver,
+		EncStore:       secrets.EncStore,
+		DebugStore:     debugStore,
+		Crypto:         cryptoProvider,
+		Config:         cfg,
+		AuditSvc:       ext.Deps.AuditSvc,
 	})
+
+	// Wire registry sync: notify other instances on provider mutations,
+	// subscribe for reload notifications from other instances.
+	if infra.RegistrySync != nil {
+		handlers.Provider.OnRegistryChange = func(action, providerName string) {
+			if action == "remove" {
+				infra.RegistrySync.NotifyRemove(providerName)
+			} else {
+				infra.RegistrySync.NotifyReload(providerName)
+			}
+		}
+		go infra.RegistrySync.Start(appCtx)
+	}
+	// Login endpoint (no auth, rate limited)
+	// Registered after ExtraPublicRoutes so deps.AuditSvc is available.
+	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider))
+	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
+
 
 	// Lightweight auth endpoints (JWT required, exempt from rate limit)
 	authGroup := r.Group("/admin/api")
 	authGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
 	authGroup.Use(middleware.OrgResolve())
 	{
+		authGroup.GET("/version", func(c *gin.Context) {
+			c.JSON(200, gin.H{"version": version.Version})
+		})
 		authGroup.GET("/auth/permissions", handlers.Perms)
-		authGroup.POST("/auth/change-forced-password", admin.ChangeForcedPasswordHandler(repos.UserRepo, repos.RoleRepo, repos.OrgRepo, repos.TeamRepo, cfg.Admin, nil, cryptoProvider))
+		authGroup.POST("/auth/change-forced-password", admin.ChangeForcedPasswordHandler(repos.UserRepo, repos.RoleRepo, repos.OrgRepo, repos.TeamRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider))
 	}
 
 	// Admin API (JWT auth + rate limit)
@@ -256,6 +259,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	adminGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
 	adminGroup.Use(middleware.OrgResolve())
 	adminGroup.Use(middleware.AdminRateLimit(rdb, 300, time.Minute, ""))
+	adminGroup.Use(middleware.CSRFGuard())
 	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	{
 		// Providers
