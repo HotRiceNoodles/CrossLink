@@ -110,16 +110,16 @@ func (h *DebugHandler) Get(c *gin.Context) {
 		return
 	}
 
-	reqBody := tryPrettyJSON(entry.ReqBody)
+	reqBody := truncateBody(tryPrettyJSON(entry.ReqBody))
 	respBody := string(entry.RespBody)
 	if !entry.Stream {
-		respBody = tryPrettyJSON(entry.RespBody)
+		respBody = truncateBody(tryPrettyJSON(entry.RespBody))
 	}
 
 	// Build upstream call summaries
 	var upstreamCalls []upstreamCallSummary
 	for i, uc := range entry.UpstreamCalls {
-		ucReqBody := tryPrettyJSON(uc.ReqBody)
+		ucReqBody := truncateBody(tryPrettyJSON(uc.ReqBody))
 		ucRespBody := string(uc.RespBody)
 		upstreamCalls = append(upstreamCalls, upstreamCallSummary{
 			Seq:         i + 1,
@@ -170,6 +170,16 @@ func (h *DebugHandler) Clear(c *gin.Context) {
 		h.auditSvc.LogFromContext(c, "debug:clear", "debug", "", "", nil)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "cleared"})
+}
+
+const maxDebugBodySize = 10 * 1024 // 10 KB
+
+// truncateBody truncates a string to maxDebugBodySize and appends "[truncated]" if needed.
+func truncateBody(s string) string {
+	if len(s) <= maxDebugBodySize {
+		return s
+	}
+	return s[:maxDebugBodySize] + "\n[truncated]"
 }
 
 func tryPrettyJSON(data []byte) string {
