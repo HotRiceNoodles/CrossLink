@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -109,13 +110,28 @@ func mapProviderErrorStatus(err error) int {
 // safeProviderError returns a client-safe error message.
 // It preserves provider error messages (already user-facing) but replaces
 // internal errors with a generic message to avoid leaking infrastructure details.
+// Provider messages are truncated and stripped of common sensitive patterns
+// (account IDs, organization IDs) to avoid leaking credentials.
 func safeProviderError(err error) string {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) {
-		return pe.Message
+		return sanitizeProviderMessage(pe.Message)
 	}
 	return "upstream provider error"
 }
+
+// sanitizeProviderMessage truncates provider error messages and strips
+// common sensitive patterns like org-xxx account identifiers.
+func sanitizeProviderMessage(msg string) string {
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	// Strip common account/org ID patterns (e.g. org-abc123, org_abc123)
+	msg = regexpOrgID.ReplaceAllString(msg, "[REDACTED]")
+	return msg
+}
+
+var regexpOrgID = regexp.MustCompile(`(?i)\borg[_-][a-zA-Z0-9]{4,}\b`)
 
 const maxRequestBody = 10 << 20 // 10 MB
 const maxResponseBuffer = 1 << 20 // 1 MB buffer cap for content logging
