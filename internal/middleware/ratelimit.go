@@ -167,7 +167,12 @@ func estimateTokens(c *gin.Context) int {
 	}
 
 	if probe.MaxTokens > 0 {
-		total += probe.MaxTokens
+		// Cap max_tokens to prevent excessive TPM reservation
+		maxTok := probe.MaxTokens
+		if maxTok > 32768 {
+			maxTok = 32768
+		}
+		total += maxTok
 	} else {
 		total += 1024
 	}
