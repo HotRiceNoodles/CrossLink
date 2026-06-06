@@ -26,6 +26,77 @@ import (
 
 const bcryptCost = 12
 
+// loginResult holds the resolved data needed to complete a login (password or SSO).
+type loginResult struct {
+	Token       string
+	RoleName    string
+	TeamID      int64
+	OrgID       int64
+	OrgName     string
+	OrgRole     string
+	Permissions []string
+	Tier        string
+}
+
+// resolveLoginResponse resolves role, team, org, generates a JWT token, and
+// builds the common login response. Shared by LoginHandler, ChangeForcedPasswordHandler,
+// and SSO callback.
+func resolveLoginResponse(c *gin.Context, user *model.User,
+	roleRepo *repository.RoleRepo, teamRepo *repository.TeamRepo, orgRepo *repository.OrgRepo,
+	cfg config.AdminConfig, cp crypto.CryptoProvider,
+) (*loginResult, error) {
+	// Resolve role name
+	role, _ := roleRepo.GetByID(c.Request.Context(), user.RoleID)
+	roleName := ""
+	if role != nil {
+		roleName = role.Name
+	}
+
+	// Resolve team ID for JWT claim (skip for admin)
+	var teamID int64
+	if roleName != model.RoleAdmin {
+		teams, _ := teamRepo.ListByUserID(c.Request.Context(), user.ID)
+		if len(teams) > 0 {
+			teamID = teams[0].ID
+		}
+	}
+
+	// Resolve org membership for JWT claim (skip for admin)
+	var orgID int64
+	var orgRole string
+	var orgName string
+	if orgRepo != nil && roleName != model.RoleAdmin {
+		member, err := orgRepo.GetMemberByUserID(c.Request.Context(), user.ID)
+		if err == nil && member != nil {
+			orgID = member.OrgID
+			orgRole = member.Role
+			org, err := orgRepo.GetByID(c.Request.Context(), orgID)
+			if err == nil && org != nil {
+				orgName = org.DisplayName
+			}
+		}
+	}
+
+	token, err := GenerateToken(user, roleName, teamID, orgID, orgRole, cfg, cp)
+	if err != nil {
+		return nil, err
+	}
+
+	dbActions, _ := roleRepo.GetPermissions(c.Request.Context(), user.RoleID)
+	perms := license.EffectiveActions(dbActions)
+
+	return &loginResult{
+		Token:       token,
+		RoleName:    roleName,
+		TeamID:      teamID,
+		OrgID:       orgID,
+		OrgName:     orgName,
+		OrgRole:     orgRole,
+		Permissions: perms,
+		Tier:        license.G().CurrentTier(),
+	}, nil
+}
+
 type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
@@ -92,12 +163,14 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		roleName := claims.RoleName
 		userStatus := int16(1)
 		forcePasswordChange := false
+		passwordHash := ""
 		if db != nil {
 			var user model.User
-			if err := db.WithContext(c.Request.Context()).Select("role_id", "status", "force_password_change").First(&user, claims.UserID).Error; err == nil {
+			if err := db.WithContext(c.Request.Context()).Select("role_id", "status", "force_password_change", "password_hash").First(&user, claims.UserID).Error; err == nil {
 				roleID = user.RoleID
 				userStatus = user.Status
 				forcePasswordChange = user.ForcePasswordChange
+				passwordHash = user.PasswordHash
 				var role model.Role
 				if err := db.WithContext(c.Request.Context()).Select("name").First(&role, roleID).Error; err == nil {
 					roleName = role.Name
@@ -119,8 +192,9 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		c.Set("org_id", claims.OrgID)
 		c.Set("org_role", claims.OrgRole)
 
-		// Force password change: only allow self-service auth endpoints
-		if forcePasswordChange {
+		// Force password change: only allow self-service auth endpoints.
+		// SSO users (empty password_hash) skip this check — they cannot change password.
+		if forcePasswordChange && passwordHash != "" {
 			path := c.Request.URL.Path
 			allowed := path == "/admin/api/auth/change-forced-password" ||
 				path == "/admin/api/auth/permissions" ||
@@ -221,47 +295,11 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 			}
 		}
 
-		// Resolve role name
-		role, _ := roleRepo.GetByID(c.Request.Context(), user.RoleID)
-		roleName := ""
-		if role != nil {
-			roleName = role.Name
-		}
-
-		// Resolve team ID for JWT claim
-		var teamID int64
-		if roleName != model.RoleAdmin {
-			teams, _ := teamRepo.ListByUserID(c.Request.Context(), user.ID)
-			if len(teams) > 0 {
-				teamID = teams[0].ID
-			}
-		}
-
-		// Resolve org membership for JWT claim
-		var orgID int64
-		var orgRole string
-		var orgName string
-		// Super Admins (system admin role) operate globally — org_id stays 0
-		if orgRepo != nil && roleName != model.RoleAdmin {
-			member, err := orgRepo.GetMemberByUserID(c.Request.Context(), user.ID)
-			if err == nil && member != nil {
-				orgID = member.OrgID
-				orgRole = member.Role
-				org, err := orgRepo.GetByID(c.Request.Context(), orgID)
-				if err == nil && org != nil {
-					orgName = org.DisplayName
-				}
-			}
-		}
-
-		token, err := GenerateToken(user, roleName, teamID, orgID, orgRole, cfg, cp)
+		result, err := resolveLoginResponse(c, user, roleRepo, teamRepo, orgRepo, cfg, cp)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 			return
 		}
-
-		dbActions, _ := roleRepo.GetPermissions(c.Request.Context(), user.RoleID)
-		perms := license.EffectiveActions(dbActions)
 
 		// Update last login
 		now := time.Now()
@@ -277,7 +315,7 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 				ResourceType: "auth",
 				ResourceID:   fmt.Sprintf("%d", user.ID),
 				ResourceName: user.Username,
-				Detail:       service.AuditDetail(map[string]any{"method": "password", "role": roleName}),
+				Detail:       service.AuditDetail(map[string]any{"method": "password", "role": result.RoleName}),
 				IPAddress:    c.ClientIP(),
 				UserAgent:    c.Request.UserAgent(),
 				Status:       "success",
@@ -286,24 +324,24 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 		}
 
 		// Set httpOnly cookie
-		c.SetCookie("admin_token", token, cfg.TokenExpiry*3600, "/", "", true, true)
+		c.SetCookie("admin_token", result.Token, cfg.TokenExpiry*3600, "/", "", true, true)
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"token": token,
+				"token": result.Token,
 				"user": gin.H{
 					"id":           user.ID,
 					"username":     user.Username,
 					"display_name": user.DisplayName,
 					"role_id":      user.RoleID,
-					"role_name":    roleName,
-					"org_id":      orgID,
-					"org_name":    orgName,
-					"org_role":    orgRole,
+					"role_name":    result.RoleName,
+					"org_id":       result.OrgID,
+					"org_name":     result.OrgName,
+					"org_role":     result.OrgRole,
 					"force_password_change": user.ForcePasswordChange,
 				},
-				"permissions": perms,
-				"tier":        license.G().CurrentTier(),
+				"permissions": result.Permissions,
+				"tier":        result.Tier,
 			},
 		})
 	}
@@ -466,44 +504,13 @@ func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *reposi
 			return
 		}
 
-		// Resolve role, team, org for new token
-		role, _ := roleRepo.GetByID(c.Request.Context(), user.RoleID)
-		roleName := ""
-		if role != nil {
-			roleName = role.Name
-		}
-		var teamID int64
-		if roleName != model.RoleAdmin {
-			teams, _ := teamRepo.ListByUserID(c.Request.Context(), user.ID)
-			if len(teams) > 0 {
-				teamID = teams[0].ID
-			}
-		}
-		var orgID int64
-		var orgRole string
-		var orgName string
-		if orgRepo != nil && roleName != model.RoleAdmin {
-			member, err := orgRepo.GetMemberByUserID(c.Request.Context(), user.ID)
-			if err == nil && member != nil {
-				orgID = member.OrgID
-				orgRole = member.Role
-				org, err := orgRepo.GetByID(c.Request.Context(), orgID)
-				if err == nil && org != nil {
-					orgName = org.DisplayName
-				}
-			}
-		}
-
-		token, err := GenerateToken(user, roleName, teamID, orgID, orgRole, cfg, cp)
+		result, err := resolveLoginResponse(c, user, roleRepo, teamRepo, orgRepo, cfg, cp)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 			return
 		}
 
-		dbActions, _ := roleRepo.GetPermissions(c.Request.Context(), user.RoleID)
-		perms := license.EffectiveActions(dbActions)
-
-		c.SetCookie("admin_token", token, cfg.TokenExpiry*3600, "/", "", true, true)
+		c.SetCookie("admin_token", result.Token, cfg.TokenExpiry*3600, "/", "", true, true)
 
 		if auditSvc != nil {
 			auditSvc.Log(&model.AuditLog{
@@ -523,19 +530,19 @@ func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *reposi
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"token": token,
+				"token": result.Token,
 				"user": gin.H{
 					"id":           user.ID,
 					"username":     user.Username,
 					"display_name": user.DisplayName,
 					"role_id":      user.RoleID,
-					"role_name":    roleName,
-					"org_id":       orgID,
-					"org_name":     orgName,
-					"org_role":     orgRole,
+					"role_name":    result.RoleName,
+					"org_id":       result.OrgID,
+					"org_name":     result.OrgName,
+					"org_role":     result.OrgRole,
 				},
-				"permissions":         perms,
-				"tier":                license.G().CurrentTier(),
+				"permissions":           result.Permissions,
+				"tier":                  result.Tier,
 				"force_password_change": false,
 			},
 		})
