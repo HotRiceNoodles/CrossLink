@@ -9,7 +9,7 @@ import (
 
 type User struct {
 	ID           int64      `gorm:"primaryKey" json:"id"`
-	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	Username     string     `gorm:"size:64;not null" json:"username"`
 	PasswordHash string     `gorm:"size:128;not null" json:"-"`
 	DisplayName  string     `gorm:"size:128;not null" json:"display_name"`
 	RoleID       int64      `gorm:"not null;index" json:"role_id"`
@@ -22,7 +22,9 @@ type User struct {
 	Email               *string        `gorm:"size:255" json:"email,omitempty"`
 	ForcePasswordChange bool           `gorm:"not null;default:false" json:"force_password_change,omitempty"`
 	Preferences         datatypes.JSON `json:"preferences,omitempty"`
-	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
+	SSOProviderID *int64         `gorm:"index" json:"sso_provider_id,omitempty"`
+	SSOID         string         `gorm:"size:256" json:"-"`
+	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (User) TableName() string { return "users" }
