@@ -29,7 +29,7 @@ func newKeyHandler(
 // defaultKeyMocks returns KeyHandler dependencies with permissive defaults.
 func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 	keySvc := &mockKeySvc{
-		getByIDFn: func(ctx context.Context, id int64) (*model.APIKey, error) {
+		getByIDFn: func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 			uid := id * 10
 			return &model.APIKey{ID: id, Name: "test-key", CreatedByID: testInt64Ptr(uid)}, nil
 		},
@@ -184,7 +184,7 @@ func TestKeyHandler_Create_Success(t *testing.T) {
 func TestKeyHandler_Update_NonOwnerForbidden(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, but request is from user 42 (non-admin, no team)
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
@@ -217,7 +217,7 @@ func TestKeyHandler_Update_NonOwnerForbidden(t *testing.T) {
 func TestKeyHandler_Update_OwnerSuccess(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from same user
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
@@ -247,7 +247,7 @@ func TestKeyHandler_Update_OwnerSuccess(t *testing.T) {
 func TestKeyHandler_Delete_Success(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from same user
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
@@ -277,7 +277,7 @@ func TestKeyHandler_Delete_Success(t *testing.T) {
 func TestKeyHandler_Delete_NonOwnerForbidden(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from user 42 (non-admin)
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "owned-key",
@@ -308,7 +308,7 @@ func TestKeyHandler_Delete_TeamMemberAllowed(t *testing.T) {
 	keySvc, teamRepo := defaultKeyMocks()
 	// Key belongs to team 5, user 42 is a member of that team
 	teamID := int64(5)
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "team-key",
@@ -337,7 +337,7 @@ func TestKeyHandler_Delete_TeamNonMemberForbidden(t *testing.T) {
 	keySvc, teamRepo := defaultKeyMocks()
 	// Key belongs to team 5, user 42 is NOT a member
 	teamID := int64(5)
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return &model.APIKey{
 			ID:          id,
 			Name:        "team-key",
@@ -369,7 +369,7 @@ func TestKeyHandler_Delete_TeamNonMemberForbidden(t *testing.T) {
 
 func TestKeyHandler_Delete_NotFound(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
-	keySvc.getByIDFn = func(ctx context.Context, id int64) (*model.APIKey, error) {
+	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return nil, errors.New("not found")
 	}
 	h := newKeyHandler(keySvc, nil)

@@ -203,8 +203,8 @@ func (s *KeyService) ListByCreator(ctx context.Context, userID int64) ([]model.A
 	return s.repo.ListByCreatorID(ctx, userID)
 }
 
-func (s *KeyService) GetByID(ctx context.Context, id int64) (*model.APIKey, error) {
-	return s.repo.GetByID(ctx, 0, id)
+func (s *KeyService) GetByID(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
+	return s.repo.GetByID(ctx, orgID, id)
 }
 
 func (s *KeyService) Update(ctx context.Context, key *model.APIKey) error {

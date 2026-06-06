@@ -189,7 +189,8 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	key, err := h.keySvc.GetByID(c.Request.Context(), id)
+	orgID := GetOrgID(c)
+	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return
@@ -256,7 +257,8 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	key, err := h.keySvc.GetByID(c.Request.Context(), id)
+	orgID := GetOrgID(c)
+	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return
@@ -310,7 +312,8 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 		return
 	}
 
-	key, err := h.keySvc.GetByID(c.Request.Context(), id)
+	orgID := GetOrgID(c)
+	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return

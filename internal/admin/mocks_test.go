@@ -29,7 +29,7 @@ func (m *mockTeamRepo) ListByUserID(ctx context.Context, userID int64) ([]model.
 
 // mockKeySvc implements KeyService for testing.
 type mockKeySvc struct {
-	getByIDFn       func(ctx context.Context, id int64) (*model.APIKey, error)
+	getByIDFn       func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error)
 	listByCreatorFn func(ctx context.Context, userID int64) ([]model.APIKey, error)
 	listFn          func(ctx context.Context, orgID int64) ([]model.APIKey, error)
 	listByTeamFn    func(ctx context.Context, teamID int64) ([]model.APIKey, error)
@@ -41,8 +41,8 @@ type mockKeySvc struct {
 	listHashesFn    func(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error)
 }
 
-func (m *mockKeySvc) GetByID(ctx context.Context, id int64) (*model.APIKey, error) {
-	return m.getByIDFn(ctx, id)
+func (m *mockKeySvc) GetByID(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
+	return m.getByIDFn(ctx, orgID, id)
 }
 
 func (m *mockKeySvc) ListByCreator(ctx context.Context, userID int64) ([]model.APIKey, error) {

@@ -45,7 +45,7 @@ type BudgetService interface {
 
 // KeyService defines the key service methods needed by BudgetHandler and KeyHandler.
 type KeyService interface {
-	GetByID(ctx context.Context, id int64) (*model.APIKey, error)
+	GetByID(ctx context.Context, orgID int64, id int64) (*model.APIKey, error)
 	ListByCreator(ctx context.Context, userID int64) ([]model.APIKey, error)
 	List(ctx context.Context, orgID int64) ([]model.APIKey, error)
 	ListByTeam(ctx context.Context, teamID int64) ([]model.APIKey, error)
