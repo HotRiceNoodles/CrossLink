@@ -180,9 +180,44 @@ func extractContentFromBody(body []byte, path string) string {
 	case strings.HasSuffix(path, "/v1/images/generations"):
 		return extractImagePrompt(body)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
-		return extractOpenAIMessages(body)
+		if strings.HasSuffix(path, "/chat") || strings.HasSuffix(path, "/stream") {
+			return extractOpenAIMessages(body)
+		}
+		return extractPrompt(body)
 	}
 	return ""
+}
+
+func extractPrompt(body []byte) string {
+	var v struct {
+		Prompt string `json:"prompt"`
+		Input  string `json:"input"`
+	}
+	if json.Unmarshal(body, &v) != nil {
+		return ""
+	}
+	if v.Prompt != "" {
+		return v.Prompt
+	}
+	return v.Input
+}
+
+func replacePrompt(body []byte, maskedContent string) ([]byte, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return nil, false
+	}
+	if _, ok := m["prompt"]; ok {
+		m["prompt"], _ = json.Marshal(maskedContent)
+		result, err := json.Marshal(m)
+		return result, err == nil
+	}
+	if _, ok := m["input"]; ok {
+		m["input"], _ = json.Marshal(maskedContent)
+		result, err := json.Marshal(m)
+		return result, err == nil
+	}
+	return nil, false
 }
 
 func extractImagePrompt(body []byte) string {
@@ -204,8 +239,13 @@ func replaceContentInBody(body []byte, maskedContent string, path string) ([]byt
 	}
 
 	switch {
-	case strings.HasSuffix(path, "/v1/chat/completions"), strings.HasPrefix(path, "/admin/api/playground/"):
+	case strings.HasSuffix(path, "/v1/chat/completions"):
 		return replaceOpenAIMessages(body, maskedContent)
+	case strings.HasPrefix(path, "/admin/api/playground/"):
+		if strings.HasSuffix(path, "/chat") || strings.HasSuffix(path, "/stream") {
+			return replaceOpenAIMessages(body, maskedContent)
+		}
+		return replacePrompt(body, maskedContent)
 	case strings.HasSuffix(path, "/v1/messages"):
 		return replaceAnthropicMessages(body, maskedContent)
 	case strings.HasSuffix(path, "/v1/embeddings"):
