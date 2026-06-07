@@ -24,6 +24,12 @@ type ImageProvider interface {
 	GenerateImage(ctx context.Context, req *domain.ImageRequest, apiKey string) (*domain.ImageResponse, error)
 }
 
+type VideoProvider interface {
+	Provider
+	SubmitVideoTask(ctx context.Context, req *domain.VideoRequest, apiKey string) (*domain.VideoTask, error)
+	GetVideoTaskStatus(ctx context.Context, taskID string, apiKey string) (*domain.VideoTask, error)
+}
+
 type AudioProvider interface {
 	Provider
 	CreateSpeech(ctx context.Context, req *domain.SpeechRequest, apiKey string) (io.ReadCloser, string, error)
