@@ -135,6 +135,11 @@ const (
 	ErrAudioTooLarge        = "audio_too_large"
 	ErrTTSFailed            = "tts_failed"
 	ErrFailedProcessAudio   = "failed_process_audio"
+	ErrNoVideoProvider      = "no_video_provider"
+	ErrVideoTooLarge        = "video_too_large"
+	ErrVideoTaskFailed      = "video_task_failed"
+	ErrVideoTaskTimeout     = "video_task_timeout"
+	ErrVideoTaskNotFound    = "video_task_not_found"
 
 	// License import/activate (used by Commercial overlay)
 	ErrNoFileUploaded             = "no_file_uploaded"
