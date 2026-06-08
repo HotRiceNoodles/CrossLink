@@ -163,6 +163,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
 
+	// Video gateway
+	videoTaskSvc := service.NewVideoTaskService(rdb, secrets.EncStore, infra.Registry, svcs.UsageSvc)
+	ext.Deps.VideoTaskSvc = videoTaskSvc // expose to commercial overlay
+	videoHandler := handler.NewVideoHandler(
+		videoTaskSvc, infra.Resolver, infra.Health,
+		svcs.UsageSvc, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget,
+	)
+
 	usageWorkers := worker.NewPool(15, 1000)
 	handler.SetUsageWorkers(usageWorkers)
 	modelsHandler := handler.NewModelsHandler(db)
@@ -270,6 +278,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.PUT("/providers/:id", middleware.RequireAction(permCache, "provider:update"), handlers.Provider.Update)
 		adminGroup.DELETE("/providers/:id", middleware.RequireAction(permCache, "provider:delete"), handlers.Provider.Delete)
 		adminGroup.POST("/providers/:id/test", middleware.RequireAction(permCache, "provider:test"), handlers.Provider.Test)
+		adminGroup.GET("/providers/:id/models", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.ListModels)
 
 		// Models
 		adminGroup.GET("/models", middleware.RequireAction(permCache, "model:list"), handlers.Model.List)
@@ -345,6 +354,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		gwGroup.POST("/v1/messages", middleware.RequireRoute("anthropic"), anthropicHandler.HandleMessages)
 		gwGroup.POST("/v1/chat/completions", middleware.RequireRoute("openai"), openaiHandler.HandleChatCompletions)
 		gwGroup.GET("/v1/models", modelsHandler.ListModels)
+		gwGroup.POST("/v1/videos", videoHandler.CreateVideo)
+		gwGroup.GET("/v1/videos/:id", videoHandler.GetVideo)
+		gwGroup.GET("/v1/videos/:id/content", videoHandler.GetVideoContent)
 	}
 
 	// MCP gateway route extension point (independent route group from gwGroup)
@@ -439,6 +451,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageWorkers.Shutdown(workerCtx)
 
 	// Phase 4: Cancel background goroutines
+	videoTaskSvc.Close()
 	appCancel()
 
 	// Phase 5: Database cleanup
