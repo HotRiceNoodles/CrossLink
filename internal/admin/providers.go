@@ -317,10 +317,19 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		return
 	}
 
-	// Find a real model name from this provider
-	modelName := "test"
-	if m, err := h.modelRepo.FirstByProviderID(c.Request.Context(), p.ID); err == nil {
-		modelName = m.ProviderModel
+	// Parse optional model from request body
+	var input struct {
+		Model string `json:"model"`
+	}
+	c.ShouldBindJSON(&input) // intentionally ignore error — body is optional
+
+	modelName := input.Model
+	if modelName == "" {
+		// Fallback: auto-pick first active model
+		modelName = "test"
+		if m, err := h.modelRepo.FirstByProviderID(c.Request.Context(), p.ID); err == nil {
+			modelName = m.ProviderModel
+		}
 	}
 
 	// Resolve secrets on a copy before constructing provider (needed for Bedrock/Vertex)
@@ -386,6 +395,25 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		"latency_ms": latency,
 		"model":      resp.Model,
 	}})
+}
+
+func (h *ProviderHandler) ListModels(c *gin.Context) {
+	orgID := GetOrgID(c)
+	id := parseID(c.Param("id"))
+	if id == 0 {
+		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	if _, err := h.repo.GetByID(c.Request.Context(), orgID, id); err != nil {
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
+		return
+	}
+	models, err := h.modelRepo.ListByProviderID(c.Request.Context(), id)
+	if err != nil {
+		internalErr(c, err, "list provider models failed")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": models})
 }
 
 // encryptProvider encrypts plaintext api_key and extra_config sensitive fields if encryption is enabled.

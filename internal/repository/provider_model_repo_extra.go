@@ -80,6 +80,15 @@ func (r *ProviderModelCRUDRepo) GetByID(ctx context.Context, id int64, orgID int
 	return &m, nil
 }
 
+func (r *ProviderModelCRUDRepo) ListByProviderID(ctx context.Context, providerID int64) ([]model.ProviderModel, error) {
+	var models []model.ProviderModel
+	err := r.db.WithContext(ctx).
+		Where("provider_id = ? AND status = 1", providerID).
+		Order("model_name ASC").
+		Find(&models).Error
+	return models, err
+}
+
 func (r *ProviderModelCRUDRepo) CountByProviderID(ctx context.Context, providerID int64) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&model.ProviderModel{}).Where("provider_id = ?", providerID).Count(&count).Error

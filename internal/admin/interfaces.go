@@ -75,4 +75,5 @@ type ProviderRepository interface {
 type ProviderModelRepository interface {
 	CountByProviderID(ctx context.Context, providerID int64) (int64, error)
 	FirstByProviderID(ctx context.Context, providerID int64) (*model.ProviderModel, error)
+	ListByProviderID(ctx context.Context, providerID int64) ([]model.ProviderModel, error)
 }
