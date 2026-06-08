@@ -179,6 +179,8 @@ func extractContentFromBody(body []byte, path string) string {
 		return extractEmbeddingsInput(body)
 	case strings.HasSuffix(path, "/v1/images/generations"):
 		return extractImagePrompt(body)
+	case strings.HasSuffix(path, "/v1/videos"):
+		return extractPrompt(body)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
 		if strings.HasSuffix(path, "/chat") || strings.HasSuffix(path, "/stream") {
 			return extractOpenAIMessages(body)
@@ -241,6 +243,8 @@ func replaceContentInBody(body []byte, maskedContent string, path string) ([]byt
 	switch {
 	case strings.HasSuffix(path, "/v1/chat/completions"):
 		return replaceOpenAIMessages(body, maskedContent)
+	case strings.HasSuffix(path, "/v1/videos"):
+		return replacePrompt(body, maskedContent)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
 		if strings.HasSuffix(path, "/chat") || strings.HasSuffix(path, "/stream") {
 			return replaceOpenAIMessages(body, maskedContent)

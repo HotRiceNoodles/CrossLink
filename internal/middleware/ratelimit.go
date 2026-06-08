@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -186,6 +187,14 @@ func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCac
 	}
 
 	return func(c *gin.Context) {
+		// Skip TPM for video endpoints (no token concept)
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/videos") {
+			c.Set("tpm_key", "")
+			c.Set("tpm_reservations", &tpmReservations{})
+			c.Next()
+			return
+		}
+
 		res := &tpmReservations{}
 		limit := tpm
 		// WARNING: See RateLimit() comment about TrustedProxies and ClientIP().

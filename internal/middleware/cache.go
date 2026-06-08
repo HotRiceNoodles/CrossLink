@@ -56,6 +56,7 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider) gin
 		// Skip non-cacheable endpoints before reading body
 		path := c.Request.URL.Path
 		if path == "/v1/images/generations" ||
+			strings.HasPrefix(path, "/v1/videos") ||
 			strings.HasPrefix(path, "/v1/audio") ||
 			strings.HasPrefix(path, "/v1/batch") {
 			c.Next()
