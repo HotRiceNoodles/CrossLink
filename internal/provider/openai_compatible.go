@@ -206,6 +206,93 @@ func (p *OpenAICompatibleProvider) GenerateImage(ctx context.Context, req *domai
 	return &result, nil
 }
 
+func (p *OpenAICompatibleProvider) SubmitVideoTask(ctx context.Context, req *domain.VideoRequest, apiKey string) (*domain.VideoTask, error) {
+	u := p.baseURL + "/videos"
+
+	// Build OpenAI-format request body (field names: size, seconds — not aspect_ratio, duration)
+	upstreamBody := map[string]any{
+		"prompt": req.Prompt,
+		"model":  req.Model,
+	}
+	if req.AspectRatio != "" {
+		upstreamBody["size"] = aspectRatioToSize(req.AspectRatio)
+	}
+	if req.Duration > 0 {
+		upstreamBody["seconds"] = strconv.Itoa(req.Duration)
+	}
+	body, _ := json.Marshal(upstreamBody)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseProviderError(resp)
+	}
+	var result domain.VideoTask
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	result.Status = mapOpenAIStatus(result.Status)
+	return &result, nil
+}
+
+func (p *OpenAICompatibleProvider) GetVideoTaskStatus(ctx context.Context, taskID string, apiKey string) (*domain.VideoTask, error) {
+	u := p.baseURL + "/videos/" + url.PathEscape(taskID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseProviderError(resp)
+	}
+	var result domain.VideoTask
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	result.Status = mapOpenAIStatus(result.Status)
+	return &result, nil
+}
+
+// mapOpenAIStatus converts OpenAI status strings to internal status values.
+func mapOpenAIStatus(status string) string {
+	switch status {
+	case "queued":
+		return "pending"
+	case "in_progress":
+		return "processing"
+	default:
+		return status // "completed", "failed" are the same
+	}
+}
+
+// aspectRatioToSize converts aspect ratio (e.g. "16:9") to size string (e.g. "1280x720").
+func aspectRatioToSize(ratio string) string {
+	switch ratio {
+	case "16:9":
+		return "1280x720"
+	case "9:16":
+		return "720x1280"
+	case "1:1":
+		return "1024x1024"
+	default:
+		return ""
+	}
+}
+
 func (p *OpenAICompatibleProvider) CreateSpeech(ctx context.Context, req *domain.SpeechRequest, apiKey string) (io.ReadCloser, string, error) {
 	u := p.baseURL + "/audio/speech"
 	body, _ := json.Marshal(req)
@@ -395,7 +482,7 @@ func init() {
 		Description:  "OpenAI API compatible provider (DeepSeek, Qwen, Moonshot, etc.)",
 		NeedsBaseURL: true,
 		NeedsAPIKey:  true,
-		Capabilities: []string{"chat", "stream", "embeddings", "images", "audio_speech", "audio_transcription", "audio_translation", "batch"},
+		Capabilities: []string{"chat", "stream", "embeddings", "images", "video", "audio_speech", "audio_transcription", "audio_translation", "batch"},
 		ExtraFields:  []AdapterField{},
 	})
 
