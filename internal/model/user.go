@@ -25,6 +25,9 @@ type User struct {
 	SSOProviderID *int64         `gorm:"index" json:"sso_provider_id,omitempty"`
 	SSOID         string         `gorm:"size:256" json:"-"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
+	TeamID        *int64         `json:"team_id" gorm:"-"`
+	TeamName      *string        `json:"team_name" gorm:"-"`
+	TeamRole      *string        `json:"team_role" gorm:"-"`
 }
 
 func (User) TableName() string { return "users" }

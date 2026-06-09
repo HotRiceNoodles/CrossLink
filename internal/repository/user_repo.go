@@ -51,7 +51,45 @@ func (r *UserRepo) Update(ctx context.Context, u *model.User) error {
 func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 	var users []model.User
 	err := r.db.WithContext(ctx).Preload("Role").Where("status = 1").Order("created_at DESC").Find(&users).Error
-	return users, err
+	if err != nil {
+		return users, err
+	}
+
+	// Populate team info via secondary query
+	if len(users) > 0 {
+		ids := make([]int64, len(users))
+		for i, u := range users {
+			ids[i] = u.ID
+		}
+		type teamRow struct {
+			UserID   int64
+			TeamID   int64
+			TeamName string
+			TeamRole string
+		}
+		var rows []teamRow
+		r.db.WithContext(ctx).Raw(
+			`SELECT tm.user_id, tm.team_id, t.display_name AS team_name, tm.role AS team_role
+			 FROM team_members tm
+			 JOIN teams t ON t.id = tm.team_id AND t.deleted_at IS NULL
+			 WHERE tm.deleted_at IS NULL AND tm.user_id IN ?`,
+			ids,
+		).Scan(&rows)
+
+		teamMap := make(map[int64]*teamRow, len(rows))
+		for i := range rows {
+			teamMap[rows[i].UserID] = &rows[i]
+		}
+		for i := range users {
+			if tr, ok := teamMap[users[i].ID]; ok {
+				users[i].TeamID = &tr.TeamID
+				users[i].TeamName = &tr.TeamName
+				users[i].TeamRole = &tr.TeamRole
+			}
+		}
+	}
+
+	return users, nil
 }
 
 func (r *UserRepo) Delete(ctx context.Context, id int64) error {

@@ -26,15 +26,6 @@ type Organization struct {
 
 func (Organization) TableName() string { return "organizations" }
 
-// OrgWithCounts enriches an Organization with aggregated counts.
-// Used for admin dashboard and org list API responses.
-type OrgWithCounts struct {
-	Organization
-	MemberCount int64 `json:"member_count"`
-	TeamCount   int64 `json:"team_count"`
-	KeyCount    int64 `json:"key_count"`
-}
-
 type OrgMember struct {
 	ID        int64          `gorm:"primaryKey" json:"id"`
 	OrgID     int64          `gorm:"not null;index" json:"org_id"`

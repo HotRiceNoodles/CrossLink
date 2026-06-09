@@ -51,18 +51,60 @@ func (r *TeamRepo) baseQuery(orgID int64) *gorm.DB {
 
 func (r *TeamRepo) List(ctx context.Context, orgID int64) ([]model.Team, error) {
 	var teams []model.Team
-	err := r.baseQuery(orgID).WithContext(ctx).Where("status = 1").Order("created_at DESC").Find(&teams).Error
-	return teams, err
+	err := r.baseQuery(orgID).WithContext(ctx).
+		Where("status = 1").
+		Order("created_at DESC").
+		Find(&teams).Error
+	if err != nil {
+		return teams, err
+	}
+	r.populateMemberCounts(ctx, teams)
+	return teams, nil
 }
 
 // ListByUserID returns teams where the user is a member
 func (r *TeamRepo) ListByUserID(ctx context.Context, userID int64) ([]model.Team, error) {
 	var teams []model.Team
 	err := r.db.WithContext(ctx).
-		Joins("JOIN team_members ON team_members.team_id = teams.id").
+		Joins("JOIN team_members ON team_members.team_id = teams.id AND team_members.deleted_at IS NULL").
 		Where("team_members.user_id = ? AND teams.status = 1", userID).
 		Find(&teams).Error
-	return teams, err
+	if err != nil {
+		return teams, err
+	}
+	r.populateMemberCounts(ctx, teams)
+	return teams, nil
+}
+
+func (r *TeamRepo) populateMemberCounts(ctx context.Context, teams []model.Team) {
+	if len(teams) == 0 {
+		return
+	}
+	ids := make([]int64, len(teams))
+	for i, t := range teams {
+		ids[i] = t.ID
+	}
+	type countRow struct {
+		TeamID     int64
+		MemberCount int64
+	}
+	var rows []countRow
+	r.db.WithContext(ctx).Raw(
+		`SELECT team_id AS team_id, COUNT(*) AS member_count
+		 FROM team_members
+		 WHERE deleted_at IS NULL AND team_id IN ?
+		 GROUP BY team_id`, ids,
+	).Scan(&rows)
+
+	countMap := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		countMap[row.TeamID] = row.MemberCount
+	}
+	for i := range teams {
+		if cnt, ok := countMap[teams[i].ID]; ok {
+			teams[i].MemberCount = cnt
+		}
+	}
 }
 
 // Member operations
@@ -78,7 +120,7 @@ func (r *TeamRepo) RemoveMember(ctx context.Context, teamID, userID int64) error
 
 func (r *TeamRepo) ListMembers(ctx context.Context, teamID int64) ([]model.TeamMember, error) {
 	var members []model.TeamMember
-	err := r.db.WithContext(ctx).Preload("User").
+	err := r.db.WithContext(ctx).Preload("User.Role").
 		Where("team_id = ?", teamID).
 		Order("joined_at ASC").
 		Find(&members).Error

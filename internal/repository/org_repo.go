@@ -58,69 +58,6 @@ func (r *OrgRepo) List(ctx context.Context) ([]model.Organization, error) {
 	return orgs, err
 }
 
-// ListWithCounts returns all organizations enriched with member, team and key counts.
-// Uses batch count queries (3 queries total) instead of N+1.
-func (r *OrgRepo) ListWithCounts(ctx context.Context) ([]model.OrgWithCounts, error) {
-	orgs, err := r.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	type countRow struct {
-		OrgID int64
-		Cnt   int64
-	}
-
-	// Batch count members per org
-	var memberCounts []countRow
-	r.db.WithContext(ctx).Model(&model.OrgMember{}).
-		Select("org_id, COUNT(*) as cnt").
-		Group("org_id").
-		Scan(&memberCounts)
-
-	// Batch count keys per org (org_id is nullable)
-	var keyCounts []countRow
-	r.db.WithContext(ctx).Model(&model.APIKey{}).
-		Select("org_id, COUNT(*) as cnt").
-		Where("org_id IS NOT NULL").
-		Group("org_id").
-		Scan(&keyCounts)
-
-	// Batch count teams per org (org_id is nullable)
-	var teamCounts []countRow
-	r.db.WithContext(ctx).Model(&model.Team{}).
-		Select("org_id, COUNT(*) as cnt").
-		Where("org_id IS NOT NULL").
-		Group("org_id").
-		Scan(&teamCounts)
-
-	// Build lookup maps
-	memberMap := make(map[int64]int64, len(memberCounts))
-	for _, m := range memberCounts {
-		memberMap[m.OrgID] = m.Cnt
-	}
-	keyMap := make(map[int64]int64, len(keyCounts))
-	for _, k := range keyCounts {
-		keyMap[k.OrgID] = k.Cnt
-	}
-	teamMap := make(map[int64]int64, len(teamCounts))
-	for _, t := range teamCounts {
-		teamMap[t.OrgID] = t.Cnt
-	}
-
-	// Merge counts into orgs
-	result := make([]model.OrgWithCounts, len(orgs))
-	for i, org := range orgs {
-		result[i] = model.OrgWithCounts{
-			Organization: org,
-			MemberCount:  memberMap[org.ID],
-			TeamCount:    teamMap[org.ID],
-			KeyCount:     keyMap[org.ID],
-		}
-	}
-	return result, nil
-}
-
 func (r *OrgRepo) Count(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&model.Organization{}).Count(&count).Error

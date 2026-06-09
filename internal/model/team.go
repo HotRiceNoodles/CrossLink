@@ -21,6 +21,7 @@ type Team struct {
 	CreatedAt    time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt    time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
+	MemberCount  int64          `gorm:"-" json:"member_count"`
 }
 
 func (Team) TableName() string { return "teams" }
