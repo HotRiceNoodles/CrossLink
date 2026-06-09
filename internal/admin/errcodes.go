@@ -10,6 +10,7 @@ const (
 	ErrNotFound        = "not_found"
 
 	// Auth / permission
+	ErrForbidden               = "forbidden"
 	ErrInsufficientPermissions = "insufficient_permissions"
 	ErrAdminRequired           = "admin_required"
 	ErrAccessDenied            = "access_denied"

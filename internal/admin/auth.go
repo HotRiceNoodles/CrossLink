@@ -435,6 +435,11 @@ func IsAdmin(c *gin.Context) bool {
 	return GetRoleName(c) == model.RoleAdmin
 }
 
+// IsOrgAdmin returns true if the current user has the org_admin role.
+func IsOrgAdmin(c *gin.Context) bool {
+	return GetRoleName(c) == model.RoleOrgAdmin
+}
+
 // isAdminUser checks if a user has the admin role by preloaded Role relation.
 func isAdminUser(u *model.User) bool {
 	return u.Role.ID != 0 && u.Role.Name == model.RoleAdmin
