@@ -90,10 +90,11 @@ func (r *TeamRepo) populateMemberCounts(ctx context.Context, teams []model.Team)
 	}
 	var rows []countRow
 	r.db.WithContext(ctx).Raw(
-		`SELECT team_id AS team_id, COUNT(*) AS member_count
-		 FROM team_members
-		 WHERE deleted_at IS NULL AND team_id IN ?
-		 GROUP BY team_id`, ids,
+		`SELECT tm.team_id AS team_id, COUNT(*) AS member_count
+		 FROM team_members tm
+		 JOIN users u ON u.id = tm.user_id AND u.deleted_at IS NULL
+		 WHERE tm.deleted_at IS NULL AND tm.team_id IN ?
+		 GROUP BY tm.team_id`, ids,
 	).Scan(&rows)
 
 	countMap := make(map[int64]int64, len(rows))
