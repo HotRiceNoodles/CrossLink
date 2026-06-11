@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"log"
 	"log/slog"
 	"os"
 	"time"
@@ -34,6 +36,49 @@ func buildAuth(db *gorm.DB, cfg *config.Config) {
 	ensureAdminUser(db, &cfg.Admin)
 	ensureDefaultOrganization(db)
 	syncAdminPermissions(db)
+	syncSystemRolePermissions(db)
+}
+
+// systemRolePermissions defines the minimum permissions each non-admin system role should have.
+// When new ValidActions are added that should be auto-assigned to a system role, add them here.
+var systemRolePermissions = map[string][]string{
+	model.RoleMember: {
+		"system:password",
+		"license:view",
+		"mcp:list",
+		"mcp:view",
+	},
+	model.RoleViewer: {
+		"license:view",
+		"mcp:list",
+		"mcp:view",
+	},
+}
+
+func syncSystemRolePermissions(db *gorm.DB) {
+	for roleName, requiredActions := range systemRolePermissions {
+		var role model.Role
+		if err := db.Where("name = ? AND is_system = ?", roleName, true).First(&role).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			log.Printf("[role-sync] error finding role %s: %v", roleName, err)
+			continue
+		}
+
+		var existing []model.RolePermission
+		db.Where("role_id = ?", role.ID).Find(&existing)
+		existingSet := make(map[string]bool, len(existing))
+		for _, p := range existing {
+			existingSet[p.Action] = true
+		}
+
+		for _, action := range requiredActions {
+			if !existingSet[action] {
+				db.Create(&model.RolePermission{RoleID: role.ID, Action: action})
+			}
+		}
+	}
 }
 
 // SecretsBundle holds the outputs of buildSecrets.

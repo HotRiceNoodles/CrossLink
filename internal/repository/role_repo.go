@@ -93,6 +93,22 @@ func (r *RoleRepo) DeleteIfNoUsers(ctx context.Context, id int64) (bool, error) 
 	return deleted, err
 }
 
+// ReassignAndDelete migrates all users from fromRoleID to toRoleID, removes the
+// source role's permissions, and soft-deletes the role — all in a single transaction.
+func (r *RoleRepo) ReassignAndDelete(ctx context.Context, fromRoleID, toRoleID int64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.User{}).
+			Where("role_id = ?", fromRoleID).
+			Update("role_id", toRoleID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("role_id = ?", fromRoleID).Delete(&model.RolePermission{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.Role{}, fromRoleID).Error
+	})
+}
+
 // UserCountsByRoles returns user counts grouped by role_id in a single query.
 func (r *RoleRepo) UserCountsByRoles(ctx context.Context) (map[int64]int64, error) {
 	type row struct {

@@ -15,6 +15,7 @@ func getRoleID(c *gin.Context) int64 {
 	return 0
 }
 
+// Deprecated: Only used by RequireRole, which is itself deprecated.
 func getRoleName(c *gin.Context) string {
 	name, _ := c.Get("role_name")
 	if v, ok := name.(string); ok {
@@ -23,7 +24,9 @@ func getRoleName(c *gin.Context) string {
 	return ""
 }
 
-// RequireRole creates middleware that restricts access to specified role names
+// RequireRole is a coarse-grained role-name check middleware.
+// Deprecated: Prefer RequireAction for fine-grained permission control.
+// This function is retained for potential future use but no routes currently use it.
 func RequireRole(roles ...string) gin.HandlerFunc {
 	allowed := make(map[string]bool, len(roles))
 	for _, r := range roles {
