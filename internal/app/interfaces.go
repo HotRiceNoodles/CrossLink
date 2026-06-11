@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
@@ -9,6 +11,7 @@ import (
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
@@ -54,6 +57,9 @@ type AppDeps struct {
 	OrgCache       *middleware.OrgCache
 	AuditSvc       *service.AuditService // set by commercial ExtraPublicRoutes; nil in Community
 	VideoTaskSvc   *service.VideoTaskService
+	DataLensStore  repository.MetricsStore
+	DataLensRepo   *repository.DataLensRepository
+	AppCtx         context.Context // application-lifetime context for background goroutines
 }
 
 // Extensions holds Commercial-only plugins injected at startup.

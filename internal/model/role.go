@@ -91,6 +91,13 @@ var ValidActions = map[string]bool{
 	"role:create":             true,
 	"role:update":             true,
 	"role:delete":             true,
+	"datalens:view":               true,
+	"datalens:create":             true,
+	"datalens:update":             true,
+	"datalens:delete":             true,
+	"datalens:export":             true,
+	"datalens:schedule":           true,
+	"datalens:manage_aggregation": true,
 }
 
 // AdminRequiredActions are actions that must always remain on the admin role.

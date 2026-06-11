@@ -60,6 +60,13 @@ var proExtraActions = map[string]bool{
 	"fingerprint:list":       true,
 	"fingerprint:view":       true,
 	"fingerprint:manage":     true,
+	"datalens:view":          true,
+	"datalens:create":        true,
+	"datalens:update":        true,
+	"datalens:delete":        true,
+	"datalens:export":        true,
+	"datalens:schedule":      true,
+	"datalens:manage_aggregation": true,
 }
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).

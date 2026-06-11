@@ -67,7 +67,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	// Services
-	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider)
+	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
 
 	// Load middleware log config from DB
@@ -159,6 +159,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		DebugStore:     debugStore,
 		Crypto:         cryptoProvider,
 		OrgCache:       orgCache,
+		DataLensStore:  repository.NewPgMetricsStore(db, dia),
+		DataLensRepo:   repos.DataLensRepo,
+		AppCtx:         appCtx,
 	}
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
@@ -381,6 +384,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Cleanup expired key hashes every 10 minutes
 	// Budget calibration every hour
 	go svcs.BudgetCalSvc.Run(appCtx)
+	// DataLens aggregation background goroutine
+	if cfg.DataLens.Enabled {
+		if dia.PartitionSupport() == dialect.PartitionNative {
+			var relkind string
+			db.Raw("SELECT relkind FROM pg_class WHERE relname = 'usage_logs'").Scan(&relkind)
+			if relkind != "p" {
+				slog.Warn("usage_logs is not partitioned. Run 'crosslink migrate-partition' to enable partitioning. DataLens aggregation will use unpartitioned table (slower).")
+			}
+		}
+		go svcs.DataLensAggSvc.Run(appCtx)
+	}
 	// Update cache size gauge periodically via approximate counter
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
