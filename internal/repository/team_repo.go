@@ -110,6 +110,20 @@ func (r *TeamRepo) populateMemberCounts(ctx context.Context, teams []model.Team)
 
 // Member operations
 func (r *TeamRepo) AddMember(ctx context.Context, tm *model.TeamMember) error {
+	// If a soft-deleted membership exists, restore it instead of creating duplicate
+	result := r.db.WithContext(ctx).Unscoped().
+		Model(&model.TeamMember{}).
+		Where("team_id = ? AND user_id = ? AND deleted_at IS NOT NULL", tm.TeamID, tm.UserID).
+		Updates(map[string]interface{}{
+			"deleted_at": nil,
+			"role":       tm.Role,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
 	return r.db.WithContext(ctx).Create(tm).Error
 }
 
