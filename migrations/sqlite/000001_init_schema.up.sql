@@ -717,3 +717,196 @@ CREATE TABLE mcp_tool_call_logs_archive (
     blocked_by   TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ============================================================
+-- 29. datalens_hourly_metrics — DataLens hourly pre-aggregation
+--    Column source: 000056 (base), 000058 (agg_type widen)
+--    Note: PG COALESCE unique index omitted; SQLite handles TEXT
+--    indexes natively, but expression indexes with COALESCE are
+--    not straightforward for UPSERT. Use regular indexes instead.
+-- ============================================================
+CREATE TABLE datalens_hourly_metrics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id          INTEGER NOT NULL,
+    agg_level       TEXT NOT NULL,
+    team_id         INTEGER,
+    api_key_id      INTEGER,
+    provider_id     INTEGER,
+    model_name      TEXT,
+    route_type      TEXT,
+    status_group    INTEGER NOT NULL DEFAULT 200,
+    hour_bucket     TEXT NOT NULL,
+    currency        TEXT NOT NULL DEFAULT 'CNY',
+
+    request_count       INTEGER NOT NULL DEFAULT 0,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    total_cost          REAL    NOT NULL DEFAULT 0,
+    total_latency_ms    INTEGER NOT NULL DEFAULT 0,
+    min_latency_ms      INTEGER NOT NULL DEFAULT 0,
+    max_latency_ms      INTEGER NOT NULL DEFAULT 0,
+    latency_samples     INTEGER NOT NULL DEFAULT 0,
+    first_token_samples INTEGER NOT NULL DEFAULT 0,
+    total_first_token_ms INTEGER NOT NULL DEFAULT 0,
+    error_count         INTEGER NOT NULL DEFAULT 0,
+    fallback_count      INTEGER NOT NULL DEFAULT 0,
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    guardrail_blocks    INTEGER NOT NULL DEFAULT 0,
+    cache_hits          INTEGER NOT NULL DEFAULT 0,
+    distinct_sessions   INTEGER NOT NULL DEFAULT 0,
+    distinct_keys       INTEGER NOT NULL DEFAULT 0,
+
+    latency_bucket_50   INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_100  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_200  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_500  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_1000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_2000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_5000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_slow INTEGER NOT NULL DEFAULT 0,
+
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dhm_org_hour      ON datalens_hourly_metrics (org_id, hour_bucket);
+CREATE INDEX IF NOT EXISTS idx_dhm_level_hour    ON datalens_hourly_metrics (org_id, agg_level, hour_bucket);
+CREATE INDEX IF NOT EXISTS idx_dhm_model_hour    ON datalens_hourly_metrics (org_id, model_name, hour_bucket)
+    WHERE model_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dhm_team_hour     ON datalens_hourly_metrics (org_id, team_id, hour_bucket)
+    WHERE team_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dhm_key_hour      ON datalens_hourly_metrics (org_id, api_key_id, hour_bucket)
+    WHERE api_key_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dhm_provider_hour ON datalens_hourly_metrics (org_id, provider_id, hour_bucket)
+    WHERE provider_id IS NOT NULL;
+
+-- ============================================================
+-- 30. datalens_daily_metrics — DataLens daily pre-aggregation
+--    Column source: 000056 (base)
+-- ============================================================
+CREATE TABLE datalens_daily_metrics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id          INTEGER NOT NULL,
+    agg_level       TEXT NOT NULL,
+    team_id         INTEGER,
+    api_key_id      INTEGER,
+    provider_id     INTEGER,
+    model_name      TEXT,
+    route_type      TEXT,
+    status_group    INTEGER NOT NULL DEFAULT 200,
+    day_bucket      TEXT NOT NULL,
+    currency        TEXT NOT NULL DEFAULT 'CNY',
+
+    request_count       INTEGER NOT NULL DEFAULT 0,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    total_cost          REAL    NOT NULL DEFAULT 0,
+    total_latency_ms    INTEGER NOT NULL DEFAULT 0,
+    min_latency_ms      INTEGER NOT NULL DEFAULT 0,
+    max_latency_ms      INTEGER NOT NULL DEFAULT 0,
+    latency_samples     INTEGER NOT NULL DEFAULT 0,
+    first_token_samples INTEGER NOT NULL DEFAULT 0,
+    total_first_token_ms INTEGER NOT NULL DEFAULT 0,
+    error_count         INTEGER NOT NULL DEFAULT 0,
+    fallback_count      INTEGER NOT NULL DEFAULT 0,
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    guardrail_blocks    INTEGER NOT NULL DEFAULT 0,
+    cache_hits          INTEGER NOT NULL DEFAULT 0,
+    distinct_sessions   INTEGER NOT NULL DEFAULT 0,
+    distinct_keys       INTEGER NOT NULL DEFAULT 0,
+
+    latency_bucket_50   INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_100  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_200  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_500  INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_1000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_2000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_5000 INTEGER NOT NULL DEFAULT 0,
+    latency_bucket_slow INTEGER NOT NULL DEFAULT 0,
+
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ddm_org_day ON datalens_daily_metrics (org_id, day_bucket);
+
+-- ============================================================
+-- 31. datalens_agg_status — DataLens aggregation health status
+--    Column source: 000056 (base), 000058 (agg_type VARCHAR(32))
+-- ============================================================
+CREATE TABLE datalens_agg_status (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    agg_level       TEXT NOT NULL,
+    agg_type        TEXT NOT NULL,
+    last_success_at TEXT NOT NULL,
+    last_duration_ms INTEGER NOT NULL DEFAULT 0,
+    rows_affected   INTEGER NOT NULL DEFAULT 0,
+    error_message   TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_das_level_type ON datalens_agg_status (agg_level, agg_type);
+
+-- ============================================================
+-- 32. datalens_reports — DataLens saved report configurations
+--    Column source: 000056 (base)
+-- ============================================================
+CREATE TABLE datalens_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT,
+    type        TEXT NOT NULL DEFAULT 'custom',
+    template_id TEXT,
+    scope       TEXT NOT NULL DEFAULT 'private',
+    config      TEXT NOT NULL,
+    is_pinned   INTEGER NOT NULL DEFAULT 0,
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_dr_org_user ON datalens_reports (org_id, user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_dr_template ON datalens_reports (org_id, template_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_dr_deleted  ON datalens_reports (deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- ============================================================
+-- 33. datalens_schedules — DataLens automated report schedules (Enterprise)
+--    Column source: 000056 (base)
+-- ============================================================
+CREATE TABLE datalens_schedules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    team_id     INTEGER,
+    name        TEXT NOT NULL,
+    report_id   INTEGER NOT NULL,
+    cron        TEXT NOT NULL,
+    timezone    TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    channels    TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    last_run_at TEXT,
+    next_run_at TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ds_org ON datalens_schedules (org_id, enabled, next_run_at) WHERE deleted_at IS NULL;
+
+-- ============================================================
+-- 34. datalens_partition_marker — DataLens partition migration tracking
+--    Column source: 000057 (base)
+-- ============================================================
+CREATE TABLE datalens_partition_marker (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    partitioned  INTEGER NOT NULL DEFAULT 0,
+    migrated_at  TEXT,
+    note         TEXT
+);
+
+INSERT INTO datalens_partition_marker (partitioned, note) VALUES (0, 'Partition migration pending. Run: crosslink migrate-partition');

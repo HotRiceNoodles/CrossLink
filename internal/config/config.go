@@ -29,6 +29,7 @@ type Config struct {
 	License        LicenseConfig        `mapstructure:"license"`
 	MCP            MCPConfig            `mapstructure:"mcp"`
 	Crypto         CryptoConfig         `mapstructure:"crypto"`
+	DataLens       DataLensConfig       `mapstructure:"datalens"`
 }
 
 type ServerConfig struct {
@@ -176,6 +177,28 @@ type MCPConfig struct {
 
 type CryptoConfig struct {
 	Mode string `mapstructure:"mode"` // "standard" (default) or "gm"
+}
+
+type DataLensConfig struct {
+	Enabled   bool              `mapstructure:"enabled"`
+	Retention DataLensRetention `mapstructure:"retention"`
+	Agg       DataLensAggConfig `mapstructure:"aggregation"`
+	FromName  string            `mapstructure:"from_name"`
+	FromAddr  string            `mapstructure:"from_address"`
+}
+
+type DataLensRetention struct {
+	RawLogsDays int `mapstructure:"raw_logs_days"`
+	HourlyDays  int `mapstructure:"hourly_metrics_days"`
+	DailyDays   int `mapstructure:"daily_metrics_days"`
+}
+
+type DataLensAggConfig struct {
+	Interval            string   `mapstructure:"interval"`
+	Lookback            string   `mapstructure:"lookback"`
+	BackfillDays        int      `mapstructure:"backfill_days"`
+	BackfillConcurrency int      `mapstructure:"backfill_concurrency"`
+	Levels              []string `mapstructure:"levels"`
 }
 
 // Validate checks that config values are within acceptable ranges.
@@ -405,6 +428,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mcp.log_retention_days", 180)
 
 	v.SetDefault("crypto.mode", "standard")
+
+	v.SetDefault("datalens.enabled", true)
+	v.SetDefault("datalens.retention.raw_logs_days", 365)
+	v.SetDefault("datalens.retention.hourly_metrics_days", 90)
+	v.SetDefault("datalens.retention.daily_metrics_days", 730)
+	v.SetDefault("datalens.aggregation.interval", "1h")
+	v.SetDefault("datalens.aggregation.lookback", "3h")
+	v.SetDefault("datalens.aggregation.backfill_days", 90)
+	v.SetDefault("datalens.aggregation.backfill_concurrency", 1)
+	v.SetDefault("datalens.aggregation.levels", []string{"global", "by_model", "by_team", "by_provider", "by_key", "team_model", "key_model"})
+	v.SetDefault("datalens.from_name", "CrossLink DataLens")
 
 	// Allow both short and long env var names for the encryption key
 	v.BindEnv("secret_manager.encryption_key", "CL_ENCRYPTION_KEY", "CL_SECRET_MANAGER_ENCRYPTION_KEY")

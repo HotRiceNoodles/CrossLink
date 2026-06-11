@@ -772,3 +772,200 @@ CREATE TABLE mcp_tool_call_logs_archive (
     blocked_by  VARCHAR(64),
     created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 29. datalens_hourly_metrics — DataLens hourly pre-aggregation
+--    Column source: 000056 (base), 000058 (agg_type widen)
+--    Note: PG COALESCE unique index replaced with regular indexes;
+--    UPSERT handled via ON DUPLICATE KEY UPDATE in Go code.
+-- ============================================================
+CREATE TABLE datalens_hourly_metrics (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_id          BIGINT NOT NULL,
+    agg_level       VARCHAR(16) NOT NULL,
+    team_id         BIGINT,
+    api_key_id      BIGINT,
+    provider_id     BIGINT,
+    model_name      VARCHAR(128),
+    route_type      VARCHAR(16),
+    status_group    INT NOT NULL DEFAULT 200,
+    hour_bucket     DATETIME(3) NOT NULL,
+    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
+
+    request_count       INT     NOT NULL DEFAULT 0,
+    input_tokens        BIGINT  NOT NULL DEFAULT 0,
+    output_tokens       BIGINT  NOT NULL DEFAULT 0,
+    reasoning_tokens    BIGINT  NOT NULL DEFAULT 0,
+    cache_read_tokens   BIGINT  NOT NULL DEFAULT 0,
+    total_cost          DECIMAL(20,8) NOT NULL DEFAULT 0,
+    total_latency_ms    BIGINT  NOT NULL DEFAULT 0,
+    min_latency_ms      INT     NOT NULL DEFAULT 0,
+    max_latency_ms      INT     NOT NULL DEFAULT 0,
+    latency_samples     INT     NOT NULL DEFAULT 0,
+    first_token_samples INT     NOT NULL DEFAULT 0,
+    total_first_token_ms BIGINT NOT NULL DEFAULT 0,
+    error_count         INT     NOT NULL DEFAULT 0,
+    fallback_count      INT     NOT NULL DEFAULT 0,
+    retry_count         INT     NOT NULL DEFAULT 0,
+    guardrail_blocks    INT     NOT NULL DEFAULT 0,
+    cache_hits          INT     NOT NULL DEFAULT 0,
+    distinct_sessions   INT     NOT NULL DEFAULT 0,
+    distinct_keys       INT     NOT NULL DEFAULT 0,
+
+    latency_bucket_50   INT NOT NULL DEFAULT 0,
+    latency_bucket_100  INT NOT NULL DEFAULT 0,
+    latency_bucket_200  INT NOT NULL DEFAULT 0,
+    latency_bucket_500  INT NOT NULL DEFAULT 0,
+    latency_bucket_1000 INT NOT NULL DEFAULT 0,
+    latency_bucket_2000 INT NOT NULL DEFAULT 0,
+    latency_bucket_5000 INT NOT NULL DEFAULT 0,
+    latency_bucket_slow INT NOT NULL DEFAULT 0,
+
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- COALESCE unique index omitted (MySQL lacks expression indexes).
+-- UPSERT logic handled in Go code via query-then-insert or ON DUPLICATE KEY UPDATE.
+CREATE INDEX idx_dhm_org_hour      ON datalens_hourly_metrics (org_id, hour_bucket);
+CREATE INDEX idx_dhm_level_hour    ON datalens_hourly_metrics (org_id, agg_level, hour_bucket);
+CREATE INDEX idx_dhm_model_hour    ON datalens_hourly_metrics (org_id, model_name, hour_bucket);
+CREATE INDEX idx_dhm_team_hour     ON datalens_hourly_metrics (org_id, team_id, hour_bucket);
+CREATE INDEX idx_dhm_key_hour      ON datalens_hourly_metrics (org_id, api_key_id, hour_bucket);
+CREATE INDEX idx_dhm_provider_hour ON datalens_hourly_metrics (org_id, provider_id, hour_bucket);
+
+-- ============================================================
+-- 30. datalens_daily_metrics — DataLens daily pre-aggregation
+--    Column source: 000056 (base)
+--    Note: PG COALESCE unique index replaced with regular indexes.
+-- ============================================================
+CREATE TABLE datalens_daily_metrics (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_id          BIGINT NOT NULL,
+    agg_level       VARCHAR(16) NOT NULL,
+    team_id         BIGINT,
+    api_key_id      BIGINT,
+    provider_id     BIGINT,
+    model_name      VARCHAR(128),
+    route_type      VARCHAR(16),
+    status_group    INT NOT NULL DEFAULT 200,
+    day_bucket      DATE NOT NULL,
+    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
+
+    request_count       INT     NOT NULL DEFAULT 0,
+    input_tokens        BIGINT  NOT NULL DEFAULT 0,
+    output_tokens       BIGINT  NOT NULL DEFAULT 0,
+    reasoning_tokens    BIGINT  NOT NULL DEFAULT 0,
+    cache_read_tokens   BIGINT  NOT NULL DEFAULT 0,
+    total_cost          DECIMAL(20,8) NOT NULL DEFAULT 0,
+    total_latency_ms    BIGINT  NOT NULL DEFAULT 0,
+    min_latency_ms      INT     NOT NULL DEFAULT 0,
+    max_latency_ms      INT     NOT NULL DEFAULT 0,
+    latency_samples     INT     NOT NULL DEFAULT 0,
+    first_token_samples INT     NOT NULL DEFAULT 0,
+    total_first_token_ms BIGINT NOT NULL DEFAULT 0,
+    error_count         INT     NOT NULL DEFAULT 0,
+    fallback_count      INT     NOT NULL DEFAULT 0,
+    retry_count         INT     NOT NULL DEFAULT 0,
+    guardrail_blocks    INT     NOT NULL DEFAULT 0,
+    cache_hits          INT     NOT NULL DEFAULT 0,
+    distinct_sessions   INT     NOT NULL DEFAULT 0,
+    distinct_keys       INT     NOT NULL DEFAULT 0,
+
+    latency_bucket_50   INT NOT NULL DEFAULT 0,
+    latency_bucket_100  INT NOT NULL DEFAULT 0,
+    latency_bucket_200  INT NOT NULL DEFAULT 0,
+    latency_bucket_500  INT NOT NULL DEFAULT 0,
+    latency_bucket_1000 INT NOT NULL DEFAULT 0,
+    latency_bucket_2000 INT NOT NULL DEFAULT 0,
+    latency_bucket_5000 INT NOT NULL DEFAULT 0,
+    latency_bucket_slow INT NOT NULL DEFAULT 0,
+
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- COALESCE unique index omitted (MySQL lacks expression indexes).
+CREATE INDEX idx_ddm_org_day ON datalens_daily_metrics (org_id, day_bucket);
+
+-- ============================================================
+-- 31. datalens_agg_status — DataLens aggregation health status
+--    Column source: 000056 (base), 000058 (agg_type VARCHAR(32))
+-- ============================================================
+CREATE TABLE datalens_agg_status (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    agg_level       VARCHAR(16) NOT NULL,
+    agg_type        VARCHAR(32) NOT NULL,
+    last_success_at DATETIME(3) NOT NULL,
+    last_duration_ms INT NOT NULL DEFAULT 0,
+    rows_affected   INT NOT NULL DEFAULT 0,
+    error_message   TEXT,
+    updated_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE UNIQUE INDEX idx_das_level_type ON datalens_agg_status (agg_level, agg_type);
+
+-- ============================================================
+-- 32. datalens_reports — DataLens saved report configurations
+--    Column source: 000056 (base)
+-- ============================================================
+CREATE TABLE datalens_reports (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_id      BIGINT NOT NULL,
+    user_id     BIGINT NOT NULL,
+    name        VARCHAR(128) NOT NULL,
+    description TEXT,
+    type        VARCHAR(16) NOT NULL DEFAULT 'custom',
+    template_id VARCHAR(64),
+    scope       VARCHAR(16) NOT NULL DEFAULT 'private',
+    config      JSON NOT NULL,
+    is_pinned   TINYINT(1) NOT NULL DEFAULT 0,
+    version     INT NOT NULL DEFAULT 1,
+    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    deleted_at  DATETIME(3) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Partial indexes removed (MySQL doesn't support WHERE clause):
+--   idx_dr_org_user ON (org_id, user_id) WHERE deleted_at IS NULL
+--   idx_dr_template ON (org_id, template_id) WHERE deleted_at IS NULL
+--   idx_dr_deleted  ON (deleted_at) WHERE deleted_at IS NOT NULL
+CREATE INDEX idx_dr_org_user ON datalens_reports (org_id, user_id);
+CREATE INDEX idx_dr_template ON datalens_reports (org_id, template_id);
+CREATE INDEX idx_dr_deleted  ON datalens_reports (deleted_at);
+
+-- ============================================================
+-- 33. datalens_schedules — DataLens automated report schedules (Enterprise)
+--    Column source: 000056 (base)
+-- ============================================================
+CREATE TABLE datalens_schedules (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_id      BIGINT NOT NULL,
+    user_id     BIGINT NOT NULL,
+    team_id     BIGINT,
+    name        VARCHAR(128) NOT NULL,
+    report_id   BIGINT NOT NULL,
+    cron        VARCHAR(64) NOT NULL,
+    timezone    VARCHAR(32) NOT NULL DEFAULT 'Asia/Shanghai',
+    channels    JSON NOT NULL,
+    enabled     TINYINT(1) NOT NULL DEFAULT 1,
+    last_run_at DATETIME(3) NULL,
+    next_run_at DATETIME(3) NULL,
+    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    deleted_at  DATETIME(3) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Partial index removed: idx_ds_org ON (org_id, enabled, next_run_at) WHERE deleted_at IS NULL
+CREATE INDEX idx_ds_org ON datalens_schedules (org_id, enabled, next_run_at);
+
+-- ============================================================
+-- 34. datalens_partition_marker — DataLens partition migration tracking
+--    Column source: 000057 (base)
+-- ============================================================
+CREATE TABLE datalens_partition_marker (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    partitioned  TINYINT(1) NOT NULL DEFAULT 0,
+    migrated_at  DATETIME(3) NULL,
+    note         TEXT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO datalens_partition_marker (partitioned, note) VALUES (0, 'Partition migration pending. Run: crosslink migrate-partition');
