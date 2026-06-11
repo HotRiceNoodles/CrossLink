@@ -3,6 +3,7 @@ package service
 import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
+	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -17,12 +18,13 @@ type Services struct {
 	LatencySvc    *LatencyService
 	CacheSvc      *CacheService
 	KeySvc        *KeyService
-	ActiveTracker *ActiveRequestTracker
-	IdemCache     *IdempotencyCache
+	ActiveTracker   *ActiveRequestTracker
+	IdemCache       *IdempotencyCache
+	DataLensAggSvc *DataLensAggregatorService
 }
 
 // ProvideServices constructs all service instances from repos + infra dependencies.
-func ProvideServices(repos *repository.Repos, rdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider) *Services {
+func ProvideServices(repos *repository.Repos, rdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider, dlCfg config.DataLensConfig, d dialect.Dialect) *Services {
 	return &Services{
 		UsageSvc:      NewUsageService(repos.UsageLogRepo),
 		BudgetSvc:     NewBudgetService(rdb),
@@ -31,7 +33,8 @@ func ProvideServices(repos *repository.Repos, rdb *redis.Client, db *gorm.DB, ca
 		LatencySvc:    NewLatencyService(rdb),
 		CacheSvc:      NewCacheService(rdb, db, *cacheCfg),
 		KeySvc:        NewKeyService(repos.APIKeyRepo, repos.APIKeyHashRepo, db, cp, rdb),
-		ActiveTracker: NewActiveRequestTracker(rdb),
-		IdemCache:     NewIdempotencyCache(rdb),
+		ActiveTracker:   NewActiveRequestTracker(rdb),
+		IdemCache:       NewIdempotencyCache(rdb),
+		DataLensAggSvc: NewDataLensAggregatorService(db, d, dlCfg),
 	}
 }
