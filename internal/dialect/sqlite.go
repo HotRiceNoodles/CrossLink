@@ -207,6 +207,11 @@ func (s *SQLiteDialect) ConditionalCount(column string, value string) string {
 	return fmt.Sprintf("SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END)", column, value)
 }
 
+// ConditionalSum returns a SUM(CASE WHEN ...) expression for conditional summing.
+func (s *SQLiteDialect) ConditionalSum(condition string) string {
+	return fmt.Sprintf("SUM(CASE WHEN %s THEN 1 ELSE 0 END)", condition)
+}
+
 // CastFloat returns a SQLite float cast expression.
 func (s *SQLiteDialect) CastFloat(expr string) string {
 	return "CAST(" + expr + " AS DOUBLE)"

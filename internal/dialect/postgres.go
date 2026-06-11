@@ -173,6 +173,11 @@ func (p *PostgresDialect) ConditionalCount(column string, value string) string {
 	return fmt.Sprintf("COUNT(*) FILTER (WHERE %s = %s)", column, value)
 }
 
+// ConditionalSum returns a SUM(1) FILTER (WHERE ...) expression for conditional summing.
+func (p *PostgresDialect) ConditionalSum(condition string) string {
+	return fmt.Sprintf("COALESCE(SUM(1) FILTER (WHERE %s), 0)", condition)
+}
+
 // CastFloat returns a PostgreSQL float cast expression.
 func (p *PostgresDialect) CastFloat(expr string) string {
 	return expr + "::float"

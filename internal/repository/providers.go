@@ -17,6 +17,8 @@ type Repos struct {
 	RoleRepo              *RoleRepo
 	BudgetAlertRepo       *BudgetAlertRepo
 	OrgRepo               *OrgRepo
+	DataLensStore         MetricsStore       // interface — set in FullSetup where dialect is available
+	DataLensRepo          *DataLensRepository
 }
 
 // ProvideRepos constructs all repository instances.
@@ -33,5 +35,6 @@ func ProvideRepos(db *gorm.DB) *Repos {
 		RoleRepo:              NewRoleRepo(db),
 		BudgetAlertRepo:       NewBudgetAlertRepo(db),
 		OrgRepo:               NewOrgRepo(db),
+		DataLensRepo:          NewDataLensRepository(db),
 	}
 }

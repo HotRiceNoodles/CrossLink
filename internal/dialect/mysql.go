@@ -173,6 +173,11 @@ func (m *MySQLDialect) ConditionalCount(column string, value string) string {
 	return fmt.Sprintf("SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END)", column, value)
 }
 
+// ConditionalSum returns a SUM(CASE WHEN ...) expression for conditional summing.
+func (m *MySQLDialect) ConditionalSum(condition string) string {
+	return fmt.Sprintf("SUM(CASE WHEN %s THEN 1 ELSE 0 END)", condition)
+}
+
 // CastFloat returns a MySQL float cast expression.
 func (m *MySQLDialect) CastFloat(expr string) string {
 	return "CAST(" + expr + " AS DOUBLE)"

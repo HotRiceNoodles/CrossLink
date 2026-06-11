@@ -135,6 +135,10 @@ func (k *KingbaseDialect) ConditionalCount(column, value string) string {
 	return k.pg.ConditionalCount(column, value)
 }
 
+func (k *KingbaseDialect) ConditionalSum(condition string) string {
+	return k.pg.ConditionalSum(condition)
+}
+
 func (k *KingbaseDialect) CastFloat(expr string) string {
 	return k.pg.CastFloat(expr)
 }

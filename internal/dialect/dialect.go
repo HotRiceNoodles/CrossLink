@@ -29,6 +29,7 @@ type Dialect interface {
 	ILike(column string, param string) string            // case-insensitive LIKE
 	JSONMergePatch(column string, jsonExpr string) string // JSON merge/patch
 	ConditionalCount(column string, value string) string // PG: FILTER(WHERE), others: SUM(CASE)
+	ConditionalSum(condition string) string              // PG: SUM(1) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
 	CastFloat(expr string) string                       // PG: ::float, others: CAST(AS DOUBLE)
 
 	// Lifecycle
