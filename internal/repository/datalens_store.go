@@ -44,6 +44,10 @@ type QueryParams struct {
 	SortBy      string    `json:"sort_by"`
 	SortOrder   string    `json:"sort_order"` // "asc", "desc"
 	Limit       int       `json:"limit"`
+	// Accept camelCase variants from frontend — handler maps these after binding.
+	FrontendTimeRange *TimeRange `json:"timeRange"`
+	FrontendSortBy    string     `json:"sortBy"`
+	FrontendSortOrder string     `json:"sortOrder"`
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +145,19 @@ type MetricsStore interface {
 // This prevents SQL injection: only whitelisted dimensions are allowed in
 // GROUP BY, WHERE, and ORDER BY clauses.
 // ---------------------------------------------------------------------------
+
+// queryableDimensions lists dimensions that produce meaningful results from
+// pre-aggregated tables. Dimensions like route/error_type/agent are present
+// in dimensionColumnMap (for filter SQL mapping) but are always NULL in the
+// pre-agg tables, so querying by them silently returns empty results.
+var queryableDimensions = map[string]bool{
+	"model":    true,
+	"team":     true,
+	"key":      true,
+	"provider": true,
+	"status":   true,
+	"currency": true,
+}
 
 var dimensionColumnMap = map[string]string{
 	"model":      "model_name",
@@ -288,7 +305,6 @@ func initMetricDefs() {
 			ComparisonShift:  365 * 24 * time.Hour,
 		},
 	}
-	metricDefsOnce.Do(func() {})
 }
 
 func getMetricDefs() map[string]metricDef {
@@ -318,7 +334,12 @@ func NewPgMetricsStore(db *gorm.DB, d dialect.Dialect) *PgMetricsStore {
 
 // Query builds and executes a pre-aggregation query.
 func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryResult, error) {
+	// Backend-side timeout safety net — don't hang beyond 15s even if client is slow.
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
 	start := time.Now()
+	slog.Info("datalens store.Query entered", "orgID", params.OrgID, "dimensions", params.Dimensions, "metrics", params.Metrics)
 
 	// 1. Validate inputs.
 	if err := validateQueryParams(&params); err != nil {
@@ -339,35 +360,53 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		bucketCol = "hour_bucket"
 	}
 
+	// 3b. Resolve aggregation level early - needed by primaryCurrency and WHERE.
+	aggLevel := resolveAggLevel(params.Dimensions)
+	slog.Info("datalens query: resolved agg level", "aggLevel", aggLevel, "table", table,
+		"dimensions", params.Dimensions, "timeMs", time.Since(start).Milliseconds())
+
 	// 4. Determine primary currency for conditional cost aggregation.
-	primaryCurrency := ""
-	hasCurrencyFilter := false
-	for _, f := range params.Filters {
-		if f.Dimension == "currency" {
-			hasCurrencyFilter = true
-			if str, ok := f.Value.(string); ok {
-				primaryCurrency = str
-			}
+	// Only needed when at least one requested metric uses the {currency} placeholder.
+	defs := getMetricDefs()
+	needsCurrency := false
+	for _, m := range params.Metrics {
+		if d, ok := defs[m]; ok && d.IsCost {
+			needsCurrency = true
 			break
 		}
 	}
-	if !hasCurrencyFilter {
-		cur, err := s.primaryCurrency(ctx, params.OrgID, table, bucketCol, rangeStart, rangeEnd)
-		if err != nil {
-			return nil, fmt.Errorf("detect primary currency: %w", err)
+	primaryCurrency := ""
+	if needsCurrency {
+		hasCurrencyFilter := false
+		for _, f := range params.Filters {
+			if f.Dimension == "currency" {
+				hasCurrencyFilter = true
+				if str, ok := f.Value.(string); ok {
+					primaryCurrency = str
+				}
+				break
+			}
 		}
-		primaryCurrency = cur
+		if !hasCurrencyFilter {
+			cur, err := s.primaryCurrency(queryCtx, params.OrgID, table, bucketCol, aggLevel, rangeStart, rangeEnd)
+			if err != nil {
+				return nil, fmt.Errorf("detect primary currency: %w", err)
+			}
+			primaryCurrency = cur
+		}
 	}
 	if primaryCurrency == "" {
 		primaryCurrency = "CNY"
 	}
+	slog.Info("datalens query: currency resolved", "currency", primaryCurrency,
+		"needsCurrency", needsCurrency, "timeMs", time.Since(start).Milliseconds())
 
 	// 5. Build SELECT columns.
 	var selectCols []string
 	var groupCols []string
 	var columnMeta []ColumnMeta
 
-	// Time bucket column.
+	// Time bucket column (always present).
 	timeExpr := s.d.DateTrunc(params.Granularity, bucketCol)
 	selectCols = append(selectCols, timeExpr+" AS time_bucket")
 	groupCols = append(groupCols, timeExpr)
@@ -375,8 +414,16 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		Key: "time_bucket", Label: "Time", Type: "time",
 	})
 
+	// Filter out the "time" pseudo-dimension — it's already emitted as time_bucket above.
+	dims := make([]string, 0, len(params.Dimensions))
+	for _, d := range params.Dimensions {
+		if d != "time" {
+			dims = append(dims, d)
+		}
+	}
+
 	// Dimension columns (whitelisted).
-	for _, dim := range params.Dimensions {
+	for _, dim := range dims {
 		col, ok := dimensionColumnMap[dim]
 		if !ok {
 			return nil, fmt.Errorf("unknown dimension: %s", dim)
@@ -389,7 +436,6 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 	}
 
 	// Metric columns.
-	defs := getMetricDefs()
 	for _, m := range params.Metrics {
 		def, ok := defs[m]
 		if !ok {
@@ -402,18 +448,22 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		})
 	}
 
-	// 6. Build WHERE clause.
-	var whereConds []string
-	var whereArgs []any
+		// 6. Build WHERE clause.
+		var whereConds []string
+		var whereArgs []any
 
-	whereConds = append(whereConds, "org_id = ?")
-	whereArgs = append(whereArgs, params.OrgID)
+		whereConds = append(whereConds, "org_id = ?")
+		whereArgs = append(whereArgs, params.OrgID)
 
-	whereConds = append(whereConds, bucketCol+" >= ?")
-	whereArgs = append(whereArgs, rangeStart)
+		// Filter by agg_level to avoid summing across all 7 aggregation levels.
+		whereConds = append(whereConds, "agg_level = ?")
+		whereArgs = append(whereArgs, aggLevel)
 
-	whereConds = append(whereConds, bucketCol+" < ?")
-	whereArgs = append(whereArgs, rangeEnd)
+		whereConds = append(whereConds, bucketCol+" >= ?")
+		whereArgs = append(whereArgs, rangeStart)
+
+		whereConds = append(whereConds, bucketCol+" < ?")
+		whereArgs = append(whereArgs, rangeEnd)
 
 	for _, f := range params.Filters {
 		col, ok := dimensionColumnMap[f.Dimension]
@@ -460,21 +510,26 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 	}
 
 	// 8. Execute.
+	slog.Info("datalens query: executing main SQL", "table", table, "aggLevel", aggLevel, "timeMs", time.Since(start).Milliseconds())
+	slog.Debug("datalens query: SQL detail", "sql", sql, "args", whereArgs)
 	var rows []map[string]any
-	if err := s.db.WithContext(ctx).Raw(sql, whereArgs...).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(queryCtx).Raw(sql, whereArgs...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("execute query: %w", err)
 	}
+	slog.Debug("datalens query: main SQL done", "rows", len(rows), "timeMs", time.Since(start).Milliseconds())
 
 	// 8b. Period-over-period comparison for Enterprise metrics.
-	if err := s.computeComparisonMetrics(ctx, params, defs, table, bucketCol, primaryCurrency,
+	if err := s.computeComparisonMetrics(queryCtx, params, defs, table, bucketCol, aggLevel, primaryCurrency,
 		rangeStart, rangeEnd, selectCols, whereArgs, whereConds, rows); err != nil {
 		return nil, fmt.Errorf("compute comparison metrics: %w", err)
 	}
+	slog.Debug("datalens query: comparison metrics done", "timeMs", time.Since(start).Milliseconds())
 
 	// 9. Resolve dimension names (ID → display name).
-	if err := s.resolveDimensionNames(ctx, rows, params.Dimensions); err != nil {
+	if err := s.resolveDimensionNames(queryCtx, rows, params.Dimensions); err != nil {
 		return nil, fmt.Errorf("resolve dimension names: %w", err)
 	}
+	slog.Debug("datalens query: dimension names resolved", "timeMs", time.Since(start).Milliseconds())
 
 	// 10. Build aggregation status metadata.
 	meta := QueryMeta{
@@ -482,7 +537,7 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		DataSource:  table,
 		Currency:    primaryCurrency,
 	}
-	s.enrichMeta(ctx, &meta)
+	s.enrichMeta(queryCtx, &meta)
 
 	return &QueryResult{
 		Columns: columnMeta,
@@ -565,16 +620,16 @@ func (s *PgMetricsStore) GetAggStatus(ctx context.Context) (*AggregationStatus, 
 // primaryCurrency returns the currency with the highest total_cost in the given
 // time range, used for conditional cost aggregation when no currency filter
 // is specified by the caller.
-func (s *PgMetricsStore) primaryCurrency(ctx context.Context, orgID int64, table, bucketCol string, start, end time.Time) (string, error) {
+func (s *PgMetricsStore) primaryCurrency(ctx context.Context, orgID int64, table, bucketCol, aggLevel string, start, end time.Time) (string, error) {
 	var result struct {
 		Currency string
 	}
 	err := s.db.WithContext(ctx).Raw(
 		fmt.Sprintf(
-			"SELECT currency FROM %s WHERE org_id = ? AND %s >= ? AND %s < ? GROUP BY currency ORDER BY SUM(total_cost) DESC LIMIT 1",
+			"SELECT currency FROM %s WHERE org_id = ? AND agg_level = ? AND %s >= ? AND %s < ? GROUP BY currency ORDER BY SUM(total_cost) DESC LIMIT 1",
 			table, bucketCol, bucketCol,
 		),
-		orgID, start, end,
+		orgID, aggLevel, start, end,
 	).Scan(&result).Error
 	if err != nil {
 		return "", err
@@ -717,7 +772,7 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 	ctx context.Context,
 	params QueryParams,
 	defs map[string]metricDef,
-	table, bucketCol, primaryCurrency string,
+	table, bucketCol, aggLevel, primaryCurrency string,
 	rangeStart, rangeEnd time.Time,
 	selectCols []string,
 	whereArgs []any,
@@ -776,8 +831,11 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 		var prevSelectCols []string
 		var prevGroupCols []string
 
-		// Dimension columns (same as main query).
+		// Dimension columns (same as main query — skip "time" pseudo-dimension).
 		for _, dim := range params.Dimensions {
+			if dim == "time" {
+				continue
+			}
 			col := dimensionColumnMap[dim]
 			prevSelectCols = append(prevSelectCols, col)
 			prevGroupCols = append(prevGroupCols, col)
@@ -789,6 +847,8 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 		var prevWhereArgs []any
 		prevWhereConds = append(prevWhereConds, "org_id = ?")
 		prevWhereArgs = append(prevWhereArgs, params.OrgID)
+		prevWhereConds = append(prevWhereConds, "agg_level = ?")
+		prevWhereArgs = append(prevWhereArgs, aggLevel)
 		prevWhereConds = append(prevWhereConds, bucketCol+" >= ?")
 		prevWhereArgs = append(prevWhereArgs, prevStart)
 		prevWhereConds = append(prevWhereConds, bucketCol+" < ?")
@@ -850,6 +910,9 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 func dimensionRowKey(row map[string]any, dimensions []string) string {
 	parts := make([]string, 0, len(dimensions))
 	for _, dim := range dimensions {
+		if dim == "time" {
+			continue
+		}
 		col := dimensionColumnMap[dim]
 		v := row[col]
 		if v == nil {
@@ -895,9 +958,16 @@ func validateQueryParams(p *QueryParams) error {
 	}
 
 	// Validate dimension names against whitelist.
+	// "time" is a pseudo-dimension — it's always present as time_bucket, so skip it.
 	for _, d := range p.Dimensions {
+		if d == "time" {
+			continue
+		}
 		if _, ok := dimensionColumnMap[d]; !ok {
 			return fmt.Errorf("unknown dimension: %s", d)
+		}
+		if !queryableDimensions[d] {
+			return fmt.Errorf("dimension %q is not available in pre-aggregated data", d)
 		}
 	}
 
@@ -975,6 +1045,11 @@ func buildFilterCondition(col string, f Filter) (string, []any, error) {
 		placeholders := strings.Repeat("?,", len(f.Values))
 		placeholders = placeholders[:len(placeholders)-1]
 		return col + " NOT IN (" + placeholders + ")", f.Values, nil
+	case "between":
+		if len(f.Values) < 2 {
+			return "", nil, nil
+		}
+		return col + " BETWEEN ? AND ?", []any{f.Values[0], f.Values[1]}, nil
 	case "is_null":
 		return col + " IS NULL", nil, nil
 	case "is_not_null":
@@ -1007,5 +1082,35 @@ func dimLabel(dim string) string {
 		return "Currency"
 	default:
 		return dim
+	}
+}
+
+// resolveAggLevel picks the best pre-aggregation level for the given dimensions.
+// The pre-agg tables contain 7 levels: global, by_model, by_team, by_provider,
+// by_key, team_model, key_model. We must query exactly one level to avoid
+// inflating metrics by summing across all levels.
+func resolveAggLevel(dims []string) string {
+	if len(dims) == 0 {
+		return "global"
+	}
+	has := make(map[string]bool, len(dims))
+	for _, d := range dims {
+		has[d] = true
+	}
+	switch {
+	case has["model"] && has["key"]:
+		return "key_model"
+	case has["model"] && has["team"]:
+		return "team_model"
+	case has["model"]:
+		return "by_model"
+	case has["team"]:
+		return "by_team"
+	case has["provider"]:
+		return "by_provider"
+	case has["key"]:
+		return "by_key"
+	default:
+		return "global"
 	}
 }
