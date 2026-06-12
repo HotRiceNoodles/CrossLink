@@ -209,29 +209,42 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		Group("currency").
 		Scan(&currencySums)
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"total_requests":     stats.TotalRequests,
-			"total_sessions":    stats.TotalSessions,
-			"total_tokens":      stats.TotalTokens,
-			"input_tokens":      stats.InputTokens,
-			"output_tokens":     stats.OutputTokens,
-			"reasoning_tokens":  stats.ReasoningTokens,
-			"cache_read_tokens": stats.CacheReadTokens,
-			"total_cost":        stats.TotalCost,
-			"cost_per_1k_tokens": stats.CostPer1kTokens,
-			"cost_per_request":   stats.CostPerRequest,
-			"avg_latency_ms":    stats.AvgLatencyMs,
-			"avg_first_token_ms": stats.AvgFirstTokenMs,
-			"error_rate":        stats.ErrorRate,
-			"active_api_keys":   stats.ActiveAPIKeys,
-			"fallback_rate":     stats.FallbackRate,
-			"retry_rate":        stats.RetryRate,
-			"guardrail_block_rate": stats.GuardrailRate,
-			"currency":          stats.Currency,
-			"cost_by_currency":  currencySums,
-		},
-	})
+	data := gin.H{
+		"total_requests":     stats.TotalRequests,
+		"total_sessions":    stats.TotalSessions,
+		"total_tokens":      stats.TotalTokens,
+		"input_tokens":      stats.InputTokens,
+		"output_tokens":     stats.OutputTokens,
+		"reasoning_tokens":  stats.ReasoningTokens,
+		"cache_read_tokens": stats.CacheReadTokens,
+		"total_cost":        stats.TotalCost,
+		"cost_per_1k_tokens": stats.CostPer1kTokens,
+		"cost_per_request":   stats.CostPerRequest,
+		"avg_latency_ms":    stats.AvgLatencyMs,
+		"avg_first_token_ms": stats.AvgFirstTokenMs,
+		"error_rate":        stats.ErrorRate,
+		"active_api_keys":   stats.ActiveAPIKeys,
+		"fallback_rate":     stats.FallbackRate,
+		"retry_rate":        stats.RetryRate,
+		"guardrail_block_rate": stats.GuardrailRate,
+		"currency":          stats.Currency,
+		"cost_by_currency":  currencySums,
+	}
+
+	// Global-view-only resource totals. These are point-in-time counts of
+	// organizations / members / API keys, only meaningful when no org scope
+	// is selected (org_id == 0). Count queries respect soft-delete via GORM.
+	if GetOrgID(c) == 0 {
+		var orgCount, memberCount, totalKeys int64
+		h.db.Model(&model.Organization{}).Count(&orgCount)
+		h.db.Model(&model.User{}).Count(&memberCount)
+		h.db.Model(&model.APIKey{}).Count(&totalKeys)
+		data["organization_count"] = orgCount
+		data["member_count"] = memberCount
+		data["total_api_keys"] = totalKeys
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": data})
 }
 
 type CurrencyCostSum struct {
