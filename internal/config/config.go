@@ -435,7 +435,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("datalens.retention.daily_metrics_days", 730)
 	v.SetDefault("datalens.aggregation.interval", "1h")
 	v.SetDefault("datalens.aggregation.lookback", "3h")
-	v.SetDefault("datalens.aggregation.backfill_days", 90)
+	v.SetDefault("datalens.aggregation.backfill_days", 7)
 	v.SetDefault("datalens.aggregation.backfill_concurrency", 1)
 	v.SetDefault("datalens.aggregation.levels", []string{"global", "by_model", "by_team", "by_provider", "by_key", "team_model", "key_model"})
 	v.SetDefault("datalens.from_name", "CrossLink DataLens")

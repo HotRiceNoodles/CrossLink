@@ -488,6 +488,7 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 	days := s.backfillDays
 	slog.Info("datalens aggregator: starting backfill", "days", days)
 
+	emptyStreak := 0
 	for i := days; i >= 1; i-- {
 		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i)
 		dayEnd := dayStart.AddDate(0, 0, 1)
@@ -499,12 +500,15 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 		default:
 		}
 
-		// Hourly aggregation for this day.
+		// Hourly aggregation for this day — track rows affected.
+		totalRows := 0
 		for _, level := range s.levels {
 			sql, args := s.buildHourlySQL(level, dayStart, dayEnd)
 			if result := s.db.WithContext(ctx).Exec(sql, args...); result.Error != nil {
 				slog.Warn("datalens aggregator: backfill hourly failed",
 					"level", level.Name, "day", dayStart.Format("2006-01-02"), "error", result.Error)
+			} else {
+				totalRows += int(result.RowsAffected)
 			}
 		}
 
@@ -518,8 +522,20 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 				"day", dayStart.Format("2006-01-02"), "error", err)
 		}
 
-		// Sleep between days to avoid pressure.
-		time.Sleep(200 * time.Millisecond)
+		// Fast-forward through historical gaps with no data.
+		if totalRows == 0 {
+			emptyStreak++
+			if emptyStreak >= 14 {
+				slog.Info("datalens aggregator: backfill skipping remaining days (14 consecutive empty)",
+					"last_checked", dayStart.Format("2006-01-02"), "remaining_days", i-1)
+				break
+			}
+		} else {
+			emptyStreak = 0
+		}
+
+		// Throttle between days to reduce DB I/O pressure.
+		time.Sleep(2 * time.Second)
 	}
 	slog.Info("datalens aggregator: backfill complete", "days", days)
 }
