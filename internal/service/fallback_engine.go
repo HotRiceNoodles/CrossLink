@@ -159,6 +159,7 @@ func (e *FallbackEngine) ExecuteNonStream(
 					"error_type", string(classified.ErrorType),
 					"persistent", classified.Persistent,
 					"scope", classified.Scope,
+					"rule_id", classified.RuleID,
 					"attempt", i+1)
 				lastErr = err
 

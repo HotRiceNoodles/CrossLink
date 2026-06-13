@@ -18,6 +18,7 @@ type ClassifiedError struct {
 	ErrorType  provider.ErrorType
 	Persistent bool
 	Scope      string // "account"|"model" — from the matched rule; empty when not persistent
+	RuleID     int64  // id of the matched rule; 0 when no rule matched
 }
 
 // ruleView is the in-memory representation of an enabled error_classification_rule.
@@ -121,7 +122,7 @@ func (c *ErrorClassifier) Classify(adapterType string, err error) ClassifiedErro
 	if p := c.rules.Load(); p != nil {
 		for _, r := range *p {
 			if r.Classification == "quota" && r.matches(adapterType, pe) {
-				return ClassifiedError{ErrorType: provider.ErrorQuota, Persistent: true, Scope: r.Scope}
+				return ClassifiedError{ErrorType: provider.ErrorQuota, Persistent: true, Scope: r.Scope, RuleID: r.ID}
 			}
 		}
 	}
