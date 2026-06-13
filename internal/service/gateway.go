@@ -167,7 +167,22 @@ type StreamEvent struct {
 
 type StreamChatFunc func(ctx context.Context, event StreamEvent) bool
 
+// StreamConnectFunc is invoked by StreamChatWithConnect after the connection/fallback
+// decision succeeds but before the first event is read. It receives the winning route
+// and fallback count so callers can set response headers that depend on the chosen route
+// (e.g. x-crosslink-fallback-*), which must precede the streamed body.
+type StreamConnectFunc func(route *router.RouteResult, fallbackCount int)
+
+// StreamChat streams a chat completion, invoking fn for each translated event.
+// Backward-compatible entry point (onConnect is nil). New callers that need to set
+// route-dependent response headers should use StreamChatWithConnect.
 func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRequest, fn StreamChatFunc, sessionID string, orgID int64) (*StreamResult, error) {
+	return s.StreamChatWithConnect(ctx, req, fn, nil, sessionID, orgID)
+}
+
+// StreamChatWithConnect is StreamChat with an onConnect callback fired once the
+// connection (and any fallback) has settled, before streaming begins.
+func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.AnthropicRequest, fn StreamChatFunc, onConnect StreamConnectFunc, sessionID string, orgID int64) (*StreamResult, error) {
 	start := time.Now()
 
 	routes, err := s.resolver.Resolve(ctx, req.Model, orgID)
@@ -229,6 +244,12 @@ func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRe
 
 	ch := result.StreamCh
 	route := result.Route
+
+	// Surface the winning route + fallback count before any event is read, so callers
+	// can set response headers that depend on the chosen route.
+	if onConnect != nil {
+		onConnect(route, result.FallbackCount)
+	}
 
 	messageID := translator.GenerateMessageID()
 	inputEstimate := estimateInputTokens(openaiReq)
