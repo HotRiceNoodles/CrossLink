@@ -22,6 +22,7 @@ const (
 	ErrorServer     ErrorType = "server"
 	ErrorNetwork    ErrorType = "network"
 	ErrorTimeout    ErrorType = "timeout"
+	ErrorQuota      ErrorType = "quota"
 )
 
 // ProviderError carries the upstream HTTP status code and error type.
@@ -29,6 +30,8 @@ type ProviderError struct {
 	StatusCode int
 	Message    string
 	ErrorType  ErrorType
+	Code       string
+	Type       string
 	RetryAfter time.Duration
 }
 
@@ -77,6 +80,8 @@ func parseProviderError(resp *http.Response) error {
 		StatusCode: resp.StatusCode,
 		Message:    fmt.Sprintf("%s: %s", label, msg),
 		ErrorType:  et,
+		Code:       errResp.Error.Code,
+		Type:       errResp.Error.Type,
 	}
 
 	// Parse Retry-After header (rate-limit, 503, and other retryable errors)
