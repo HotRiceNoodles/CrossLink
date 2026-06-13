@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
@@ -202,6 +203,48 @@ func TestResolver_Resolve_SkipsUnhealthyProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	// deepseek should be skipped, only qwen returned
+	assert.Len(t, results, 1)
+	assert.Equal(t, "qwen", results[0].Provider.Name())
+}
+
+func TestResolver_Resolve_SkipsModelScopeCircuit(t *testing.T) {
+	health := provider.NewHealthTracker()
+	reg := provider.NewRegistry()
+	reg.Register("deepseek", &mockProvider{name: "deepseek"})
+	reg.Register("qwen", &mockProvider{name: "qwen"})
+
+	repo := &mockProviderModelRepo{
+		data: map[string][]model.ProviderModel{
+			"test-model": {
+				{
+					ID:            1,
+					ProviderModel: "deepseek-chat",
+					Weight:        3,
+					Status:        1,
+					Provider:      model.Provider{Name: "deepseek", Status: 1},
+				},
+				{
+					ID:            2,
+					ProviderModel: "qwen-max",
+					Weight:        1,
+					Status:        1,
+					Provider:      model.Provider{Name: "qwen", Status: 1},
+				},
+			},
+		},
+	}
+
+	// Open a model-scope circuit on deepseek/deepseek-chat only — the account key
+	// stays healthy, so this only filters when Resolve checks (provider, model).
+	health.RecordPersistentFailure("deepseek", "deepseek-chat", "model", time.Hour)
+
+	r := NewResolver(reg, repo, health, map[StrategyName]RoutingStrategy{
+		StrategyWeightedRandom: &WeightedRandomStrategy{},
+	}, nil, nil, nil)
+	results, err := r.Resolve(context.Background(), "test-model", 0)
+	require.NoError(t, err)
+
+	// deepseek/deepseek-chat is filtered by the model-scope circuit; only qwen returns.
 	assert.Len(t, results, 1)
 	assert.Equal(t, "qwen", results[0].Provider.Name())
 }

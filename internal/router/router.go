@@ -83,7 +83,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 			if r.health != nil {
 				var healthy []*RouteResult
 				for _, rr := range entry.results {
-					if r.health.IsHealthy(rr.Provider.Name()) {
+					if r.health.IsHealthyModel(rr.Provider.Name(), rr.ProviderModel) {
 						healthy = append(healthy, rr)
 					}
 				}
@@ -115,7 +115,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		if _, ok := r.registry.Get(m.Provider.Name); !ok {
 			continue
 		}
-		if r.health != nil && !r.health.IsHealthy(m.Provider.Name) {
+		if r.health != nil && !r.health.IsHealthyModel(m.Provider.Name, m.ProviderModel) {
 			continue
 		}
 		if meta := provider.GetAdapterMeta(m.Provider.AdapterType); meta != nil && meta.MinimumTier != "" {
