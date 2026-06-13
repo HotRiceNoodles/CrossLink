@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,6 +142,46 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	}
 
 	h.handleNonStream(c, routes, &req, start, sessionID)
+}
+
+// setFallbackHeaders exposes which model served the request and how many fallbacks
+// occurred, so clients can observe failover behavior. The model header is always set
+// (the serving model); the count header is only set when at least one fallback happened.
+func setFallbackHeaders(c *gin.Context, model string, fallbackCount int) {
+	if model != "" {
+		c.Header("x-crosslink-fallback-model", model)
+	}
+	if fallbackCount > 0 {
+		c.Header("x-crosslink-fallback-count", strconv.Itoa(fallbackCount))
+	}
+}
+
+// writeStreamInterrupted emits a structured SSE error event when the upstream stream
+// ends without a terminal [DONE]. Clients get a machine-readable signal instead of a
+// silent truncation. Does not alter the SSEChunk protocol — just an extra data line.
+func writeStreamInterrupted(w io.Writer) {
+	errData, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"type":    "stream_interrupted",
+			"message": "upstream stream ended unexpectedly",
+		},
+	})
+	fmt.Fprintf(w, "data: %s\n\n", errData)
+}
+
+// writeStreamInterruptedAnthropic is the Anthropic-SSE analogue of writeStreamInterrupted:
+// a named error event followed by the terminal message_stop so clients observe the
+// truncation instead of a silent end.
+func writeStreamInterruptedAnthropic(w io.Writer) {
+	errData, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    "stream_interrupted",
+			"message": "upstream stream ended unexpectedly",
+		},
+	})
+	fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+	fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
 func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
@@ -278,6 +319,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				}
 			}
 		}
+	setFallbackHeaders(c, route.ProviderModel, result.FallbackCount)
 	c.Header("Content-Type", "application/json")
 	c.Status(http.StatusOK)
 	c.Writer.Write(respBody)
@@ -421,6 +463,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		return
 	}
 
+	setFallbackHeaders(c, route.ProviderModel, result.FallbackCount)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -588,11 +631,14 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		}
 	}
 
-	// Graceful degradation: if provider disconnected mid-stream, send [DONE]
+	// Graceful degradation: if provider disconnected mid-stream, emit a structured
+	// stream_interrupted event so clients can tell a truncation from a clean finish,
+	// then terminate with [DONE].
 	if !gotDone {
 		slog.Warn("stream disconnected mid-stream, sending graceful end",
 			"provider", route.Provider.Name(),
 			"output_tokens", outputTokens)
+		writeStreamInterrupted(c.Writer)
 		fmt.Fprintln(c.Writer, "data: [DONE]")
 		fmt.Fprintln(c.Writer)
 		flusher.Flush()

@@ -18,6 +18,7 @@ import (
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/translator"
 	"gorm.io/datatypes"
@@ -220,6 +221,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				}
 			}
 		}
+	setFallbackHeaders(c, result.ModelUsed, result.FallbackCount)
 	c.Header("Content-Type", "application/json")
 	c.Status(http.StatusOK)
 	c.Writer.Write(respBody)
@@ -336,7 +338,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
 	}
 
-	result, err := h.svc.StreamChat(c.Request.Context(), req, func(ctx context.Context, event service.StreamEvent) bool {
+	result, err := h.svc.StreamChatWithConnect(c.Request.Context(), req, func(ctx context.Context, event service.StreamEvent) bool {
 		select {
 		case <-ctx.Done():
 			return false
@@ -384,6 +386,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 					})
 					fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
 					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+					messageStopSent = true
 					flusher.Flush()
 					return false
 				}
@@ -401,6 +404,10 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			modelRespBuf.WriteString(deltaText)
 		}
 		return true
+	}, func(route *router.RouteResult, fallbackCount int) {
+		// Connection (and any fallback) has settled but no event has been written yet,
+		// so route-dependent headers can still take effect before the streamed body.
+		setFallbackHeaders(c, route.ProviderModel, fallbackCount)
 	}, sessionID, orgID)
 
 	// Final-drain: check any remaining buffered content after stream ends
@@ -445,6 +452,17 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
 		flusher.Flush()
 		return
+	}
+
+	// Graceful degradation: if the upstream stream ended without a terminal message_stop
+	// (mid-stream disconnect), emit a structured stream_interrupted event so clients can
+	// tell a truncation from a clean finish, then close with message_stop.
+	if !messageStopSent {
+		slog.Warn("anthropic stream ended without message_stop, sending graceful end",
+			"provider", result.ProviderName,
+			"output_tokens", result.OutputTokens)
+		writeStreamInterruptedAnthropic(c.Writer)
+		flusher.Flush()
 	}
 
 	c.Set("provider", result.ProviderName)

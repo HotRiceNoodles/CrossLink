@@ -231,6 +231,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		})
 	}
 
+	setFallbackHeaders(c, winningRoute.ProviderModel, result.FallbackCount)
 	c.Data(200, "application/json", respBody)
 }
 
