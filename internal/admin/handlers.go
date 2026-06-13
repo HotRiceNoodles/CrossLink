@@ -24,6 +24,7 @@ type AdminHandlers struct {
 	Debug    *DebugHandler
 	License      *LicenseHandler
 	Preferences  *PreferencesHandler
+	ErrorRule    *ErrorRuleHandler
 	Perms        gin.HandlerFunc
 }
 
@@ -90,6 +91,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		),
 		License: NewLicenseHandler(deps.DB, deps.Config),
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
+		ErrorRule: NewErrorRuleHandler(deps.Repos.ErrorRuleRepo, deps.AuditSvc),
 		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo),
 	}
 }

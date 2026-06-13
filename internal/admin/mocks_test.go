@@ -114,6 +114,7 @@ func (m *mockProviderRepo) Delete(ctx context.Context, id int64) error {
 type mockProviderModelRepo struct {
 	countByProviderIDFn  func(ctx context.Context, providerID int64) (int64, error)
 	firstByProviderIDFn  func(ctx context.Context, providerID int64) (*model.ProviderModel, error)
+	listByProviderIDFn   func(ctx context.Context, providerID int64) ([]model.ProviderModel, error)
 }
 
 func (m *mockProviderModelRepo) CountByProviderID(ctx context.Context, providerID int64) (int64, error) {
@@ -122,4 +123,11 @@ func (m *mockProviderModelRepo) CountByProviderID(ctx context.Context, providerI
 
 func (m *mockProviderModelRepo) FirstByProviderID(ctx context.Context, providerID int64) (*model.ProviderModel, error) {
 	return m.firstByProviderIDFn(ctx, providerID)
+}
+
+func (m *mockProviderModelRepo) ListByProviderID(ctx context.Context, providerID int64) ([]model.ProviderModel, error) {
+	if m.listByProviderIDFn != nil {
+		return m.listByProviderIDFn(ctx, providerID)
+	}
+	return nil, nil
 }
