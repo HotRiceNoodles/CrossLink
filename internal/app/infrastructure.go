@@ -23,6 +23,7 @@ type Infrastructure struct {
 	GatewaySvc   *service.GatewayService
 	RetryBudget  *provider.RetryBudget
 	RegistrySync *provider.RegistrySync
+	Classifier   *service.ErrorClassifier
 }
 
 // InfraDeps holds the dependencies needed to construct Infrastructure.
@@ -57,8 +58,15 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 		rc.CircuitBreakerThreshold,
 		time.Duration(rc.CircuitBreakerDuration)*time.Second,
 	)
+	health.SetPersistentCooldown(time.Duration(rc.PersistentCooldown) * time.Second)
+	health.SetRetryAfterBounds(time.Duration(rc.RetryAfterMin)*time.Second, time.Duration(rc.RetryAfterMax)*time.Second)
 
 	retryBudget := provider.NewRetryBudget(deps.RDB, rc.RetryBudgetPerSecond)
+
+	// Error classifier: TTL-cached rule table distinguishing persistent (quota/billing)
+	// failures from transient ones. Loads once synchronously here; app.go runs the
+	// background refresh loop bound to appCtx.
+	classifier := service.NewErrorClassifier(service.AdaptErrorRuleLoader(deps.Repos.ErrorRuleRepo), 30*time.Second)
 
 	resolver := router.NewResolver(
 		registry, deps.Repos.ProviderModelRepo, health,
@@ -81,5 +89,6 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 		GatewaySvc:   gatewaySvc,
 		RetryBudget:  retryBudget,
 		RegistrySync: registrySync,
+		Classifier:   classifier,
 	}
 }

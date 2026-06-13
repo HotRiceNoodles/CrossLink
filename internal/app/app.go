@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
@@ -21,15 +20,16 @@ import (
 	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/handler"
-	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/middleware"
-	"github.com/crosslink/internal/version"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/version"
 	"github.com/crosslink/internal/worker"
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -83,7 +83,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Background task context (for graceful shutdown)
 	appCtx, appCancel := context.WithCancel(context.Background())
 	teamCache := middleware.NewTeamCache(repos.TeamRepo, appCtx)
-		orgCache := middleware.NewOrgCache(repos.OrgRepo, appCtx)
+	orgCache := middleware.NewOrgCache(repos.OrgRepo, appCtx)
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 
@@ -136,6 +136,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		Extensions:     ext,
 	})
 
+	// Background refresh: keep resilience cooldowns/thresholds in sync without restart
+	go admin.RunResilienceRefreshLoop(appCtx, db, infra.Health, 30*time.Second)
+	// Background refresh: keep the error-classification rule table hot-reloaded
+	go infra.Classifier.RunRefreshLoop(appCtx)
+
 	// Handlers
 
 	// Populate extension deps for Commercial
@@ -173,6 +178,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		videoTaskSvc, infra.Resolver, infra.Health,
 		svcs.UsageSvc, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget,
 	)
+
+	// Inject the error classifier into every fallback-engine consumer (NB1 chain).
+	infra.GatewaySvc.SetClassifier(infra.Classifier)
+	openaiHandler.SetClassifier(infra.Classifier)
+	videoHandler.SetClassifier(infra.Classifier)
 
 	usageWorkers := worker.NewPool(15, 1000)
 	handler.SetUsageWorkers(usageWorkers)
@@ -215,7 +225,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		ext.ExtraPublicRoutes(r, ext)
 	}
 
-
 	// Admin handlers — created after ExtraPublicRoutes so commercial builds can inject AuditSvc.
 	handlers := admin.ProvideAdminHandlers(&admin.AdminDeps{
 		DB:             db,
@@ -251,7 +260,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Registered after ExtraPublicRoutes so deps.AuditSvc is available.
 	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
-
 
 	// Lightweight auth endpoints (JWT required, exempt from rate limit)
 	authGroup := r.Group("/admin/api")
@@ -289,6 +297,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.PUT("/models/:id", middleware.RequireAction(permCache, "model:update"), handlers.Model.Update)
 		adminGroup.DELETE("/models/:id", middleware.RequireAction(permCache, "model:delete"), handlers.Model.Delete)
 
+		adminGroup.GET("/error-rules", middleware.RequireAction(permCache, "error_rule:list"), handlers.ErrorRule.List)
+		adminGroup.POST("/error-rules", middleware.RequireAction(permCache, "error_rule:create"), handlers.ErrorRule.Create)
+		adminGroup.PUT("/error-rules/:id", middleware.RequireAction(permCache, "error_rule:update"), handlers.ErrorRule.Update)
+		adminGroup.DELETE("/error-rules/:id", middleware.RequireAction(permCache, "error_rule:delete"), handlers.ErrorRule.Delete)
+
 		// Keys
 		adminGroup.POST("/keys", middleware.RequireAction(permCache, "key:create"), handlers.Key.Create)
 		adminGroup.GET("/keys", middleware.RequireAction(permCache, "key:list"), handlers.Key.List)
@@ -298,7 +311,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// Usage
 		adminGroup.GET("/usage", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.List)
-		
+
 		adminGroup.GET("/usage/stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.Stats)
 		adminGroup.GET("/usage/daily", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.DailyTrend)
 		adminGroup.GET("/usage/models", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.ModelDistribution)
@@ -318,7 +331,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/debug/entries", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.List)
 		adminGroup.GET("/debug/entries/:id", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Get)
 		adminGroup.DELETE("/debug/entries", middleware.RequireAction(permCache, "debug:clear"), handlers.Debug.Clear)
-
 
 		// Commercial route extension point
 		if ext.ExtraRoutes != nil {
