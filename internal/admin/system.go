@@ -1,17 +1,19 @@
 package admin
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/debug"
-	"github.com/crosslink/internal/version"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/version"
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -34,9 +36,12 @@ func NewSystemHandler(db *gorm.DB, rdb *redis.Client, cfg config.AdminConfig, us
 
 // ResilienceConfig holds the resilience settings stored in system_settings.
 type ResilienceConfig struct {
-	CircuitBreakerThreshold int `json:"circuit_breaker_threshold"`
-	CircuitBreakerDuration  int `json:"circuit_breaker_duration"` // seconds
+	CircuitBreakerThreshold int `json:"circuit_breaker_threshold"` // = transient threshold
+	CircuitBreakerDuration  int `json:"circuit_breaker_duration"`  // = transient cooldown (seconds)
 	RetryBudgetPerSecond    int `json:"retry_budget_per_second"`
+	PersistentCooldown      int `json:"persistent_cooldown"` // seconds; quota/billing failures
+	RetryAfterMin           int `json:"retry_after_min"`     // seconds; transient Retry-After clamp lower bound
+	RetryAfterMax           int `json:"retry_after_max"`     // seconds; transient Retry-After clamp upper bound
 }
 
 // LoadResilienceConfig loads resilience settings from DB, applying defaults for missing keys.
@@ -45,6 +50,9 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 		CircuitBreakerThreshold: 3,
 		CircuitBreakerDuration:  60,
 		RetryBudgetPerSecond:    100,
+		PersistentCooldown:      1800,
+		RetryAfterMin:           5,
+		RetryAfterMax:           300,
 	}
 	loadInt := func(key string, target *int) {
 		var s model.SystemSetting
@@ -57,7 +65,37 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 	loadInt("circuit_breaker_threshold", &rc.CircuitBreakerThreshold)
 	loadInt("circuit_breaker_duration", &rc.CircuitBreakerDuration)
 	loadInt("retry_budget_per_second", &rc.RetryBudgetPerSecond)
+	loadInt("persistent_cooldown", &rc.PersistentCooldown)
+	loadInt("retry_after_min", &rc.RetryAfterMin)
+	loadInt("retry_after_max", &rc.RetryAfterMax)
 	return rc
+}
+
+// RunResilienceRefreshLoop periodically reloads resilience settings from the DB and
+// applies them to the HealthTracker, so cooldowns/thresholds can be tuned at runtime
+// without a restart. Runs until ctx is cancelled. (HealthTracker.UpdateConfig and
+// setters are no-ops-safe to call concurrently.)
+func RunResilienceRefreshLoop(ctx context.Context, db *gorm.DB, health *provider.HealthTracker, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	apply := func() {
+		rc := LoadResilienceConfig(db)
+		health.UpdateConfig(rc.CircuitBreakerThreshold, time.Duration(rc.CircuitBreakerDuration)*time.Second)
+		health.SetPersistentCooldown(time.Duration(rc.PersistentCooldown) * time.Second)
+		health.SetRetryAfterBounds(time.Duration(rc.RetryAfterMin)*time.Second, time.Duration(rc.RetryAfterMax)*time.Second)
+	}
+	apply()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			apply()
+		}
+	}
 }
 
 // LoadAdminPassword loads the persisted password hash from DB,
