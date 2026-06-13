@@ -910,3 +910,26 @@ CREATE TABLE datalens_partition_marker (
 );
 
 INSERT INTO datalens_partition_marker (partitioned, note) VALUES (0, 'Partition migration pending. Run: crosslink migrate-partition');
+
+-- Error classification rules (global, platform-level config for failover precision)
+CREATE TABLE error_classification_rules (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_field    VARCHAR(16) NOT NULL,
+    pattern        VARCHAR(128) NOT NULL,
+    classification VARCHAR(16) NOT NULL DEFAULT 'quota',
+    provider_type  VARCHAR(32),
+    scope          VARCHAR(16) NOT NULL DEFAULT 'account',
+    priority       INTEGER NOT NULL DEFAULT 100,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_error_rules_enabled ON error_classification_rules(enabled);
+
+INSERT INTO error_classification_rules (match_field, pattern, provider_type, scope) VALUES
+    ('code', 'insufficient_quota',         'openai_compatible', 'account'),
+    ('code', 'quota_exceeded',             'openai_compatible', 'account'),
+    ('code', 'billing_hard_limit_reached', 'openai_compatible', 'account'),
+    ('type', 'model_deprecated',           'openai_compatible', 'model'),
+    ('type', 'billing_disabled',           'anthropic',         'account'),
+    ('status', '402',                      NULL,                'account');

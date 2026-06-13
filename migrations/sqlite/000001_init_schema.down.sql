@@ -1,6 +1,13 @@
 -- SQLite full schema teardown.
 -- Drop all tables in reverse dependency order (referencing tables first).
 
+DROP TABLE IF EXISTS datalens_partition_marker;
+DROP TABLE IF EXISTS datalens_schedules;
+DROP TABLE IF EXISTS datalens_reports;
+DROP TABLE IF EXISTS datalens_agg_status;
+DROP TABLE IF EXISTS datalens_daily_metrics;
+DROP TABLE IF EXISTS datalens_hourly_metrics;
+DROP TABLE IF EXISTS error_classification_rules;
 DROP TABLE IF EXISTS mcp_tool_call_logs_archive;
 DROP TABLE IF EXISTS mcp_tool_call_logs;
 DROP TABLE IF EXISTS mcp_server_permissions;

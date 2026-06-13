@@ -69,6 +69,7 @@ func TestSQLiteSchema_Up(t *testing.T) {
 		"mcp_server_permissions",
 		"mcp_tool_call_logs",
 		"mcp_tool_call_logs_archive",
+		"error_classification_rules",
 	}
 	for _, table := range tables {
 		var count int64
@@ -97,6 +98,13 @@ func TestSQLiteSchema_Up(t *testing.T) {
 		if count != 1 {
 			t.Errorf("index %q not found in sqlite_master", idx)
 		}
+	}
+
+	// Verify the error-classification seed rules are present (failover-precision fresh install)
+	var ruleCount int64
+	db.Raw("SELECT count(*) FROM error_classification_rules WHERE enabled = 1").Scan(&ruleCount)
+	if ruleCount != 6 {
+		t.Errorf("expected 6 enabled error_classification_rules seeded, got %d", ruleCount)
 	}
 
 	t.Logf("OK: %d tables and %d key indexes verified", len(tables), len(indexes))

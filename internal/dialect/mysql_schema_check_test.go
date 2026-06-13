@@ -49,8 +49,8 @@ func TestMySQLSchema_SyntaxCheck(t *testing.T) {
 		}
 	}
 
-	if tableCount != 28 {
-		t.Errorf("expected 28 CREATE TABLE statements, got %d", tableCount)
+	if tableCount != 35 {
+		t.Errorf("expected 35 CREATE TABLE statements, got %d", tableCount)
 	}
 	if indexCount == 0 {
 		t.Error("expected some CREATE INDEX statements, got 0")
@@ -117,8 +117,8 @@ func TestMySQLSchema_DownSyntaxCheck(t *testing.T) {
 		}
 	}
 
-	if dropCount != 28 {
-		t.Errorf("expected 28 DROP TABLE statements, got %d", dropCount)
+	if dropCount != 35 {
+		t.Errorf("expected 35 DROP TABLE statements, got %d", dropCount)
 	}
 
 	// Verify mcp_tool_call_logs_archive is first (most dependent)

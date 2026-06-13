@@ -969,3 +969,26 @@ CREATE TABLE datalens_partition_marker (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO datalens_partition_marker (partitioned, note) VALUES (0, 'Partition migration pending. Run: crosslink migrate-partition');
+
+-- Error classification rules (global, platform-level config for failover precision)
+CREATE TABLE error_classification_rules (
+    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+    match_field    VARCHAR(16) NOT NULL,
+    pattern        VARCHAR(128) NOT NULL,
+    classification VARCHAR(16) NOT NULL DEFAULT 'quota',
+    provider_type  VARCHAR(32) NULL,
+    scope          VARCHAR(16) NOT NULL DEFAULT 'account',
+    priority       INT NOT NULL DEFAULT 100,
+    enabled        TINYINT(1) NOT NULL DEFAULT 1,
+    created_at     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_error_rules_enabled ON error_classification_rules(enabled);
+
+INSERT INTO error_classification_rules (match_field, pattern, provider_type, scope) VALUES
+    ('code', 'insufficient_quota',         'openai_compatible', 'account'),
+    ('code', 'quota_exceeded',             'openai_compatible', 'account'),
+    ('code', 'billing_hard_limit_reached', 'openai_compatible', 'account'),
+    ('type', 'model_deprecated',           'openai_compatible', 'model'),
+    ('type', 'billing_disabled',           'anthropic',         'account'),
+    ('status', '402',                      NULL,                'account');
