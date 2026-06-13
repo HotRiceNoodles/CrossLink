@@ -20,6 +20,24 @@ func makeRoute(name string) *router.RouteResult {
 	}
 }
 
+// makeRouteTyped builds a route whose ProviderRow carries an AdapterType so the
+// classifier can match provider-specific rules.
+func makeRouteTyped(name, adapterType string) *router.RouteResult {
+	return &router.RouteResult{
+		Provider:      &mockProvider{name: name},
+		ProviderModel: "test-model",
+		ProviderRow:   &model.Provider{ID: 1, AdapterType: adapterType},
+	}
+}
+
+// quotaClassifier builds a classifier with a single quota rule (persistent) for the
+// given match field/pattern/scope, scoped to openai_compatible.
+func quotaClassifier(matchField, pattern, scope string) *ErrorClassifier {
+	return NewErrorClassifier(stubLoader{
+		{MatchField: matchField, Pattern: pattern, ProviderType: ptrS("openai_compatible"), Classification: "quota", Scope: scope},
+	}, time.Hour)
+}
+
 func makeRoutes(names ...string) []*router.RouteResult {
 	out := make([]*router.RouteResult, len(names))
 	for i, n := range names {
@@ -318,6 +336,101 @@ func TestExecuteStream_AllFail(t *testing.T) {
 	}
 	if result.StreamCh != nil {
 		t.Fatal("expected nil stream channel")
+	}
+}
+
+// TestPersistent_BypassesRetryOn: a persistent (quota) error must continue to the next
+// provider even when retry_on excludes its type — persistence is definitive, not retry.
+func TestPersistent_BypassesRetryOn(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{RetryOn: []string{"server"}})
+	engine.SetClassifier(quotaClassifier("code", "insufficient_quota", "account"))
+	routes := []*router.RouteResult{makeRouteTyped("a", "openai_compatible"), makeRouteTyped("b", "openai_compatible")}
+	calls := 0
+
+	result := engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, route *router.RouteResult) (any, error) {
+		calls++
+		if route.Provider.Name() == "a" {
+			return nil, &provider.ProviderError{StatusCode: 429, Code: "insufficient_quota", ErrorType: provider.ErrorRateLimit}
+		}
+		return "ok", nil
+	})
+
+	if result.FinalError != nil {
+		t.Fatalf("expected fallback success, got %v", result.FinalError)
+	}
+	if calls != 2 {
+		t.Fatalf("persistent should continue despite retry_on=[server], got %d calls", calls)
+	}
+	if result.FallbackCount != 1 {
+		t.Fatalf("expected FallbackCount=1, got %d", result.FallbackCount)
+	}
+	if !result.Attempts[0].Persistent {
+		t.Fatal("first attempt should be marked persistent")
+	}
+}
+
+// TestTransient_RespectsRetryOn: a non-persistent error whose type is absent from
+// retry_on must stop fallback (no persistence to override).
+func TestTransient_RespectsRetryOn(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{RetryOn: []string{"server"}})
+	engine.SetClassifier(quotaClassifier("code", "insufficient_quota", "account")) // rule won't match rate_limit
+	routes := []*router.RouteResult{makeRouteTyped("a", "openai_compatible"), makeRouteTyped("b", "openai_compatible")}
+	calls := 0
+
+	_ = engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, _ *router.RouteResult) (any, error) {
+		calls++
+		return nil, &provider.ProviderError{StatusCode: 429, ErrorType: provider.ErrorRateLimit, Message: "rate limited"}
+	})
+
+	if calls != 1 {
+		t.Fatalf("transient rate_limit with retry_on=[server] should stop after 1 call, got %d", calls)
+	}
+}
+
+// TestModelDeprecated_ContinuesNotBreak: a model-scoped persistent error (not_found is
+// normally non-retryable) still continues to the next route.
+func TestModelDeprecated_ContinuesNotBreak(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{RetryOn: []string{"server"}})
+	engine.SetClassifier(quotaClassifier("type", "model_deprecated", "model"))
+	routes := []*router.RouteResult{makeRouteTyped("a", "openai_compatible"), makeRouteTyped("b", "openai_compatible")}
+	calls := 0
+
+	result := engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, route *router.RouteResult) (any, error) {
+		calls++
+		if route.Provider.Name() == "a" {
+			return nil, &provider.ProviderError{StatusCode: 404, Type: "model_deprecated", ErrorType: provider.ErrorNotFound}
+		}
+		return "ok", nil
+	})
+
+	if calls != 2 {
+		t.Fatalf("model_deprecated persistent should continue, got %d calls", calls)
+	}
+	if result.FinalError != nil {
+		t.Fatalf("expected success, got %v", result.FinalError)
+	}
+}
+
+// TestClearProbe_ReleasesEachIteration: when an attempt is cancelled (no Record* call),
+// the probe lease set by IsHealthyModel must still be released by ClearProbe so the
+// next caller can probe — otherwise the circuit gets stuck half-open forever.
+func TestClearProbe_ReleasesEachIteration(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, 1*time.Millisecond)
+	engine := NewFallbackEngine(health, router.FallbackConfig{})
+	routes := []*router.RouteResult{makeRoute("a"), makeRoute("b")}
+
+	health.RecordTransientFailure("a", "", 0)
+	time.Sleep(3 * time.Millisecond) // let the transient circuit expire → half-open
+
+	engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, route *router.RouteResult) (any, error) {
+		if route.Provider.Name() == "a" {
+			return nil, context.Canceled // cancelled → classified.ErrorType=="" → no Record*
+		}
+		return "ok", nil
+	})
+
+	if !health.IsHealthyModel("a", "test-model") {
+		t.Fatal("probe lease must be released after a cancelled attempt (ClearProbe in defer)")
 	}
 }
 

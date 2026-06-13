@@ -31,6 +31,7 @@ type OpenAIHandler struct {
 	idemCache     *service.IdempotencyCache
 	budget        *provider.RetryBudget
 	guardrailSvc  *guardrail.GuardrailService
+	classifier    *service.ErrorClassifier
 }
 
 func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService, latencySvc *service.LatencyService, _ interface{}, activeTracker service.ProviderLoadTracker, idemCache *service.IdempotencyCache, budget *provider.RetryBudget, guardrailSvc *guardrail.GuardrailService) *OpenAIHandler {
@@ -48,6 +49,10 @@ func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService,
 	}
 	return h
 }
+
+// SetClassifier injects the error classifier used by fallback engines created by this
+// handler (NB1 injection chain).
+func (h *OpenAIHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier = c }
 
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
@@ -161,6 +166,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
+	engine.SetClassifier(h.classifier)
 
 	var totalRetries int
 	result := engine.ExecuteNonStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
@@ -360,6 +366,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
+	engine.SetClassifier(h.classifier)
 
 	var totalRetries int
 	result := engine.ExecuteStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {

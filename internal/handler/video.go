@@ -29,6 +29,7 @@ type VideoHandler struct {
 	activeTracker service.ProviderLoadTracker
 	idemCache     *service.IdempotencyCache
 	budget        *provider.RetryBudget
+	classifier    *service.ErrorClassifier
 }
 
 func NewVideoHandler(
@@ -50,6 +51,10 @@ func NewVideoHandler(
 		budget:        budget,
 	}
 }
+
+// SetClassifier injects the error classifier used by fallback engines created by this
+// handler (NB1 injection chain).
+func (h *VideoHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier = c }
 
 // CreateVideo handles POST /v1/videos — submits a video generation task.
 func (h *VideoHandler) CreateVideo(c *gin.Context) {
@@ -123,6 +128,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	videoRoutes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, videoRoutes, orgID)
 	config := service.ResolveFallbackConfig(videoRoutes)
 	engine := service.NewFallbackEngine(h.health, config)
+	engine.SetClassifier(h.classifier)
 
 	// Execute with fallback
 	var taskResult *domain.VideoTask

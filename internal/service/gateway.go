@@ -20,6 +20,7 @@ type GatewayService struct {
 	latencySvc    *LatencyService
 	activeTracker ProviderLoadTracker
 	budget        *provider.RetryBudget
+	classifier    *ErrorClassifier
 }
 
 func NewGatewayService(resolver *router.Resolver, _ *provider.Registry, latencySvc *LatencyService, activeTracker ProviderLoadTracker, budget *provider.RetryBudget) *GatewayService {
@@ -34,6 +35,10 @@ func NewGatewayService(resolver *router.Resolver, _ *provider.Registry, latencyS
 	}
 	return svc
 }
+
+// SetClassifier injects the error classifier used by fallback engines created by this
+// service (NB1 injection chain).
+func (s *GatewayService) SetClassifier(c *ErrorClassifier) { s.classifier = c }
 
 type ChatResult struct {
 	Response        *domain.AnthropicResponse
@@ -69,6 +74,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 
 	config := ResolveFallbackConfig(routes)
 	engine := NewFallbackEngine(s.health, config)
+	engine.SetClassifier(s.classifier)
 
 	var totalRetries int
 	result := engine.ExecuteNonStream(ctx, routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
@@ -180,6 +186,7 @@ func (s *GatewayService) StreamChat(ctx context.Context, req *domain.AnthropicRe
 
 	config := ResolveFallbackConfig(routes)
 	engine := NewFallbackEngine(s.health, config)
+	engine.SetClassifier(s.classifier)
 	var totalRetries int
 
 	result := engine.ExecuteStream(ctx, routes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {

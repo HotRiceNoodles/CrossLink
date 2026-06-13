@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -24,6 +25,7 @@ type FallbackAttempt struct {
 	Error        error
 	LatencyMs    int64
 	Success      bool
+	Persistent   bool // true if classified as a persistent (quota/billing) failure
 }
 
 // FallbackResult holds the outcome of a fallback execution.
@@ -38,13 +40,38 @@ type FallbackResult struct {
 
 // FallbackEngine executes provider calls with fallback logic.
 type FallbackEngine struct {
-	health *provider.HealthTracker
-	config router.FallbackConfig
+	health     *provider.HealthTracker
+	config     router.FallbackConfig
+	classifier *ErrorClassifier // nil → legacy transient-only classification
 }
 
 // NewFallbackEngine creates a new fallback engine.
 func NewFallbackEngine(health *provider.HealthTracker, config router.FallbackConfig) *FallbackEngine {
 	return &FallbackEngine{health: health, config: config}
+}
+
+// SetClassifier injects the error classifier used to distinguish persistent (quota/
+// billing) failures from transient ones. Nil leaves the legacy transient-only path
+// intact (B6: keeps the constructor signature stable for existing callers).
+func (e *FallbackEngine) SetClassifier(c *ErrorClassifier) { e.classifier = c }
+
+// classify maps an upstream error to its classification. Only ProviderRows carry an
+// AdapterType, so the rule table is consulted solely then; without a classifier the
+// error degrades to its legacy ErrorType (always transient).
+func (e *FallbackEngine) classify(route *router.RouteResult, err error) ClassifiedError {
+	if e.classifier != nil && route.ProviderRow != nil {
+		return e.classifier.Classify(route.ProviderRow.AdapterType, err)
+	}
+	return ClassifiedError{ErrorType: provider.ClassifyError(err)}
+}
+
+// retryAfterFrom extracts a Retry-After hint from a *ProviderError, if any.
+func retryAfterFrom(err error) time.Duration {
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		return pe.RetryAfter
+	}
+	return 0
 }
 
 const defaultPerProviderTimeout = 30 * time.Second
@@ -83,77 +110,83 @@ func (e *FallbackEngine) ExecuteNonStream(
 	var lastErr error
 	for i := 0; i < maxAttempts; i++ {
 		route := routes[i]
+		name := route.Provider.Name()
+		model := route.ProviderModel
 
-		if e.health != nil && !e.health.IsHealthy(route.Provider.Name()) {
+		if e.health != nil && !e.health.IsHealthyModel(name, model) {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: route.Provider.Name(),
+				ProviderName: name,
 				ErrorType:    provider.ErrorServer,
 				Error:        fmt.Errorf("circuit breaker open, skipping"),
 				Success:      false,
 			})
-			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", route.Provider.Name())
-			slog.Warn("skipping provider due to circuit breaker", "provider", route.Provider.Name())
+			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", name)
+			slog.Warn("skipping provider due to circuit breaker", "provider", name)
 			continue
 		}
 
-		start := time.Now()
-		callCtx, callCancel := perProviderCtx(ctx, i, maxAttempts)
-		if i > 0 {
-				callCtx = upstream.WithFallback(callCtx, true)
-			}
-		resp, err := callFn(callCtx, route)
-		callCancel()
-		latency := time.Since(start).Milliseconds()
+		resp, classified, latency, err := e.attemptNonStream(ctx, route, i, maxAttempts, callFn)
 
 		if err != nil {
-			errType := provider.ClassifyError(err)
-			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: route.Provider.Name(),
-				ErrorType:    errType,
+			attempt := FallbackAttempt{
+				ProviderName: name,
+				ErrorType:    classified.ErrorType,
 				Error:        err,
 				LatencyMs:    latency,
 				Success:      false,
-			})
-
-			if e.health != nil {
-				e.health.RecordFailure(route.Provider.Name())
+				Persistent:   classified.Persistent,
 			}
+			result.Attempts = append(result.Attempts, attempt)
 
-			if !shouldRetry(e.config.RetryOn, err) {
-				slog.Warn("non-retryable error, stopping fallback",
-					"provider", route.Provider.Name(),
-					"error_type", string(errType),
-					"error", err)
+			// Empty ErrorType ⇒ context cancellation/timeout: probe outcome is unknown,
+			// so do not record (ClearProbe already released the lease via defer) and stop.
+			if classified.ErrorType == "" {
 				lastErr = err
 				break
 			}
 
-			slog.Warn("retryable error, trying next provider",
-				"provider", route.Provider.Name(),
-				"error_type", string(errType),
-				"attempt", i+1)
-
-			lastErr = err
-
-			if e.config.RetryDelayMs > 0 && i+1 < maxAttempts {
-				timer := time.NewTimer(time.Duration(e.config.RetryDelayMs) * time.Millisecond)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					result.FinalError = ctx.Err()
-					return result
-				case <-timer.C:
+			if classified.Persistent {
+				if e.health != nil {
+					e.health.RecordPersistentFailure(name, model, classified.Scope, 0)
 				}
+			} else if e.health != nil {
+				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
 			}
-			continue
+
+			if classified.Persistent || shouldRetry(e.config.RetryOn, err) {
+				slog.Warn("retryable error, trying next provider",
+					"provider", name,
+					"error_type", string(classified.ErrorType),
+					"persistent", classified.Persistent,
+					"scope", classified.Scope,
+					"attempt", i+1)
+				lastErr = err
+
+				if e.config.RetryDelayMs > 0 && i+1 < maxAttempts {
+					timer := time.NewTimer(time.Duration(e.config.RetryDelayMs) * time.Millisecond)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						result.FinalError = ctx.Err()
+						return result
+					case <-timer.C:
+					}
+				}
+				continue
+			}
+
+			slog.Warn("non-retryable error, stopping fallback",
+				"provider", name,
+				"error_type", string(classified.ErrorType),
+				"persistent", classified.Persistent,
+				"error", err)
+			lastErr = err
+			break
 		}
 
 		// Success
-		if e.health != nil {
-			e.health.RecordSuccess(route.Provider.Name())
-		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
-			ProviderName: route.Provider.Name(),
+			ProviderName: name,
 			LatencyMs:    latency,
 			Success:      true,
 		})
@@ -165,6 +198,41 @@ func (e *FallbackEngine) ExecuteNonStream(
 
 	result.FinalError = lastErr
 	return result
+}
+
+// attemptNonStream runs a single non-streaming attempt. The probe lease acquired by the
+// IsHealthyModel gate is released via defer, so it cannot leak across iterations even
+// when the call is cancelled or panics (B1/C2). Success is recorded here; the caller
+// records failures from the returned classification.
+func (e *FallbackEngine) attemptNonStream(
+	ctx context.Context,
+	route *router.RouteResult,
+	attempt, maxAttempts int,
+	callFn func(context.Context, *router.RouteResult) (any, error),
+) (resp any, classified ClassifiedError, latency int64, err error) {
+	name := route.Provider.Name()
+	model := route.ProviderModel
+	if e.health != nil {
+		defer e.health.ClearProbe(name, model)
+	}
+
+	start := time.Now()
+	callCtx, callCancel := perProviderCtx(ctx, attempt, maxAttempts)
+	if attempt > 0 {
+		callCtx = upstream.WithFallback(callCtx, true)
+	}
+	resp, err = callFn(callCtx, route)
+	callCancel()
+	latency = time.Since(start).Milliseconds()
+
+	if err != nil {
+		classified = e.classify(route, err)
+		return resp, classified, latency, err
+	}
+	if e.health != nil {
+		e.health.RecordSuccessModel(name, model)
+	}
+	return resp, ClassifiedError{}, latency, nil
 }
 
 // ExecuteStream runs a streaming connection attempt across routes with fallback.
@@ -183,67 +251,67 @@ func (e *FallbackEngine) ExecuteStream(
 	var lastErr error
 	for i := 0; i < maxAttempts; i++ {
 		route := routes[i]
+		name := route.Provider.Name()
+		model := route.ProviderModel
 
-		if e.health != nil && !e.health.IsHealthy(route.Provider.Name()) {
+		if e.health != nil && !e.health.IsHealthyModel(name, model) {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: route.Provider.Name(),
+				ProviderName: name,
 				ErrorType:    provider.ErrorServer,
 				Error:        fmt.Errorf("circuit breaker open, skipping"),
 				Success:      false,
 			})
-			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", route.Provider.Name())
-			slog.Warn("skipping provider due to circuit breaker", "provider", route.Provider.Name())
+			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", name)
+			slog.Warn("skipping provider due to circuit breaker", "provider", name)
 			continue
 		}
 
-		connectCtx, connectCancel := perProviderCtx(ctx, i, maxAttempts)
-		// Use detached context for SSE reading so canceling connectCtx
-		// after the HTTP handshake does not kill the response body mid-stream.
-		streamCtx := context.WithoutCancel(connectCtx)
-		if i > 0 {
-				streamCtx = upstream.WithFallback(streamCtx, true)
-			}
-		ch, err := connectFn(streamCtx, route)
-		connectCancel()
+		ch, classified, err := e.attemptStream(ctx, route, i, maxAttempts, connectFn)
 		if err != nil {
-			errType := provider.ClassifyError(err)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: route.Provider.Name(),
-				ErrorType:    errType,
+				ProviderName: name,
+				ErrorType:    classified.ErrorType,
 				Error:        err,
 				Success:      false,
+				Persistent:   classified.Persistent,
 			})
 
-			if e.health != nil {
-				e.health.RecordFailure(route.Provider.Name())
-			}
-
-			if !shouldRetry(e.config.RetryOn, err) {
+			if classified.ErrorType == "" {
 				lastErr = err
 				break
 			}
 
-			lastErr = err
-
-			if e.config.RetryDelayMs > 0 && i+1 < maxAttempts {
-				timer := time.NewTimer(time.Duration(e.config.RetryDelayMs) * time.Millisecond)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					result.FinalError = ctx.Err()
-					return result
-				case <-timer.C:
+			if classified.Persistent {
+				if e.health != nil {
+					e.health.RecordPersistentFailure(name, model, classified.Scope, 0)
 				}
+			} else if e.health != nil {
+				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
 			}
-			continue
+
+			if classified.Persistent || shouldRetry(e.config.RetryOn, err) {
+				lastErr = err
+
+				if e.config.RetryDelayMs > 0 && i+1 < maxAttempts {
+					timer := time.NewTimer(time.Duration(e.config.RetryDelayMs) * time.Millisecond)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						result.FinalError = ctx.Err()
+						return result
+					case <-timer.C:
+					}
+				}
+				continue
+			}
+
+			lastErr = err
+			break
 		}
 
 		// Stream connection succeeded
-		if e.health != nil {
-			e.health.RecordSuccess(route.Provider.Name())
-		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
-			ProviderName: route.Provider.Name(),
+			ProviderName: name,
 			Success:      true,
 		})
 		result.StreamCh = ch
@@ -254,6 +322,39 @@ func (e *FallbackEngine) ExecuteStream(
 
 	result.FinalError = lastErr
 	return result
+}
+
+// attemptStream runs a single streaming connection attempt. The probe lease acquired by
+// the IsHealthyModel gate is released via defer (B1/C2). Success is recorded here; the
+// caller records failures from the returned classification.
+func (e *FallbackEngine) attemptStream(
+	ctx context.Context,
+	route *router.RouteResult,
+	attempt, maxAttempts int,
+	connectFn func(context.Context, *router.RouteResult) (<-chan domain.SSEChunk, error),
+) (ch <-chan domain.SSEChunk, classified ClassifiedError, err error) {
+	name := route.Provider.Name()
+	model := route.ProviderModel
+	if e.health != nil {
+		defer e.health.ClearProbe(name, model)
+	}
+
+	connectCtx, connectCancel := perProviderCtx(ctx, attempt, maxAttempts)
+	// Use detached context for SSE reading so canceling connectCtx
+	// after the HTTP handshake does not kill the response body mid-stream.
+	streamCtx := context.WithoutCancel(connectCtx)
+	if attempt > 0 {
+		streamCtx = upstream.WithFallback(streamCtx, true)
+	}
+	ch, err = connectFn(streamCtx, route)
+	connectCancel()
+	if err != nil {
+		return nil, e.classify(route, err), err
+	}
+	if e.health != nil {
+		e.health.RecordSuccessModel(name, model)
+	}
+	return ch, ClassifiedError{}, nil
 }
 
 // shouldRetry checks if the error type is in the retry-on list.
