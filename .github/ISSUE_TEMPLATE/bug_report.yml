@@ -1,0 +1,118 @@
+name: 🐛 Bug Report
+description: Report something that is not working as expected
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+        Please search [existing issues](https://github.com/HotRiceNoodles/CrossLink/issues?q=is%3Aissue+label%3Abug) first to avoid duplicates.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Start the gateway with config '...'
+        2. Send a request to '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened. Include error messages or logs if available.
+    validations:
+      required: true
+
+  - type: input
+    id: crosslink-version
+    attributes:
+      label: CrossLink Version
+      placeholder: e.g. v1.0.0, commit hash, or `main`
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go Version
+      placeholder: e.g. go1.22.0
+    validations:
+      required: false
+
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment Method
+      placeholder: e.g. Docker Compose, binary, systemd, go run
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant Configuration
+      description: The non-secret parts of your `config.yaml` or `providers.yaml` (provider, model, routing strategy, etc.). **Never paste API keys or secrets.**
+      render: yaml
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      multiple: true
+      options:
+        - Routing / Fallback
+        - Protocol Translation (OpenAI <-> Anthropic)
+        - Streaming (SSE)
+        - Rate Limiting / Budget
+        - Caching
+        - MCP Gateway
+        - Admin API / Dashboard
+        - Auth / RBAC
+        - Guardrails
+        - Deployment / Config
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Paste as-is (no screenshots).
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md)
+          required: true
+        - label: I have searched existing issues and this is not a duplicate
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Ask a Question
+    url: https://github.com/HotRiceNoodles/CrossLink/discussions
+    about: Ask questions and discuss ideas in GitHub Discussions.
+  - name: 🔒 Security Vulnerability
+    url: https://github.com/HotRiceNoodles/CrossLink/security/policy
+    about: Please report security vulnerabilities privately via the security policy, not as a public issue.

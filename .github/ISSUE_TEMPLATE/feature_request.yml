@@ -1,0 +1,65 @@
+name: ✨ Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature!
+        Please search [existing issues](https://github.com/HotRiceNoodles/CrossLink/issues?q=is%3Aissue+label%3Aenhancement) first to avoid duplicates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this solve? What are you trying to do that CrossLink currently makes hard or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe what you'd like to happen. The more concrete, the better.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any workarounds or other approaches you've considered.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      multiple: true
+      options:
+        - Routing / Fallback
+        - Protocol Translation (OpenAI <-> Anthropic)
+        - Streaming (SSE)
+        - Rate Limiting / Budget
+        - Caching
+        - MCP Gateway
+        - Admin API / Dashboard
+        - Auth / RBAC
+        - Guardrails
+        - Observability (Metrics / Logs)
+        - Deployment / Config
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's [Code of Conduct](../../CODE_OF_CONDUCT.md)
+          required: true
+        - label: I have searched existing issues and this is not a duplicate
+          required: true
