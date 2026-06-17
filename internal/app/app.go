@@ -170,6 +170,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
+	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
 
 	// Video gateway
 	videoTaskSvc := service.NewVideoTaskService(rdb, secrets.EncStore, infra.Registry, svcs.UsageSvc)
@@ -373,6 +374,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		gwGroup.GET("/v1/videos/:id", videoHandler.GetVideo)
 		gwGroup.GET("/v1/videos/:id/content", videoHandler.GetVideoContent)
 	}
+
+	// Self-service usage query: key holders read their own real-time quota.
+	// Lightweight group — only gateway Auth (no cache/guardrail/budget middleware).
+	usageGroup := r.Group("/")
+	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb))
+	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 
 	// MCP gateway route extension point (independent route group from gwGroup)
 	if cfg.MCP.Enabled && ext.ExtraMCPRoutes != nil {
