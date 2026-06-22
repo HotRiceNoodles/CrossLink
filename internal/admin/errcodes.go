@@ -8,6 +8,7 @@ const (
 	ErrInvalidID       = "invalid_id"
 	ErrInvalidRequest  = "invalid_request"
 	ErrNotFound        = "not_found"
+	ErrConflict        = "conflict"
 
 	// Auth / permission
 	ErrForbidden               = "forbidden"

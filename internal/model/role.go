@@ -102,6 +102,10 @@ var ValidActions = map[string]bool{
 	"error_rule:create":           true,
 	"error_rule:update":           true,
 	"error_rule:delete":           true,
+	"capability:list":             true,
+	"capability:create":           true,
+	"capability:update":           true,
+	"capability:delete":           true,
 }
 
 // AdminRequiredActions are actions that must always remain on the admin role.

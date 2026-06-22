@@ -46,6 +46,14 @@ var proExtraActions = map[string]bool{
 	"usage:export":                true,
 	"system:view":                 true,
 	"system:update":               true,
+	// Capability alias admin CRUD is Pro-gated end-to-end: the resolver, repo,
+	// and admin handler all live in the commercial overlay, which is only built
+	// into Pro/Enterprise. Runtime usage is additionally gated via the alias
+	// resolver's RequirePro check.
+	"capability:list":             true,
+	"capability:create":           true,
+	"capability:update":           true,
+	"capability:delete":           true,
 	"guardrail:list":              true,
 	"guardrail:create":            true,
 	"guardrail:update":            true,
