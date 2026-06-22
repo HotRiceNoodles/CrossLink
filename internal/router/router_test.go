@@ -53,7 +53,7 @@ func TestResolver_Resolve_WeightedPick(t *testing.T) {
 
 	r := NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	results, err := r.Resolve(context.Background(), "claude-sonnet-4-20250514", 0)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
@@ -91,7 +91,7 @@ func TestResolver_Resolve_FallbackChain(t *testing.T) {
 
 	r := NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	results, err := r.Resolve(context.Background(), "claude-sonnet-4-20250514", 0)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
@@ -108,7 +108,7 @@ func TestResolver_Resolve_NoModel(t *testing.T) {
 
 	r := NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	_, err := r.Resolve(context.Background(), "unknown-model", 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no provider found")
@@ -132,7 +132,7 @@ func TestResolver_Resolve_DisabledModel(t *testing.T) {
 
 	r := NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	_, err := r.Resolve(context.Background(), "claude-sonnet-4-20250514", 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no active provider")
@@ -158,7 +158,7 @@ func TestResolver_ResolveSingle(t *testing.T) {
 
 	r := NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	result, err := r.ResolveSingle(context.Background(), "claude-sonnet-4-20250514", 0)
 	require.NoError(t, err)
 	assert.Equal(t, "deepseek", result.Provider.Name())
@@ -198,7 +198,7 @@ func TestResolver_Resolve_SkipsUnhealthyProvider(t *testing.T) {
 
 	r := NewResolver(reg, repo, health, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	results, err := r.Resolve(context.Background(), "test-model", 0)
 	require.NoError(t, err)
 
@@ -240,7 +240,7 @@ func TestResolver_Resolve_SkipsModelScopeCircuit(t *testing.T) {
 
 	r := NewResolver(reg, repo, health, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	results, err := r.Resolve(context.Background(), "test-model", 0)
 	require.NoError(t, err)
 

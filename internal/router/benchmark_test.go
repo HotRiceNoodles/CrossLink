@@ -42,7 +42,7 @@ func buildResolver(numProviders int) *Resolver {
 
 	return NewResolver(reg, repo, nil, map[StrategyName]RoutingStrategy{
 		StrategyWeightedRandom: &WeightedRandomStrategy{},
-	}, &mockLatencySvc{}, &mockActiveTracker{}, nil)
+	}, &mockLatencySvc{}, &mockActiveTracker{}, nil, nil)
 }
 
 type mockLatencySvc struct{}

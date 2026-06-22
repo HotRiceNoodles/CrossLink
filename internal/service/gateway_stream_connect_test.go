@@ -56,7 +56,7 @@ func TestGatewayService_StreamChatWithConnect_OnFallback(t *testing.T) {
 	}
 	resolver := router.NewResolver(reg, repo, nil, map[router.StrategyName]router.RoutingStrategy{
 		router.StrategyWeightedRandom: &router.WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	svc := NewGatewayService(resolver, reg, nil, nil, nil)
 
 	req := &domain.AnthropicRequest{Model: "claude-3", MaxTokens: 100, Messages: makeMessages("hi")}

@@ -71,6 +71,7 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 	resolver := router.NewResolver(
 		registry, deps.Repos.ProviderModelRepo, health,
 		strategies, deps.Svcs.LatencySvc, deps.Svcs.ActiveTracker, deps.SecretResolver,
+		deps.Extensions.AliasResolver,
 	)
 
 	gatewaySvc := service.NewGatewayService(

@@ -60,7 +60,7 @@ func TestGatewayService_Chat(t *testing.T) {
 
 	resolver := router.NewResolver(reg, repo, nil, map[router.StrategyName]router.RoutingStrategy{
 		router.StrategyWeightedRandom: &router.WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	svc := NewGatewayService(resolver, reg, nil, nil, nil)
 
 	req := &domain.AnthropicRequest{
@@ -92,7 +92,7 @@ func TestGatewayService_ChatNoProvider(t *testing.T) {
 	repo := &mockRepo{data: map[string][]model.ProviderModel{}}
 	resolver := router.NewResolver(reg, repo, nil, map[router.StrategyName]router.RoutingStrategy{
 		router.StrategyWeightedRandom: &router.WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	svc := NewGatewayService(resolver, reg, nil, nil, nil)
 
 	req := &domain.AnthropicRequest{
@@ -123,7 +123,7 @@ func TestGatewayService_StreamChat(t *testing.T) {
 
 	resolver := router.NewResolver(reg, repo, nil, map[router.StrategyName]router.RoutingStrategy{
 		router.StrategyWeightedRandom: &router.WeightedRandomStrategy{},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	svc := NewGatewayService(resolver, reg, nil, nil, nil)
 
 	req := &domain.AnthropicRequest{

@@ -17,6 +17,7 @@ import (
 type Resolver struct {
 	registry       *provider.Registry
 	repo           ProviderModelRepo
+	aliasResolver  AliasResolver
 	health         *provider.HealthTracker
 	cache          sync.Map
 	ttl            time.Duration
@@ -60,10 +61,12 @@ func NewResolver(
 	latencySvc LatencyProvider,
 	activeTracker ActiveRequestsProvider,
 	secretResolver *secret.SecretResolver,
+	aliasResolver AliasResolver,
 ) *Resolver {
 	return &Resolver{
 		registry:       registry,
 		repo:           repo,
+		aliasResolver:  aliasResolver,
 		health:         health,
 		ttl:            30 * time.Second,
 		strategies:     strategies,
@@ -74,6 +77,15 @@ func NewResolver(
 }
 
 func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
+	// Alias resolution is delegated to the injected AliasResolver (nil in
+	// Community). Aliases are resolved per-request (never cached) so member/health
+	// changes take effect immediately — see design §4.3.
+	if r.aliasResolver != nil {
+		if routes, err, isAlias := r.aliasResolver.ResolveAlias(ctx, modelName, orgID); isAlias {
+			return routes, err
+		}
+	}
+
 	// Check cache
 	cacheKey := fmt.Sprintf("%s:%d", modelName, orgID)
 	if v, ok := r.cache.Load(cacheKey); ok {
@@ -98,6 +110,24 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		r.cache.Delete(cacheKey)
 	}
 
+	ordered, err := r.resolveUncached(ctx, modelName, orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	r.cache.Store(cacheKey, &cacheEntry{
+		results: ordered,
+		expire:  time.Now().Add(r.ttl),
+	})
+
+	return ordered, nil
+}
+
+// resolveUncached performs the DB query, candidate filtering, strategy selection,
+// and returns the ordered routes. It does NOT touch the cache — the caller owns
+// caching (Resolve stores; the alias resolver bypasses).
+func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
 	models, err := r.repo.FindByModelName(ctx, modelName, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("query model mappings: %w", err)
@@ -217,12 +247,6 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 
 	// Strategy selection
 	_, ordered := strategy.Select(ctx, routeCandidates)
-
-	// Store in cache
-	r.cache.Store(cacheKey, &cacheEntry{
-		results: ordered,
-		expire:  time.Now().Add(r.ttl),
-	})
 
 	return ordered, nil
 }

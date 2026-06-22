@@ -66,6 +66,7 @@ type AppDeps struct {
 type Extensions struct {
 	ExtraProviders   []func(*config.Config, *gorm.DB)
 	ExtraStrategies  map[router.StrategyName]router.RoutingStrategy
+	AliasResolver    router.AliasResolver
 	ExtraMiddlewares []func(*gin.RouterGroup, *Extensions)
 	ExtraRoutes      func(*gin.RouterGroup, *Extensions)
 	ExtraMCPRoutes   func(*gin.RouterGroup, *Extensions) // mcpGroup (independent route group)
