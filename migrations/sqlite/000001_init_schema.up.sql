@@ -933,3 +933,28 @@ INSERT INTO error_classification_rules (match_field, pattern, provider_type, sco
     ('type', 'model_deprecated',           'openai_compatible', 'model'),
     ('type', 'billing_disabled',           'anthropic',         'account'),
     ('status', '402',                      NULL,                'account');
+
+-- Capability routing: user-defined capability groups mapping model names to capabilities.
+CREATE TABLE IF NOT EXISTS capabilities (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER     NOT NULL DEFAULT 0,
+    name        TEXT        NOT NULL,
+    modality    TEXT        NOT NULL DEFAULT 'text',
+    status      INTEGER     NOT NULL DEFAULT 1,
+    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX uq_capabilities_org_name ON capabilities (org_id, name);
+
+CREATE TABLE IF NOT EXISTS capability_members (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    capability_id  INTEGER     NOT NULL REFERENCES capabilities(id) ON DELETE CASCADE,
+    model_name     TEXT        NOT NULL,
+    quality_score  INTEGER     NOT NULL DEFAULT 0,
+    status         INTEGER     NOT NULL DEFAULT 1,
+    created_at     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX uq_cm_cap_model ON capability_members (capability_id, model_name);
+CREATE INDEX idx_cm_capability ON capability_members (capability_id);
+CREATE INDEX idx_cm_quality ON capability_members (capability_id, quality_score DESC);

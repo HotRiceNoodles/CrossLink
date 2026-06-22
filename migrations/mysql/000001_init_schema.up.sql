@@ -992,3 +992,29 @@ INSERT INTO error_classification_rules (match_field, pattern, provider_type, sco
     ('type', 'model_deprecated',           'openai_compatible', 'model'),
     ('type', 'billing_disabled',           'anthropic',         'account'),
     ('status', '402',                      NULL,                'account');
+
+-- Capability routing: user-defined capability groups mapping model names to capabilities.
+CREATE TABLE IF NOT EXISTS capabilities (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_id      BIGINT       NOT NULL DEFAULT 0,
+    name        VARCHAR(64)  NOT NULL,
+    modality    VARCHAR(16)  NOT NULL DEFAULT 'text',
+    status      SMALLINT     NOT NULL DEFAULT 1,
+    created_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uq_capabilities_org_name (org_id, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS capability_members (
+    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+    capability_id  BIGINT       NOT NULL,
+    model_name     VARCHAR(128) NOT NULL,
+    quality_score  INT          NOT NULL DEFAULT 0,
+    status         SMALLINT     NOT NULL DEFAULT 1,
+    created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    CONSTRAINT fk_cm_capability FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_cm_cap_model (capability_id, model_name),
+    KEY idx_cm_capability (capability_id),
+    KEY idx_cm_quality (capability_id, quality_score)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

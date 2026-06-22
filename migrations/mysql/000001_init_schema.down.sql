@@ -35,4 +35,6 @@ DROP TABLE IF EXISTS organization_members;
 DROP TABLE IF EXISTS organizations;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS capability_members;
+DROP TABLE IF EXISTS capabilities;
 DROP TABLE IF EXISTS system_settings;
