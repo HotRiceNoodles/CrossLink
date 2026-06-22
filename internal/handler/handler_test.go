@@ -3,11 +3,14 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/router"
 )
 
 func TestTruncateContent(t *testing.T) {
@@ -101,8 +104,7 @@ func TestExtractLastOpenAIUserMessage(t *testing.T) {
 	}
 }
 
-func TestMapProviderErrorStatus(t *testing.T) {
-	tests := []struct {
+func TestMapProviderErrorStatus(t *testing.T) {	tests := []struct {
 		name string
 		err  error
 		want int
@@ -119,6 +121,27 @@ func TestMapProviderErrorStatus(t *testing.T) {
 			got := mapProviderErrorStatus(tt.err)
 			if got != tt.want {
 				t.Errorf("mapProviderErrorStatus() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveErrorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"alias on Community (Pro required)", router.ErrProRequired, http.StatusForbidden},
+		{"wrapped Pro required", fmt.Errorf("resolve route: %w", router.ErrProRequired), http.StatusForbidden},
+		{"generic resolve error", errors.New("no active provider"), http.StatusNotFound},
+		{"nil error", nil, http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveErrorStatus(tt.err)
+			if got != tt.want {
+				t.Errorf("resolveErrorStatus() = %d, want %d", got, tt.want)
 			}
 		})
 	}

@@ -35,14 +35,15 @@ func truncateContent(s string) string {
 }
 
 type AnthropicHandler struct {
-	svc         *service.GatewayService
-	usageSvc    *service.UsageService
-	idemCache   *service.IdempotencyCache
+	svc          *service.GatewayService
+	resolver     *router.Resolver
+	usageSvc     *service.UsageService
+	idemCache    *service.IdempotencyCache
 	guardrailSvc *guardrail.GuardrailService
 }
 
-func NewAnthropicHandler(svc *service.GatewayService, usageSvc *service.UsageService, idemCache *service.IdempotencyCache, guardrailSvc *guardrail.GuardrailService) *AnthropicHandler {
-	return &AnthropicHandler{svc: svc, usageSvc: usageSvc, idemCache: idemCache, guardrailSvc: guardrailSvc}
+func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver, usageSvc *service.UsageService, idemCache *service.IdempotencyCache, guardrailSvc *guardrail.GuardrailService) *AnthropicHandler {
+	return &AnthropicHandler{svc: svc, resolver: resolver, usageSvc: usageSvc, idemCache: idemCache, guardrailSvc: guardrailSvc}
 }
 
 func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error, sessionID string) {
@@ -126,6 +127,16 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("model", req.Model)
 	c.Set("stream", req.Stream)
 
+	// Modality guard: a capability alias must match this endpoint's modality.
+	orgID := c.GetInt64("org_id")
+	if m, ok := h.resolver.AliasMetaLookup(c.Request.Context(), req.Model, orgID); ok {
+		if m.Modality != string(domain.ModalityText) {
+			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": "capability modality mismatch"}})
+			return
+		}
+		c.Header("x-crosslink-capability", m.Name)
+	}
+
 	// Idempotency cache check (non-stream only)
 	if !req.Stream {
 		if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
@@ -151,7 +162,6 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		return
 	}
 
-	orgID := c.GetInt64("org_id")
 	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID, orgID)
 	if err != nil {
 		h.logFailure(c, req.Model, start, err, sessionID)
@@ -536,6 +546,8 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 		errors.Is(err, translator.ErrMissingMessages),
 		errors.Is(err, translator.ErrMissingMaxTokens):
 		status = http.StatusBadRequest
+	case errors.Is(err, router.ErrProRequired):
+		status = http.StatusForbidden
 	}
 
 	var providerErr *provider.ProviderError

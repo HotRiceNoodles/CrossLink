@@ -6,7 +6,17 @@ import (
 	"regexp"
 
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/router"
 )
+
+// resolveErrorStatus maps a Resolver error to an HTTP status. Alias-on-Community
+// is 403; everything else stays 404 (the historical behavior).
+func resolveErrorStatus(err error) int {
+	if errors.Is(err, router.ErrProRequired) {
+		return http.StatusForbidden
+	}
+	return http.StatusNotFound
+}
 
 // mapProviderErrorStatus maps a provider error to an appropriate HTTP status code.
 func mapProviderErrorStatus(err error) int {

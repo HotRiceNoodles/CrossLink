@@ -128,9 +128,18 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	c.Set("stream", req.Stream)
 
 	orgID := c.GetInt64("org_id")
+	// Modality guard: a capability alias must match this endpoint's modality.
+	if m, ok := h.resolver.AliasMetaLookup(c.Request.Context(), req.Model, orgID); ok {
+		if m.Modality != string(domain.ModalityText) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": map[string]string{"message": "capability modality mismatch"}})
+			return
+		}
+		c.Header("x-crosslink-capability", m.Name)
+	}
+
 	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": map[string]string{"message": safeProviderError(err)}})
+		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": safeProviderError(err)}})
 		return
 	}
 

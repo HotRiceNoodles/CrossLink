@@ -168,7 +168,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		DataLensRepo:   repos.DataLensRepo,
 		AppCtx:         appCtx,
 	}
-	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, svcs.UsageSvc, svcs.IdemCache, nil)
+	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
 	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
 
