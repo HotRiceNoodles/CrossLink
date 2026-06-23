@@ -180,6 +180,18 @@ func estimateTokens(c *gin.Context) int {
 	return total
 }
 
+// isNonTokenEndpoint reports gateway paths whose handlers do not account chat
+// tokens (images, audio, embeddings, batch, video). TPMLimit skips these so the
+// default 2000-token reservation is not silently leaked per request.
+func isNonTokenEndpoint(path string) bool {
+	return strings.HasPrefix(path, "/v1/videos") ||
+		strings.HasPrefix(path, "/v1/images/") ||
+		strings.HasPrefix(path, "/v1/audio/") ||
+		strings.HasPrefix(path, "/v1/embeddings") ||
+		strings.HasPrefix(path, "/v1/batch") ||
+		strings.HasPrefix(path, "/v1/batches")
+}
+
 func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCache, reservationAmount int, failClosed bool) gin.HandlerFunc {
 	defaultReservation := reservationAmount
 	if defaultReservation <= 0 {
@@ -187,8 +199,11 @@ func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCac
 	}
 
 	return func(c *gin.Context) {
-		// Skip TPM for video endpoints (no token concept)
-		if strings.HasPrefix(c.Request.URL.Path, "/v1/videos") {
+		// Skip TPM for non-chat endpoints that have no chat-token accounting.
+		// These handlers report 0 tokens; without the skip each request would
+		// reserve defaultReservation (2000) tokens that never get reconciled,
+		// silently draining the TPM budget.
+		if isNonTokenEndpoint(c.Request.URL.Path) {
 			c.Set("tpm_key", "")
 			c.Set("tpm_reservations", &tpmReservations{})
 			c.Next()
