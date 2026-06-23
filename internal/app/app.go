@@ -373,6 +373,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		gwGroup.POST("/v1/videos", videoHandler.CreateVideo)
 		gwGroup.GET("/v1/videos/:id", videoHandler.GetVideo)
 		gwGroup.GET("/v1/videos/:id/content", videoHandler.GetVideoContent)
+
+		// Commercial gateway route extension point — inject multimodal/new-protocol
+		// public endpoints (e.g. /v1/images/generations, /v1/audio/*, /v1/embeddings, /v1/batch).
+		// Routes registered here inherit the full gwGroup middleware chain.
+		if ext.ExtraGatewayRoutes != nil {
+			ext.ExtraGatewayRoutes(gwGroup, ext)
+		}
 	}
 
 	// Self-service usage query: key holders read their own real-time quota.

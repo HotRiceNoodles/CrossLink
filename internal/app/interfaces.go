@@ -70,6 +70,7 @@ type Extensions struct {
 	ExtraMiddlewares []func(*gin.RouterGroup, *Extensions)
 	ExtraRoutes      func(*gin.RouterGroup, *Extensions)
 	ExtraMCPRoutes   func(*gin.RouterGroup, *Extensions) // mcpGroup (independent route group)
+	ExtraGatewayRoutes func(*gin.RouterGroup, *Extensions) // gwGroup — inject multimodal/new-protocol public endpoints (e.g. /v1/images, /v1/audio, /v1/embeddings, /v1/batch)
 	ExtraPublicRoutes  func(*gin.Engine, *Extensions)  // public routes (no auth, e.g. SSO login)
 	ExtraEngineRoutes  func(*gin.Engine, *Extensions)  // main router (for docs, etc.)
 	MCPEncSetter       func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
