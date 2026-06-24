@@ -44,3 +44,15 @@ type BatchProvider interface {
 	ListBatches(ctx context.Context, params url.Values, apiKey string) (*domain.BatchListResponse, error)
 	CancelBatch(ctx context.Context, batchID string, apiKey string) (*domain.BatchResponse, error)
 }
+
+// ResponsesProvider serves the OpenAI Responses API (/v1/responses) via raw
+// upstream passthrough (3A). Responses returns the upstream's raw HTTP body
+// (non-streaming JSON or streaming SSE bytes) and its status code; the handler
+// copies bytes through without deserializing, so no unknown fields are lost.
+// A provider declares support via the model-level ExtraConfig flag
+// "supports_responses": true (the interface alone does not imply upstream
+// support — openai_compatible is a generic adapter).
+type ResponsesProvider interface {
+	Provider
+	Responses(ctx context.Context, rawBody []byte, apiKey string) (io.ReadCloser, int, error)
+}

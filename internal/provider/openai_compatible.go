@@ -102,6 +102,27 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, req *domain.OpenAIR
 	return &openaiResp, nil
 }
 
+// Responses serves the Responses API (/v1/responses) via raw upstream passthrough.
+// rawBody is forwarded verbatim to <baseURL>/responses; the upstream's response
+// body (JSON or SSE bytes) is returned unread so callers stream/copy it without
+// field loss. Only invoked when the model's ExtraConfig sets supports_responses:true.
+func (p *OpenAICompatibleProvider) Responses(ctx context.Context, rawBody []byte, apiKey string) (io.ReadCloser, int, error) {
+	url := p.baseURL + "/responses"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
+	if err != nil {
+		return nil, 0, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.streamClient.Do(httpReq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("send request: %w", err)
+	}
+	return resp.Body, resp.StatusCode, nil
+}
+
 func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (<-chan domain.SSEChunk, error) {
 	url := p.baseURL + "/chat/completions"
 	reqCopy := *req
