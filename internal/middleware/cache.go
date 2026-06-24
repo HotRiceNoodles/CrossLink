@@ -58,7 +58,8 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider) gin
 		if path == "/v1/images/generations" ||
 			strings.HasPrefix(path, "/v1/videos") ||
 			strings.HasPrefix(path, "/v1/audio") ||
-			strings.HasPrefix(path, "/v1/batch") {
+			strings.HasPrefix(path, "/v1/batch") ||
+			strings.HasPrefix(path, "/v1/responses") {
 			c.Next()
 			return
 		}

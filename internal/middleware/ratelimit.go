@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/pkg/token"
 	"github.com/redis/go-redis/v9"
@@ -143,6 +144,12 @@ func estimateTokens(c *gin.Context) int {
 		return 0
 	}
 
+	// Responses API uses input (string or array) + instructions + max_output_tokens,
+	// not messages/max_tokens. Handle it separately.
+	if c.Request != nil && strings.HasPrefix(c.Request.URL.Path, "/v1/responses") {
+		return estimateResponsesTokens(bodyBytes)
+	}
+
 	var probe struct {
 		Prompt   string `json:"prompt"`
 		Messages []struct {
@@ -170,6 +177,58 @@ func estimateTokens(c *gin.Context) int {
 	if probe.MaxTokens > 0 {
 		// Cap max_tokens to prevent excessive TPM reservation
 		maxTok := probe.MaxTokens
+		if maxTok > 32768 {
+			maxTok = 32768
+		}
+		total += maxTok
+	} else {
+		total += 1024
+	}
+	return total
+}
+
+// estimateResponsesTokens estimates TPM reservation for a Responses API body.
+// input is polymorphic (string or array of message/function_call_output items).
+func estimateResponsesTokens(bodyBytes []byte) int {
+	var probe struct {
+		Input         json.RawMessage `json:"input"`
+		Instructions  string          `json:"instructions"`
+		MaxOutputTokens int           `json:"max_output_tokens"`
+	}
+	if json.Unmarshal(bodyBytes, &probe) != nil {
+		return 0
+	}
+	total := 0
+	if probe.Instructions != "" {
+		total += token.Estimate(probe.Instructions)
+	}
+	if len(probe.Input) > 0 {
+		var s string
+		if json.Unmarshal(probe.Input, &s) == nil && probe.Input[0] == '"' {
+			total += token.Estimate(s)
+		} else {
+			var items []struct {
+				Type    string          `json:"type"`
+				Content json.RawMessage `json:"content"`
+				Output  string          `json:"output"`
+			}
+			if json.Unmarshal(probe.Input, &items) == nil {
+				for _, it := range items {
+					if it.Type == "message" && len(it.Content) > 0 {
+						total += token.Estimate(domain.ContentText(it.Content))
+					}
+					if it.Type == "function_call_output" && it.Output != "" {
+						total += token.Estimate(it.Output)
+					}
+				}
+			}
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	if probe.MaxOutputTokens > 0 {
+		maxTok := probe.MaxOutputTokens
 		if maxTok > 32768 {
 			maxTok = 32768
 		}

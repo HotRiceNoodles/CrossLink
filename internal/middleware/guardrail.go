@@ -181,6 +181,8 @@ func extractContentFromBody(body []byte, path string) string {
 		return extractImagePrompt(body)
 	case strings.HasSuffix(path, "/v1/videos"):
 		return extractPrompt(body)
+	case strings.HasSuffix(path, "/v1/responses"):
+		return extractResponsesInput(body)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
 		if strings.HasSuffix(path, "/chat") || strings.HasSuffix(path, "/stream") {
 			return extractOpenAIMessages(body)
@@ -232,6 +234,71 @@ func extractImagePrompt(body []byte) string {
 	return req.Prompt
 }
 
+// extractResponsesInput extracts scannable text from a Responses API body:
+// instructions + input (polymorphic: string, or array of message/function_call_output items).
+func extractResponsesInput(body []byte) string {
+	var req struct {
+		Input         json.RawMessage `json:"input"`
+		Instructions  string          `json:"instructions"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	var parts []string
+	if req.Instructions != "" {
+		parts = append(parts, req.Instructions)
+	}
+	if len(req.Input) > 0 {
+		var s string
+		if json.Unmarshal(req.Input, &s) == nil && req.Input[0] == '"' {
+			parts = append(parts, s)
+		} else {
+			var items []struct {
+				Type    string          `json:"type"`
+				Content json.RawMessage `json:"content"`
+				Output  string          `json:"output"`
+			}
+			if json.Unmarshal(req.Input, &items) == nil {
+				for _, it := range items {
+					if it.Type == "message" && len(it.Content) > 0 {
+						parts = append(parts, domain.ContentText(it.Content))
+					}
+					if it.Type == "function_call_output" && it.Output != "" {
+						parts = append(parts, it.Output)
+					}
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// replaceResponsesInput masks instructions and (string) input in a Responses body.
+// Array input masking is best-effort and not applied (returns false to fall through).
+func replaceResponsesInput(body []byte, maskedContent string) ([]byte, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return nil, false
+	}
+	changed := false
+	if raw, ok := m["input"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) == nil && len(raw) > 0 && raw[0] == '"' {
+			m["input"], _ = json.Marshal(maskedContent)
+			changed = true
+		}
+	}
+	if _, ok := m["instructions"]; ok {
+		m["instructions"], _ = json.Marshal(maskedContent)
+		changed = true
+	}
+	if !changed {
+		return nil, false
+	}
+	result, err := json.Marshal(m)
+	return result, err == nil
+}
+
 
 // replaceContentInBody replaces text content in the request body with masked content.
 func replaceContentInBody(body []byte, maskedContent string, path string) ([]byte, bool) {
@@ -243,6 +310,8 @@ func replaceContentInBody(body []byte, maskedContent string, path string) ([]byt
 	switch {
 	case strings.HasSuffix(path, "/v1/chat/completions"):
 		return replaceOpenAIMessages(body, maskedContent)
+	case strings.HasSuffix(path, "/v1/responses"):
+		return replaceResponsesInput(body, maskedContent)
 	case strings.HasSuffix(path, "/v1/videos"):
 		return replacePrompt(body, maskedContent)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
