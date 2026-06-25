@@ -312,6 +312,8 @@ func replaceContentInBody(body []byte, maskedContent string, path string) ([]byt
 		return replaceOpenAIMessages(body, maskedContent)
 	case strings.HasSuffix(path, "/v1/responses"):
 		return replaceResponsesInput(body, maskedContent)
+	case strings.HasSuffix(path, "/v1/images/generations"):
+		return replacePrompt(body, maskedContent)
 	case strings.HasSuffix(path, "/v1/videos"):
 		return replacePrompt(body, maskedContent)
 	case strings.HasPrefix(path, "/admin/api/playground/"):
