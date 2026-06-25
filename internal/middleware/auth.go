@@ -88,6 +88,11 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.Han
 // RequireModel checks if the API key allows the requested model.
 // Must be placed after Auth middleware. Reads model from request body
 // without consuming it by using GetRawData + re-setting it.
+//
+// Known exemption (R7): /v1/batch submissions carry no top-level "model" field
+// (the model lives inside the batch input file), so this check is a no-op for
+// batch and AllowedModels is not enforced at submission time. Per-item model
+// enforcement is deferred to upstream batch execution. This is accepted.
 func RequireModel() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := GetAPIKeyFromContext(c)
