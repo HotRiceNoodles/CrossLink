@@ -66,6 +66,8 @@ func logRouteTypeFromPath(pattern string) string {
 		return "anthropic"
 	case "/v1/chat/completions":
 		return "openai"
+	case "/v1/responses":
+		return "responses"
 	default:
 		return "unknown"
 	}

@@ -145,6 +145,8 @@ func routeTypeFromPath(path string) string {
 		return "audio"
 	case len(path) >= 9 && path[:9] == "/v1/batch":
 		return "batch"
+	case len(path) >= len("/v1/responses") && path[:len("/v1/responses")] == "/v1/responses":
+		return "responses"
 	}
 	return ""
 }
