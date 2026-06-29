@@ -10,6 +10,11 @@ import (
 )
 
 type Entry struct {
+	// Seq is a store-assigned, monotonically unique identity for each entry.
+	// It is NOT the client request_id (Entry.ID) — request_id may legitimately
+	// repeat across requests when a client reuses X-Request-ID, so it must not
+	// be used as a lookup key. Seq is the only safe identity for retrieval.
+	Seq         int64
 	ID          string
 	OrgID       int64
 	Timestamp   time.Time
@@ -36,6 +41,7 @@ type Store struct {
 	capacity    int
 	enabled     atomic.Bool
 	maxBodySize int
+	nextSeq     atomic.Int64
 }
 
 func NewStore(capacity, maxBodySize int) *Store {
@@ -62,6 +68,8 @@ func (s *Store) Add(entry *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	entry.Seq = s.nextSeq.Add(1)
+
 	if len(s.entries) >= s.capacity {
 		s.entries = s.entries[1:]
 	}
@@ -82,12 +90,15 @@ func (s *Store) List() []*Entry {
 	return result
 }
 
-func (s *Store) Get(id string) *Entry {
+// Get returns the entry with the given store-assigned Seq. Seq is unique per
+// entry, so unlike the client-controlled request_id this cannot collapse
+// multiple distinct requests onto one.
+func (s *Store) Get(seq int64) *Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, e := range s.entries {
-		if e.ID == id {
+		if e.Seq == seq {
 			return e
 		}
 	}

@@ -330,7 +330,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// Debug
 		adminGroup.GET("/debug/entries", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.List)
-		adminGroup.GET("/debug/entries/:id", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Get)
+		adminGroup.GET("/debug/entries/:seq", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Get)
 		adminGroup.DELETE("/debug/entries", middleware.RequireAction(permCache, "debug:clear"), handlers.Debug.Clear)
 
 		// Commercial route extension point

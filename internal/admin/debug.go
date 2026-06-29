@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,7 @@ func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService) *DebugH
 }
 
 type debugEntrySummary struct {
+	Seq           int64  `json:"seq"`
 	ID            string `json:"id"`
 	Timestamp     string `json:"timestamp"`
 	Duration      int64  `json:"duration_ms"`
@@ -45,6 +47,7 @@ func (h *DebugHandler) List(c *gin.Context) {
 	summaries := make([]debugEntrySummary, 0, len(entries))
 	for _, e := range entries {
 		summaries = append(summaries, debugEntrySummary{
+			Seq:           e.Seq,
 			ID:            e.ID,
 			Timestamp:     e.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
 			Duration:      e.Duration.Milliseconds(),
@@ -82,6 +85,7 @@ type upstreamCallSummary struct {
 }
 
 type debugEntryDetail struct {
+	Seq           int64               `json:"seq"`
 	ID            string              `json:"id"`
 	Timestamp     string              `json:"timestamp"`
 	Duration      int64               `json:"duration_ms"`
@@ -98,8 +102,12 @@ type debugEntryDetail struct {
 }
 
 func (h *DebugHandler) Get(c *gin.Context) {
-	id := c.Param("id")
-	entry := h.store.Get(id)
+	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)
+	if err != nil {
+		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
+		return
+	}
+	entry := h.store.Get(seq)
 	if entry == nil {
 		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
 		return
@@ -143,6 +151,7 @@ func (h *DebugHandler) Get(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": debugEntryDetail{
+			Seq:           entry.Seq,
 			ID:            entry.ID,
 			Timestamp:     entry.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
 			Duration:      entry.Duration.Milliseconds(),
