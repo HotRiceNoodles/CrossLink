@@ -24,7 +24,6 @@ const (
 	ErrBudgetPeriodInvalid = "budget_period_invalid"
 	ErrBudgetNegative      = "budget_negative"
 	ErrGraceHoursNegative  = "grace_hours_negative"
-	ErrCommunityKeyLimit   = "community_key_limit"
 
 	// Budget
 	ErrAlertNotFound       = "alert_not_found"
@@ -48,7 +47,6 @@ const (
 
 	// Providers
 	ErrProviderURLInvalid    = "provider_url_invalid"
-	ErrCommunityProviderLimit = "community_provider_limit"
 	ErrProviderHasModels     = "provider_has_models"
 
 	// Models

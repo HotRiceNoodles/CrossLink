@@ -123,34 +123,6 @@ func TestKeyHandler_Create_NegativeBudget(t *testing.T) {
 	}
 }
 
-func TestKeyHandler_Create_CommunityKeyLimit(t *testing.T) {
-	keySvc, _ := defaultKeyMocks()
-	// Simulate 5 existing keys (community limit)
-	keySvc.listFn = func(ctx context.Context, orgID int64) ([]model.APIKey, error) {
-		return []model.APIKey{
-			{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}, {ID: 5},
-		}, nil
-	}
-	h := newKeyHandler(keySvc, nil)
-
-	body := map[string]any{
-		"name": "overflow-key",
-	}
-	c, w := newTestContext(t, http.MethodPost, "/api/v1/keys", body)
-	setAdminContext(c, 1, 1, "admin")
-
-	h.Create(c)
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
-	}
-	var resp map[string]any
-	decodeResponse(t, w, &resp)
-	if resp["error_code"] != ErrCommunityKeyLimit {
-		t.Errorf("error_code = %v, want %s", resp["error_code"], ErrCommunityKeyLimit)
-	}
-}
-
 func TestKeyHandler_Create_Success(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
 	h := newKeyHandler(keySvc, nil)

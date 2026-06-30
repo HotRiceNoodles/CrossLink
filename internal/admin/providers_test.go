@@ -92,39 +92,6 @@ func TestProviderHandler_Create_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestProviderHandler_Create_CommunityLimit(t *testing.T) {
-	repo, _ := defaultProviderMocks()
-	// Simulate 3 existing providers (community limit)
-	repo.listFn = func(ctx context.Context, orgID int64) ([]model.Provider, error) {
-		return []model.Provider{
-			{ID: 1, Name: "p1"},
-			{ID: 2, Name: "p2"},
-			{ID: 3, Name: "p3"},
-		}, nil
-	}
-	h := newProviderHandler(repo, nil)
-
-	body := map[string]any{
-		"name":         "overflow-provider",
-		"display_name": "Overflow",
-		"adapter_type": "openai",
-		"base_url":     "https://api.example.com",
-	}
-	c, w := newTestContext(t, http.MethodPost, "/api/v1/providers", body)
-	setAdminContext(c, 1, 1, "admin")
-
-	h.Create(c)
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusForbidden)
-	}
-	var resp map[string]any
-	decodeResponse(t, w, &resp)
-	if resp["error_code"] != ErrCommunityProviderLimit {
-		t.Errorf("error_code = %v, want %s", resp["error_code"], ErrCommunityProviderLimit)
-	}
-}
-
 func TestProviderHandler_Create_InvalidRequest(t *testing.T) {
 	repo, _ := defaultProviderMocks()
 	h := newProviderHandler(repo, nil)

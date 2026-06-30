@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/domain"
-	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/secret"
@@ -82,17 +81,6 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		return
 	}
 	orgID := GetOrgID(c)
-	if license.G().CurrentTier() == license.TierCommunity {
-		providers, err := h.repo.List(c.Request.Context(), orgID)
-		if err != nil {
-			internalErr(c, err, "count providers failed")
-			return
-		}
-		if len(providers) >= 3 {
-			errorResp(c, http.StatusForbidden, ErrCommunityProviderLimit, "Community edition is limited to 3 providers. Upgrade to Pro for unlimited providers.")
-			return
-		}
-	}
 	if input.BaseURL != "" && !isValidProviderURL(input.BaseURL) {
 		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
 		return

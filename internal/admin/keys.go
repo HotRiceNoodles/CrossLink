@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
@@ -79,23 +78,6 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	if input.MaxCalls < 0 {
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
-	}
-	if license.G().CurrentTier() == license.TierCommunity {
-		var keys []model.APIKey
-		var err error
-		if IsAdmin(c) {
-			keys, err = h.keySvc.List(c.Request.Context(), GetOrgID(c))
-		} else {
-			keys, err = h.keySvc.ListByTeam(c.Request.Context(), GetTeamID(c))
-		}
-		if err != nil {
-			internalErr(c, err, "count keys failed")
-			return
-		}
-		if len(keys) >= 5 {
-			errorResp(c, http.StatusForbidden, ErrCommunityKeyLimit, "Community edition is limited to 5 API keys. Upgrade to Pro for unlimited keys.")
-			return
-		}
 	}
 
 	result, err := h.keySvc.Create(c.Request.Context(), &service.CreateKeyInput{
