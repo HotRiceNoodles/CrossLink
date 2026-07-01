@@ -15,6 +15,7 @@ type APIKey struct {
 	Status        int16          `gorm:"not null;default:1" json:"status"`
 	AllowedModels datatypes.JSON `json:"allowed_models"`
 	AllowedRoutes datatypes.JSON `json:"allowed_routes"`
+	AllowedIPs    datatypes.JSON `gorm:"type:json" json:"allowed_ips"` // ["1.2.3.4","10.0.0.0/8"]; null/empty = no binding
 	TPMLimit      int            `gorm:"not null;default:0" json:"tpm_limit"`
 	RPMLimit      int            `gorm:"not null;default:0" json:"rpm_limit"`
 	MaxBudget     float64        `gorm:"type:decimal(12,4);not null;default:0" json:"max_budget"`
