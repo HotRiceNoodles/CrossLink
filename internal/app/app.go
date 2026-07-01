@@ -351,7 +351,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(debug.Middleware(debugStore))
 	gwGroup.Use(middleware.UsageLog(svcs.UsageSvc))
 	gwGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
-	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb))
+	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
@@ -385,7 +385,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Self-service usage query: key holders read their own real-time quota.
 	// Lightweight group — only gateway Auth (no cache/guardrail/budget middleware).
 	usageGroup := r.Group("/")
-	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb))
+	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 
 	// MCP gateway route extension point (independent route group from gwGroup)

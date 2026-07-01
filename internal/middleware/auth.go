@@ -20,7 +20,7 @@ import (
 
 // NOTE: This middleware enforces IP-based rate limiting on failed authentication attempts.
 // If an IP exceeds the failure threshold, it is blocked before any key validation attempt.
-func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.HandlerFunc {
+func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Check if IP is temporarily blocked due to too many auth failures
 		if rdb != nil {
@@ -51,6 +51,27 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.Han
 			if err == nil && key != nil {
 				c.Set("api_key", key)
 				c.Set("api_key_id", key.ID)
+				// IP binding (Pro/Enterprise). NoopPolicy in Community is a no-op.
+				if policy != nil {
+					if err := policy.Check(key, c.ClientIP(), parseAcceptLang(c.GetHeader("Accept-Language"))); err != nil {
+						allowedCount := 0
+						if len(key.AllowedIPs) > 0 {
+							var ips []string
+							if json.Unmarshal(key.AllowedIPs, &ips) == nil {
+								allowedCount = len(ips)
+							}
+						}
+						slog.Warn("ip binding denied",
+							"key_id", key.ID, "key_prefix", key.KeyPrefix,
+							"client_ip", c.ClientIP(), "allowed_count", allowedCount)
+						c.JSON(http.StatusForbidden, gin.H{
+							"type":  "error",
+							"error": gin.H{"type": "permission_error", "message": "forbidden"},
+						})
+						c.Abort()
+						return
+					}
+				}
 				ClearAuthFailures(rdb, c.ClientIP(), "")
 				c.Next()
 				return
@@ -83,6 +104,16 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client) gin.Han
 		})
 		c.Abort()
 	}
+}
+
+// parseAcceptLang maps an Accept-Language header to a template locale.
+// Returns "zh-CN" for any header containing "zh", otherwise "en".
+// Empty header defaults to "zh-CN" to match the key-email dispatch convention.
+func parseAcceptLang(header string) string {
+	if header == "" || strings.Contains(header, "zh") {
+		return "zh-CN"
+	}
+	return "en"
 }
 
 // RequireModel checks if the API key allows the requested model.
