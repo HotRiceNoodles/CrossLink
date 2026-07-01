@@ -25,6 +25,7 @@ type Config struct {
 	SecretManager  SecretManagerConfig  `mapstructure:"secret_manager"`
 	SMTP           SMTPConfig           `mapstructure:"smtp"`
 	GuardrailAlert GuardrailAlertConfig `mapstructure:"guardrail_alert"`
+	IPBinding      IPBindingConfig      `mapstructure:"ip_binding"`
 	CORS           CORSConfig           `mapstructure:"cors"`
 	License        LicenseConfig        `mapstructure:"license"`
 	MCP            MCPConfig            `mapstructure:"mcp"`
@@ -147,6 +148,10 @@ type GuardrailAlertConfig struct {
 	Concurrency      int  `mapstructure:"concurrency"`
 	ContentPreview   bool `mapstructure:"content_preview"`
 	ContentPreviewLen int `mapstructure:"content_preview_len"`
+}
+
+type IPBindingConfig struct {
+	NotifyCooldownSeconds int `mapstructure:"notify_cooldown_seconds"` // Pro/Enterprise; 0 = default 300
 }
 
 type CORSConfig struct {

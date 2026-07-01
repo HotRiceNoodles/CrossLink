@@ -61,6 +61,10 @@ crypto:
 #   password: ""
 #   from: noreply@example.com
 
+# API Key IP binding (Pro/Enterprise only). Community ignores this section.
+ip_binding:
+  notify_cooldown_seconds: 300  # min 60, max 86400; cooldown (seconds) between email alerts per key on IP mismatch
+
 license:
   # server_url: "http://localhost:8090"   # License Server address
   # license_key: ""                        # Filled after online activation
