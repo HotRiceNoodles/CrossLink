@@ -70,3 +70,16 @@ license:
   # license_key: ""                        # Filled after online activation
   heartbeat_enabled: true
   heartbeat_interval: 24h
+
+captcha:
+    enabled: true
+    provider: slider
+    trust_days: 7
+    trust_ip_mask: 24
+    redis_fail_open: true
+    slider:
+        tolerance_px: 5
+        min_points: 5
+        bg_width: 300
+        bg_height: 150
+        piece_size: 44

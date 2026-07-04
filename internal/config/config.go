@@ -14,13 +14,13 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Gateway   GatewayConfig   `mapstructure:"gateway"`
-	Admin     AdminConfig     `mapstructure:"admin"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	Logging   LoggingConfig   `mapstructure:"logging"`
+	Server         ServerConfig         `mapstructure:"server"`
+	Database       DatabaseConfig       `mapstructure:"database"`
+	Redis          RedisConfig          `mapstructure:"redis"`
+	Gateway        GatewayConfig        `mapstructure:"gateway"`
+	Admin          AdminConfig          `mapstructure:"admin"`
+	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
+	Logging        LoggingConfig        `mapstructure:"logging"`
 	Cache          CacheConfig          `mapstructure:"cache"`
 	SecretManager  SecretManagerConfig  `mapstructure:"secret_manager"`
 	SMTP           SMTPConfig           `mapstructure:"smtp"`
@@ -31,13 +31,14 @@ type Config struct {
 	MCP            MCPConfig            `mapstructure:"mcp"`
 	Crypto         CryptoConfig         `mapstructure:"crypto"`
 	DataLens       DataLensConfig       `mapstructure:"datalens"`
+	Captcha        CaptchaConfig        `mapstructure:"captcha"`
 }
 
 type ServerConfig struct {
-	Port            int           `mapstructure:"port"`
-	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
-	TrustedProxies  []string      `mapstructure:"trusted_proxies"`
+	Port           int           `mapstructure:"port"`
+	ReadTimeout    time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout   time.Duration `mapstructure:"write_timeout"`
+	TrustedProxies []string      `mapstructure:"trusted_proxies"`
 }
 
 type DatabaseConfig struct {
@@ -111,6 +112,26 @@ type AdminConfig struct {
 	TokenExpiry  int    `mapstructure:"token_expiry"`
 }
 
+// CaptchaConfig configures the login CAPTCHA. The default self-hosted "slider"
+// provider works in any environment; cloud providers (overlay) are selectable
+// via Provider for deployments with outbound network.
+type CaptchaConfig struct {
+	Enabled       bool                `mapstructure:"enabled"`
+	Provider      string              `mapstructure:"provider"`        // slider | turnstile | tencent | aliyun
+	TrustDays     int                 `mapstructure:"trust_days"`      // device-cookie lifetime, 0 = require every login
+	TrustIPMask   int                 `mapstructure:"trust_ip_mask"`   // CIDR bits bound into the trust cookie, 0 = none
+	RedisFailOpen bool                `mapstructure:"redis_fail_open"` // on Redis failure, allow login (rate-limit backstop)
+	Slider        CaptchaSliderConfig `mapstructure:"slider"`
+}
+
+type CaptchaSliderConfig struct {
+	TolerancePx float64 `mapstructure:"tolerance_px"`
+	MinPoints   int     `mapstructure:"min_points"`
+	BGWidth     int     `mapstructure:"bg_width"`
+	BGHeight    int     `mapstructure:"bg_height"`
+	PieceSize   int     `mapstructure:"piece_size"`
+}
+
 type RateLimitConfig struct {
 	RPM         int  `mapstructure:"rpm"`
 	TPM         int  `mapstructure:"tpm"`
@@ -144,10 +165,10 @@ type SMTPConfig struct {
 }
 
 type GuardrailAlertConfig struct {
-	Enabled          bool `mapstructure:"enabled"`
-	Concurrency      int  `mapstructure:"concurrency"`
-	ContentPreview   bool `mapstructure:"content_preview"`
-	ContentPreviewLen int `mapstructure:"content_preview_len"`
+	Enabled           bool `mapstructure:"enabled"`
+	Concurrency       int  `mapstructure:"concurrency"`
+	ContentPreview    bool `mapstructure:"content_preview"`
+	ContentPreviewLen int  `mapstructure:"content_preview_len"`
 }
 
 type IPBindingConfig struct {
@@ -398,6 +419,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("admin.password", "changeme")
 	v.SetDefault("admin.jwt_secret", "change-me-to-a-random-secret")
 	v.SetDefault("admin.token_expiry", 24)
+
+	v.SetDefault("captcha.enabled", false)
+	v.SetDefault("captcha.provider", "slider")
+	v.SetDefault("captcha.trust_days", 7)
+	v.SetDefault("captcha.trust_ip_mask", 24)
+	v.SetDefault("captcha.redis_fail_open", true)
+	v.SetDefault("captcha.slider.tolerance_px", 5)
+	v.SetDefault("captcha.slider.min_points", 5)
+	v.SetDefault("captcha.slider.bg_width", 300)
+	v.SetDefault("captcha.slider.bg_height", 150)
+	v.SetDefault("captcha.slider.piece_size", 44)
 
 	v.SetDefault("rate_limit.rpm", 0)
 	v.SetDefault("rate_limit.tpm", 0)
