@@ -12,14 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/crosslink/internal/captcha"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -230,19 +231,45 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 // dummyBcryptHash is used to normalize response timing when a username is not found.
 const dummyBcryptHash = "$2a$10$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
-func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider) gin.HandlerFunc {
+func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider, gate *captcha.Gate) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input struct {
-			Username string `json:"username" binding:"required"`
-			Password string `json:"password" binding:"required"`
+			Username      string         `json:"username" binding:"required"`
+			Password      string         `json:"password" binding:"required"`
+			CaptchaID     string         `json:"captcha_id"`
+			CaptchaAnswer captcha.Answer `json:"captcha_answer"`
 		}
 		if err := c.ShouldBindJSON(&input); err != nil {
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid request")
 			return
 		}
 
-		user, err := userRepo.GetByUsername(c.Request.Context(), input.Username)
-		if err != nil {
+		ip := c.ClientIP()
+
+		// Resolve user once (also needed to evaluate device-trust waiver).
+		user, _ := userRepo.GetByUsername(c.Request.Context(), input.Username)
+
+		// --- Captcha gate: when enabled, credentials are only checked after
+		// the captcha is satisfied (solved this request or trust-waived). An
+		// unsatisfied gate returns captcha_required uniformly — never revealing
+		// whether the username exists (anti-enumeration). ---
+		if gate != nil && gate.Enabled() {
+			satisfied := false
+			if input.CaptchaID != "" {
+				pass, _ := gate.Verify(c.Request.Context(), input.CaptchaID, ip, input.CaptchaAnswer)
+				satisfied = pass
+			}
+			if !satisfied && user != nil {
+				trustCookie, _ := c.Cookie(captcha.TrustCookieName)
+				satisfied = gate.WaivedByTrust(trustCookie, user.ID, ip)
+			}
+			if !satisfied {
+				errorResp(c, http.StatusBadRequest, "captcha_required", "captcha required")
+				return
+			}
+		}
+
+		if user == nil {
 			// Dummy bcrypt to normalize response timing
 			bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(input.Password))
 			if auditSvc != nil {
@@ -254,7 +281,7 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 					ResourceID:   "0",
 					ResourceName: input.Username,
 					Detail:       service.AuditDetail(map[string]any{"method": "password", "reason": "user_not_found"}),
-					IPAddress:    c.ClientIP(),
+					IPAddress:    ip,
 					UserAgent:    c.Request.UserAgent(),
 					Status:       "failure",
 					CreatedAt:    time.Now().UTC(),
@@ -326,18 +353,29 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 		// Set httpOnly cookie
 		c.SetCookie("admin_token", result.Token, cfg.TokenExpiry*3600, "/", "", true, true)
 
+		// Set device-memory trust cookie so future logins skip the captcha.
+		if gate != nil && gate.Enabled() {
+			if trust := gate.IssueTrustCookie(user.ID, ip); trust != "" {
+				maxAge := 0
+				if d := gate.TrustMaxAgeSeconds(); d > 0 {
+					maxAge = d
+				}
+				c.SetCookie(captcha.TrustCookieName, trust, maxAge, "/", "", true, true)
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"token": result.Token,
 				"user": gin.H{
-					"id":           user.ID,
-					"username":     user.Username,
-					"display_name": user.DisplayName,
-					"role_id":      user.RoleID,
-					"role_name":    result.RoleName,
-					"org_id":       result.OrgID,
-					"org_name":     result.OrgName,
-					"org_role":     result.OrgRole,
+					"id":                    user.ID,
+					"username":              user.Username,
+					"display_name":          user.DisplayName,
+					"role_id":               user.RoleID,
+					"role_name":             result.RoleName,
+					"org_id":                result.OrgID,
+					"org_name":              result.OrgName,
+					"org_role":              result.OrgRole,
 					"force_password_change": user.ForcePasswordChange,
 				},
 				"permissions": result.Permissions,
@@ -467,6 +505,32 @@ func LogoutHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.SetCookie("admin_token", "", -1, "/", "", true, true)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+	}
+}
+
+// CaptchaIssueHandler issues a fresh CAPTCHA challenge. Public (pre-auth).
+// Responses:
+//   - 404 captcha_disabled      — gate off
+//   - 200 {"data":{"trusted":true}} — device already trusted (valid trust
+//     cookie); client should NOT render the slider
+//   - 200 {"data":<Challenge>}     — challenge issued; client renders slider
+func CaptchaIssueHandler(gate *captcha.Gate) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if gate == nil || !gate.Enabled() {
+			errorResp(c, http.StatusNotFound, "captcha_disabled", "captcha disabled")
+			return
+		}
+		trustCookie, _ := c.Cookie(captcha.TrustCookieName)
+		if gate.HasValidTrust(trustCookie, c.ClientIP()) {
+			c.JSON(http.StatusOK, gin.H{"data": gin.H{"trusted": true}})
+			return
+		}
+		ch, err := gate.Issue(c.Request.Context(), c.ClientIP(), "login")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue captcha"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": ch})
 	}
 }
 

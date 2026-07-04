@@ -259,7 +259,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 	// Login endpoint (no auth, rate limited)
 	// Registered after ExtraPublicRoutes so deps.AuditSvc is available.
-	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider))
+	captchaGate := buildCaptchaGate(cfg.Captcha, rdb, []byte(cfg.Admin.JWTSecret))
+	// Captcha issue: pre-auth, image generation is cheap; dedicated per-IP
+	// issue rate limit deferred (login limiter already caps the real attack
+	// surface — failed logins). See docs/plans/2026-07-03-login-captcha-design.md §3.4.
+	r.GET("/admin/api/auth/captcha/issue", admin.CaptchaIssueHandler(captchaGate))
+	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider, captchaGate))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
 
 	// Lightweight auth endpoints (JWT required, exempt from rate limit)
