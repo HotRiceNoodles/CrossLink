@@ -56,11 +56,16 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		RPMLimit      int      `json:"rpm_limit"`
 		MaxBudget     float64  `json:"max_budget"`
 		BudgetPeriod  string   `json:"budget_period"`
-		MaxCalls      int      `json:"max_calls"`
-		CallPeriod    string   `json:"call_period"`
+		MaxCalls      int       `json:"max_calls"`
+		CallPeriod    string    `json:"call_period"`
+		ExpiresAt     *time.Time `json:"expires_at"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
+	}
+	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "expires_at must be in the future")
 		return
 	}
 	if input.BudgetPeriod != "" && !isValidPeriod(input.BudgetPeriod) {
@@ -91,6 +96,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		BudgetPeriod:  input.BudgetPeriod,
 		MaxCalls:      input.MaxCalls,
 		CallPeriod:    input.CallPeriod,
+		ExpiresAt:     input.ExpiresAt,
 		CreatedByID:   GetUserID(c),
 		TeamID:        GetTeamID(c),
 		OrgID:         GetOrgID(c),
@@ -143,21 +149,26 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	var input struct {
-		Status        *int16    `json:"status"`
-		TPMLimit      *int      `json:"tpm_limit"`
-		RPMLimit      *int      `json:"rpm_limit"`
-		MaxBudget     *float64  `json:"max_budget"`
-		BudgetPeriod  *string   `json:"budget_period"`
-		MaxCalls      *int      `json:"max_calls"`
-		CallPeriod    *string   `json:"call_period"`
-		AllowedModels *[]string `json:"allowed_models"`
-		AllowedRoutes *[]string `json:"allowed_routes"`
+		Status        *int16     `json:"status"`
+		TPMLimit      *int       `json:"tpm_limit"`
+		RPMLimit      *int       `json:"rpm_limit"`
+		MaxBudget     *float64   `json:"max_budget"`
+		BudgetPeriod  *string    `json:"budget_period"`
+		MaxCalls      *int       `json:"max_calls"`
+		CallPeriod    *string    `json:"call_period"`
+		AllowedModels *[]string  `json:"allowed_models"`
+		AllowedRoutes *[]string  `json:"allowed_routes"`
+		ExpiresAt     *time.Time `json:"expires_at"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 
+	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "expires_at must be in the future")
+		return
+	}
 	if input.BudgetPeriod != nil && !isValidPeriod(*input.BudgetPeriod) {
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "budget_period must be daily, weekly, or monthly")
 		return
@@ -183,7 +194,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod}
+	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod, "expires_at": key.ExpiresAt}
 
 	if input.Status != nil {
 		key.Status = *input.Status
@@ -220,6 +231,13 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		}
 		key.AllowedRoutes = data
 	}
+	if input.ExpiresAt != nil {
+		key.ExpiresAt = input.ExpiresAt
+		// 重新激活：设置未来过期时间且未显式禁用 → 自动启用
+		if input.ExpiresAt.After(time.Now()) && input.Status == nil {
+			key.Status = 1
+		}
+	}
 
 	if err := h.keySvc.Update(c.Request.Context(), key); err != nil {
 		internalErr(c, err, "update key failed")
@@ -227,7 +245,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	if h.auditSvc != nil {
-		h.auditSvc.LogFromContext(c, "key:update", "key", fmt.Sprintf("%d", key.ID), key.Name, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod}}))
+		h.auditSvc.LogFromContext(c, "key:update", "key", fmt.Sprintf("%d", key.ID), key.Name, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod, "expires_at": key.ExpiresAt}}))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": key})
 }

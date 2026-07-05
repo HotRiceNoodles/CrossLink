@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/crosslink/internal/crypto"
@@ -140,7 +141,7 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 			var key model.APIKey
 			if json.Unmarshal(cached, &key) == nil {
 				if key.ExpiresAt != nil && key.ExpiresAt.Before(time.Now()) {
-					s.rdb.Del(ctx, authCachePrefix+keyHash)
+					s.markExpiredDisabled(ctx, &key, keyHash)
 					return nil, ErrKeyExpired
 				}
 				return &key, nil
@@ -170,6 +171,7 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 	}
 
 	if key.ExpiresAt != nil && key.ExpiresAt.Before(time.Now()) {
+		s.markExpiredDisabled(ctx, key, keyHash)
 		return nil, ErrKeyExpired
 	}
 
@@ -189,6 +191,20 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 	}
 
 	return key, nil
+}
+
+// markExpiredDisabled 在确认密钥已过期时将其状态置为 disabled(2)。
+// 用带 status=1 条件的直接 UPDATE，幂等且避免覆盖并发改动。
+func (s *KeyService) markExpiredDisabled(ctx context.Context, key *model.APIKey, keyHash string) {
+	if s.rdb != nil {
+		s.rdb.Del(ctx, authCachePrefix+keyHash)
+	}
+	if err := s.db.WithContext(ctx).
+		Model(&model.APIKey{}).
+		Where("id = ? AND status = 1", key.ID).
+		Update("status", 2).Error; err != nil {
+		slog.Warn("auto-disable expired key failed", "id", key.ID, "error", err)
+	}
 }
 
 func (s *KeyService) List(ctx context.Context, orgID int64) ([]model.APIKey, error) {
