@@ -43,6 +43,7 @@ var ValidActions = map[string]bool{
 	"usage:list":                  true,
 	"usage:export":                true,
 	"usage:stats":                 true,
+	"routing:stats":               true,
 	"system:view":                 true,
 	"system:update":               true,
 	"debug:list":                  true,

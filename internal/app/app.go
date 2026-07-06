@@ -325,6 +325,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/usage/daily", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.DailyTrend)
 		adminGroup.GET("/usage/models", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.ModelDistribution)
 		adminGroup.GET("/usage/team-stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.TeamStats)
+		adminGroup.GET("/routing/stats", middleware.RequireAction(permCache, "routing:stats"), handlers.Routing.Stats)
 
 		// System info (self-service, no RequireAction)
 		adminGroup.GET("/system/info", handlers.System.Info)
@@ -369,6 +370,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.BudgetCheck(svcs.BudgetSvc, teamCache, orgCache))
 	gwGroup.Use(middleware.ReportTokens(rdb, orgCache))
 	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
+	gwGroup.Use(middleware.RoutingStats(rdb))
 	// Commercial middleware extension point
 	for _, mw := range ext.ExtraMiddlewares {
 		mw(gwGroup, ext)
