@@ -12,6 +12,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/translator"
 	"github.com/crosslink/pkg/token"
+	"github.com/redis/go-redis/v9"
 )
 
 type GatewayService struct {
@@ -21,6 +22,7 @@ type GatewayService struct {
 	activeTracker ProviderLoadTracker
 	budget        *provider.RetryBudget
 	classifier    *ErrorClassifier
+	guardRDB      *redis.Client // P3a per-(provider,model) guardrails; nil = disabled
 }
 
 func NewGatewayService(resolver *router.Resolver, _ *provider.Registry, latencySvc *LatencyService, activeTracker ProviderLoadTracker, budget *provider.RetryBudget) *GatewayService {
@@ -39,6 +41,10 @@ func NewGatewayService(resolver *router.Resolver, _ *provider.Registry, latencyS
 // SetClassifier injects the error classifier used by fallback engines created by this
 // service (NB1 injection chain).
 func (s *GatewayService) SetClassifier(c *ErrorClassifier) { s.classifier = c }
+
+// SetGuardRDB injects the Redis client used for P3a per-(provider,model)
+// guardrail counters (covers the Anthropic dispatch path). nil disables.
+func (s *GatewayService) SetGuardRDB(rdb *redis.Client) { s.guardRDB = rdb }
 
 type ChatResult struct {
 	Response        *domain.AnthropicResponse
@@ -81,6 +87,14 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		reqCopy := *openaiReq
 		reqCopy.Model = route.ProviderModel
 		pn := route.Provider.Name()
+		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
+		if s.guardRDB != nil {
+			conc, rpm := router.ParseGuardrailConfig(route.ExtraConfig)
+			if conc > 0 || rpm > 0 {
+				release := AcquireDispatchGuard(ctx, s.guardRDB, pn, route.ProviderModel, GuardrailConfig{Concurrency: conc, RPM: rpm})
+				defer release()
+			}
+		}
 		if s.activeTracker != nil {
 			s.activeTracker.Incr(ctx, pn)
 		}
@@ -100,6 +114,9 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		totalRetries += rr.RetriesUsed
 		if s.activeTracker != nil {
 			s.activeTracker.Decr(ctx, pn)
+		}
+		if s.guardRDB != nil {
+			RecordDispatchOutcome(context.Background(), s.guardRDB, pn, route.ProviderModel, rr.Err)
 		}
 		if rr.Err != nil {
 			return nil, rr.Err
@@ -208,6 +225,14 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 		reqCopy := *openaiReq
 		reqCopy.Model = route.ProviderModel
 		pn := route.Provider.Name()
+		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
+		if s.guardRDB != nil {
+			conc, rpm := router.ParseGuardrailConfig(route.ExtraConfig)
+			if conc > 0 || rpm > 0 {
+				release := AcquireDispatchGuard(ctx, s.guardRDB, pn, route.ProviderModel, GuardrailConfig{Concurrency: conc, RPM: rpm})
+				defer release()
+			}
+		}
 		if s.activeTracker != nil {
 			s.activeTracker.Incr(ctx, pn)
 		}
@@ -227,6 +252,9 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 		totalRetries += rr.RetriesUsed
 		if s.activeTracker != nil {
 			s.activeTracker.Decr(ctx, pn)
+		}
+		if s.guardRDB != nil {
+			RecordDispatchOutcome(context.Background(), s.guardRDB, pn, route.ProviderModel, rr.Err)
 		}
 		if rr.Err != nil {
 			return nil, rr.Err

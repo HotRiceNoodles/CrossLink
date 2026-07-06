@@ -20,6 +20,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/pkg/token"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/datatypes"
 )
 
@@ -33,6 +34,7 @@ type OpenAIHandler struct {
 	budget        *provider.RetryBudget
 	guardrailSvc  *guardrail.GuardrailService
 	classifier    *service.ErrorClassifier
+	guardRDB      *redis.Client // P3a: per-(provider,model) guardrail counters; nil = disabled
 }
 
 func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService, latencySvc *service.LatencyService, _ interface{}, activeTracker service.ProviderLoadTracker, idemCache *service.IdempotencyCache, budget *provider.RetryBudget, guardrailSvc *guardrail.GuardrailService) *OpenAIHandler {
@@ -54,6 +56,10 @@ func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService,
 // SetClassifier injects the error classifier used by fallback engines created by this
 // handler (NB1 injection chain).
 func (h *OpenAIHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier = c }
+
+// SetGuardRDB injects the Redis client used for P3a per-(provider,model)
+// guardrail counters. nil disables the guardrails (no-op on dispatch).
+func (h *OpenAIHandler) SetGuardRDB(rdb *redis.Client) { h.guardRDB = rdb }
 
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
@@ -223,6 +229,16 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		reqCopy := *req
 		reqCopy.Model = route.ProviderModel
 		pn := route.Provider.Name()
+		// P3a: per-(provider,model) guardrail counters (concurrency + RPM).
+		// Count-only here; enforcement is in P4 via health-score reading the
+		// guard:limited flags. defer release() is panic-safe (runs during unwind).
+		if h.guardRDB != nil {
+			conc, rpm := router.ParseGuardrailConfig(route.ExtraConfig)
+			if conc > 0 || rpm > 0 {
+				release := service.AcquireDispatchGuard(ctx, h.guardRDB, pn, route.ProviderModel, service.GuardrailConfig{Concurrency: conc, RPM: rpm})
+				defer release()
+			}
+		}
 		if h.activeTracker != nil {
 			h.activeTracker.Incr(ctx, pn)
 		}
@@ -242,6 +258,9 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		totalRetries += rr.RetriesUsed
 		if h.activeTracker != nil {
 			h.activeTracker.Decr(context.Background(), pn)
+		}
+		if h.guardRDB != nil {
+			service.RecordDispatchOutcome(context.Background(), h.guardRDB, pn, route.ProviderModel, rr.Err)
 		}
 		if rr.Err != nil {
 			return nil, rr.Err
@@ -428,6 +447,14 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			reqCopy.StreamOptions = &domain.StreamOptions{IncludeUsage: true}
 		}
 		pn := route.Provider.Name()
+		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
+		if h.guardRDB != nil {
+			conc, rpm := router.ParseGuardrailConfig(route.ExtraConfig)
+			if conc > 0 || rpm > 0 {
+				release := service.AcquireDispatchGuard(ctx, h.guardRDB, pn, route.ProviderModel, service.GuardrailConfig{Concurrency: conc, RPM: rpm})
+				defer release()
+			}
+		}
 		if h.activeTracker != nil {
 			h.activeTracker.Incr(ctx, pn)
 		}
@@ -447,6 +474,9 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		totalRetries += rr.RetriesUsed
 		if h.activeTracker != nil {
 			h.activeTracker.Decr(context.Background(), pn)
+		}
+		if h.guardRDB != nil {
+			service.RecordDispatchOutcome(context.Background(), h.guardRDB, pn, route.ProviderModel, rr.Err)
 		}
 		if rr.Err != nil {
 			return nil, rr.Err

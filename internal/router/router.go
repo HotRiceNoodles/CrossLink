@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -25,12 +26,33 @@ type Resolver struct {
 	latencySvc     LatencyProvider
 	activeTracker  ActiveRequestsProvider
 	secretResolver *secret.SecretResolver
+	// P4 (v5.1 D-1): health-score closure for cache-hit reordering. nil = legacy
+	// binary IsHealthyModel filter only. Set via SetHealthScoreFn (Setter, NOT
+	// NewResolver — overlay capability_test.go calls NewResolver positionally).
+	healthFn HealthScoreFn
+	// healthScoreCache: per-(provider,model) short TTL (2s) cache of health scores
+	// so the cache-hit hot path doesn't do N Redis reads per request. Bounded
+	// staleness (≤2s) is far better than the 30s resolver cache alone.
+	healthScoreCache sync.Map // key "pn|pm" -> *healthScoreCacheEntry
 }
 
 type cacheEntry struct {
 	results []*RouteResult
 	expire  time.Time
 }
+
+// healthScoreCacheEntry is a cached HealthScore result with a short TTL.
+type healthScoreCacheEntry struct {
+	score  float64
+	expire time.Time
+}
+
+// SetHealthScoreFn injects the health-score closure used to reorder cached
+// routes on cache hit (P4.4b). nil disables cache-hit reordering; selection
+// falls back to the binary IsHealthyModel filter (pre-P4 behavior).
+func (r *Resolver) SetHealthScoreFn(fn HealthScoreFn) { r.healthFn = fn }
+
+const healthScoreCacheTTL = 2 * time.Second
 
 type ProviderModelRepo interface {
 	FindByModelName(ctx context.Context, modelName string, orgID int64) ([]model.ProviderModel, error)
@@ -51,6 +73,10 @@ type RouteResult struct {
 	FallbackModels []string
 	FallbackConfig FallbackConfig
 	ExtraConfig    json.RawMessage
+	// P4: carried from RouteCandidate so the resolver cache-hit path can
+	// re-derive effective-weight ordering without re-querying the DB.
+	Weight   int
+	Priority int
 }
 
 func NewResolver(
@@ -91,7 +117,10 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 	if v, ok := r.cache.Load(cacheKey); ok {
 		entry := v.(*cacheEntry)
 		if time.Now().Before(entry.expire) {
-			// Filter out unhealthy providers from cached results
+			// Filter out unhealthy providers from cached results.
+			// IsHealthyModel is retained: it drives the half-open probe
+			// single-flight (claims one probe per expired circuit). P4.4b
+			// ADDS health-score reorder ON TOP, not replacing it.
 			if r.health != nil {
 				var healthy []*RouteResult
 				for _, rr := range entry.results {
@@ -100,10 +129,16 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 					}
 				}
 				if len(healthy) > 0 {
+					if r.healthFn != nil {
+						healthy = r.reorderByHealth(healthy)
+					}
 					return healthy, nil
 				}
 				// All cached providers unhealthy — cache miss
 			} else {
+				if r.healthFn != nil {
+					return r.reorderByHealth(entry.results), nil
+				}
 				return entry.results, nil
 			}
 		}
@@ -257,6 +292,51 @@ func (r *Resolver) Invalidate() {
 		r.cache.Delete(key)
 		return true
 	})
+}
+
+// reorderByHealth sorts cached routes by effective weight DESC, Priority ASC
+// (P4.4b). Effective weight = Weight × healthScore. Routes with Weight=0
+// (configured fallbacks) or healthScore=0 (demoted primaries) sort last — the
+// sort naturally demotes them without a separate step. Health scores are read
+// through cachedHealthScore (2s local cache) so the cache-hit hot path doesn't
+// do N Redis reads per request.
+func (r *Resolver) reorderByHealth(routes []*RouteResult) []*RouteResult {
+	type item struct {
+		rr  *RouteResult
+		ew  float64
+		pri int
+	}
+	items := make([]item, len(routes))
+	for i, rr := range routes {
+		score := r.cachedHealthScore(rr.Provider.Name(), rr.ProviderModel)
+		items[i] = item{rr: rr, ew: float64(rr.Weight) * score, pri: rr.Priority}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].ew != items[j].ew {
+			return items[i].ew > items[j].ew
+		}
+		return items[i].pri < items[j].pri
+	})
+	out := make([]*RouteResult, len(items))
+	for i, it := range items {
+		out[i] = it.rr
+	}
+	return out
+}
+
+// cachedHealthScore returns the health score for (provider, model) from the
+// 2s local cache, computing + storing it on miss. Bounds Redis reads (via
+// healthFn) to once per 2s per (provider,model) regardless of request rate.
+func (r *Resolver) cachedHealthScore(providerName, model string) float64 {
+	key := providerName + "|" + model
+	if v, ok := r.healthScoreCache.Load(key); ok {
+		if ce, ok := v.(*healthScoreCacheEntry); ok && time.Now().Before(ce.expire) {
+			return ce.score
+		}
+	}
+	score := r.healthFn(providerName, model)
+	r.healthScoreCache.Store(key, &healthScoreCacheEntry{score: score, expire: time.Now().Add(healthScoreCacheTTL)})
+	return score
 }
 
 func (r *Resolver) Health() *provider.HealthTracker {

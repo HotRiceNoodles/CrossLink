@@ -182,8 +182,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Inject the error classifier into every fallback-engine consumer (NB1 chain).
 	infra.GatewaySvc.SetClassifier(infra.Classifier)
+	infra.GatewaySvc.SetGuardRDB(rdb)
 	openaiHandler.SetClassifier(infra.Classifier)
+	openaiHandler.SetGuardRDB(rdb)
 	videoHandler.SetClassifier(infra.Classifier)
+	videoHandler.SetGuardRDB(rdb)
 
 	usageWorkers := worker.NewPool(15, 1000)
 	handler.SetUsageWorkers(usageWorkers)

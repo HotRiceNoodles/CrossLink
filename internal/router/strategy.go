@@ -103,6 +103,8 @@ func candidateToRouteResult(c RouteCandidate) *RouteResult {
 		FallbackModels: c.FallbackModels,
 		FallbackConfig: c.FallbackCfg,
 		ExtraConfig:    c.ExtraConfig,
+		Weight:         c.Weight,
+		Priority:       c.Priority,
 	}
 }
 
@@ -147,6 +149,10 @@ type extraConfig struct {
 	FallbackModels []string       `json:"fallback_models"`
 	Fallback       FallbackConfig `json:"fallback"`
 	Guardrails     guardrail.ModelGuardrailConfig `json:"guardrails"`
+	// P3a provider guardrails (opt-in, 0 = disabled). Read by the dispatch
+	// path (handler callFn) via AcquireDispatchGuard.
+	Concurrency int `json:"concurrency"` // max in-flight requests per (provider,model)
+	RPM         int `json:"rpm"`         // max requests per minute per (provider,model)
 }
 
 func parseExtraConfig(raw json.RawMessage) extraConfig {
@@ -159,6 +165,15 @@ func parseExtraConfig(raw json.RawMessage) extraConfig {
 		cfg.CanaryPercent = 0
 	}
 	return cfg
+}
+
+// ParseGuardrailConfig extracts the P3a provider guardrail limits (concurrency,
+// rpm) from a model's ExtraConfig JSON. Returns (0, 0) when absent or unparseable.
+// Used by the dispatch path to feed service.AcquireDispatchGuard without
+// exposing the private extraConfig struct.
+func ParseGuardrailConfig(raw json.RawMessage) (concurrency, rpm int) {
+	cfg := parseExtraConfig(raw)
+	return cfg.Concurrency, cfg.RPM
 }
 
 func parseFallbackModels(extraConfig json.RawMessage) []string {

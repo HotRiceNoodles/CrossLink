@@ -12,6 +12,16 @@ const (
 	kindPersistent
 )
 
+// CircuitState is a snapshot of a circuit breaker's state (pure read, does not
+// affect probeInFlight single-flight semantics). Higher value = more severe.
+type CircuitState int8
+
+const (
+	CircuitClosed   CircuitState = iota // healthy (no failures or cleared)
+	CircuitHalfOpen                     // openUntil expired, awaiting probe outcome
+	CircuitOpen                         // blocking (time.Now().Before(openUntil))
+)
+
 type circuitState struct {
 	kind             circuitKind
 	consecutiveFails int
@@ -104,6 +114,37 @@ func (h *HealthTracker) blockedOrProbed(k string) bool {
 		return true // still open
 	}
 	return s.probeInFlight // expired half-open: blocked iff someone else is probing
+}
+
+// CircuitState returns the worst circuit state across the account and model keys
+// for (name, model). PURE READ — it does NOT touch probeInFlight, so callers can
+// observe open/half-open without disturbing the single-flight probe gating that
+// IsHealthyModel relies on (design §4.3 / P4-3).
+func (h *HealthTracker) CircuitState(name, model string) CircuitState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	keys := []string{name}
+	if model != "" {
+		keys = append(keys, name+"|"+model)
+	}
+	worst := CircuitClosed
+	now := time.Now()
+	for _, k := range keys {
+		s := h.states[k]
+		if s == nil || s.openUntil.IsZero() {
+			continue
+		}
+		var st CircuitState
+		if now.Before(s.openUntil) {
+			st = CircuitOpen
+		} else {
+			st = CircuitHalfOpen
+		}
+		if st > worst {
+			worst = st
+		}
+	}
+	return worst
 }
 
 // RecordSuccess clears the account circuit (backward-compat shim, account-only).

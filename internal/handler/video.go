@@ -19,6 +19,7 @@ import (
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
+	"github.com/redis/go-redis/v9"
 )
 
 type VideoHandler struct {
@@ -30,6 +31,7 @@ type VideoHandler struct {
 	idemCache     *service.IdempotencyCache
 	budget        *provider.RetryBudget
 	classifier    *service.ErrorClassifier
+	guardRDB      *redis.Client // P3a per-(provider,model) guardrails; nil = disabled
 }
 
 func NewVideoHandler(
@@ -55,6 +57,9 @@ func NewVideoHandler(
 // SetClassifier injects the error classifier used by fallback engines created by this
 // handler (NB1 injection chain).
 func (h *VideoHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier = c }
+
+// SetGuardRDB injects the Redis client for P3a per-(provider,model) guardrails.
+func (h *VideoHandler) SetGuardRDB(rdb *redis.Client) { h.guardRDB = rdb }
 
 // CreateVideo handles POST /v1/videos — submits a video generation task.
 func (h *VideoHandler) CreateVideo(c *gin.Context) {
@@ -146,6 +151,14 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		}
 
 		pn := route.Provider.Name()
+		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
+		if h.guardRDB != nil {
+			conc, rpm := router.ParseGuardrailConfig(route.ExtraConfig)
+			if conc > 0 || rpm > 0 {
+				release := service.AcquireDispatchGuard(ctx, h.guardRDB, pn, route.ProviderModel, service.GuardrailConfig{Concurrency: conc, RPM: rpm})
+				defer release()
+			}
+		}
 		if h.activeTracker != nil {
 			h.activeTracker.Incr(ctx, pn)
 		}
@@ -164,6 +177,9 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 			h.activeTracker.Decr(context.Background(), pn)
 		}
 
+		if h.guardRDB != nil {
+			service.RecordDispatchOutcome(context.Background(), h.guardRDB, pn, route.ProviderModel, rr.Err)
+		}
 		if rr.Err != nil {
 			return nil, rr.Err
 		}

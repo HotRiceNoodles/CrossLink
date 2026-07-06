@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"time"
 
 	"github.com/crosslink/internal/admin"
@@ -40,10 +41,13 @@ type InfraDeps struct {
 // ProvideInfrastructure constructs the infrastructure layer: provider registry,
 // health tracker, retry budget, router resolver, and gateway service.
 func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
-	// Build strategy map (base + commercial extensions)
+	// Build strategy map (base + commercial extensions). Declared as vars so
+	// the health-score closure can be injected after the HealthTracker exists.
+	weightedStrategy := &router.WeightedRandomStrategy{}
+	roundRobinStrategy := router.NewRoundRobinStrategy(deps.RDB)
 	strategies := map[router.StrategyName]router.RoutingStrategy{
-		router.StrategyWeightedRandom: &router.WeightedRandomStrategy{},
-		router.StrategyRoundRobin:     router.NewRoundRobinStrategy(deps.RDB),
+		router.StrategyWeightedRandom: weightedStrategy,
+		router.StrategyRoundRobin:     roundRobinStrategy,
 	}
 	for name, s := range deps.Extensions.ExtraStrategies {
 		strategies[name] = s
@@ -77,6 +81,19 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 	gatewaySvc := service.NewGatewayService(
 		resolver, registry, deps.Svcs.LatencySvc, deps.Svcs.ActiveTracker, retryBudget,
 	)
+
+	// P4.5: wire the health-score closure into the resolver (cache-hit reorder)
+	// and the two Community strategies (cache-miss Select). The overlay's 4
+	// strategies are wired separately in their main.go (B2). nil rdb → skip
+	// (HealthScore would fail-open to 1.0 anyway, so wiring is pointless).
+	if deps.RDB != nil {
+		healthFn := func(providerName, model string) float64 {
+			return service.HealthScore(context.Background(), deps.RDB, health, providerName, model)
+		}
+		resolver.SetHealthScoreFn(healthFn)
+		weightedStrategy.SetHealthScoreFn(healthFn)
+		roundRobinStrategy.SetHealthScoreFn(healthFn)
+	}
 
 	var registrySync *provider.RegistrySync
 	if deps.RDB != nil {
