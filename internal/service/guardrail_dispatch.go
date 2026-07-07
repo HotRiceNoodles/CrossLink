@@ -10,6 +10,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ConcKeyTTL is the heartbeat TTL on the concurrency counter. Refreshed on
+// every acquire so active traffic keeps the key alive; a crashed process stops
+// refreshing and its contribution self-heals within this window (R-4).
+const ConcKeyTTL = 300 // 5 minutes — longer than typical LLM dispatch.
+
+// incrExpireAlwaysScript atomically INCRs and ALWAYS refreshes the TTL (unlike
+// incrExpireGuard which only sets TTL on first write). Used for the concurrency
+// counter so it acts as a heartbeat (R-4): every acquire refreshes the TTL,
+// crashing instances self-heal when they stop refreshing.
+var incrExpireAlwaysScript = redis.NewScript(`
+	local n = redis.call('INCR', KEYS[1])
+	redis.call('EXPIRE', KEYS[1], ARGV[1])
+	return n
+`)
+
 // GuardrailConfig is the per-(provider,model) guardrail limits.
 // Zero values disable that dimension. Populated from provider_model ExtraConfig
 // (json fields "concurrency" and "rpm").
@@ -53,8 +68,13 @@ func AcquireDispatchGuard(ctx context.Context, rdb *redis.Client, providerName, 
 	minute := currentMinuteKeySuffix()
 	rpmKey := fmt.Sprintf("guard:rpm:%s:%s:%s", providerName, model, minute)
 
-	// Concurrency: acquire.
-	concNow, err := rdb.Incr(ctx, concKey).Result()
+	// Concurrency: acquire. R-4 (TTL + heartbeat): the conc key carries a
+	// TTL refreshed on every acquire, so a crashed process (which stops
+	// refreshing) self-heals within ConcKeyTTL. Active traffic keeps the key
+	// alive; a quiet period lets it expire (count resets — fine since all
+	// requests should have released by then). Trade-off: an in-flight request
+	// during a >ConcKeyTTL lull under-counts; LLM dispatches rarely exceed it.
+	concNow, err := incrExpireAlwaysScript.Run(ctx, rdb, []string{concKey}, ConcKeyTTL).Int64()
 	if err != nil {
 		slog.Warn("guardrail conc incr failed", "key", concKey, "error", err)
 	} else if cfg.Concurrency > 0 && concNow > int64(cfg.Concurrency) {

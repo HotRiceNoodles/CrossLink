@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -23,6 +24,11 @@ func TestAcquireDispatchGuard_ConcurrencyAcquireRelease(t *testing.T) {
 	release := AcquireDispatchGuard(ctx, rdb, "zhipu", "glm-5.2", GuardrailConfig{})
 	if v, _ := mr.Get("guard:conc:zhipu:glm-5.2"); v != "1" {
 		t.Errorf("expected conc=1 while in-flight, got %q", v)
+	}
+	// R-4: the conc key must carry a TTL (heartbeat) so a crashed process self-heals.
+	ttl := mr.TTL("guard:conc:zhipu:glm-5.2")
+	if ttl <= 0 || ttl > time.Duration(ConcKeyTTL)*time.Second {
+		t.Errorf("expected conc key TTL in (0, %ds], got %v", ConcKeyTTL, ttl)
 	}
 	release()
 	if v, _ := mr.Get("guard:conc:zhipu:glm-5.2"); v != "0" {
