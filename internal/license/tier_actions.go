@@ -20,6 +20,7 @@ var communityActions = map[string]bool{
 	"key:regenerate":    true,
 	"usage:list":        true,
 	"usage:stats":       true,
+	"routing:stats":     true,
 	"system:password":   true,
 	"license:view":      true,
 	"license:manage":    true,
