@@ -5,8 +5,16 @@
 <br/>
 
 <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
+<img src="https://goreportcard.com/badge/github.com/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Go Report Card">
 <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License">
 <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen?style=for-the-badge" alt="PRs Welcome">
+
+<br/>
+
+<img src="https://img.shields.io/github/stars/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Stars">
+<img src="https://img.shields.io/github/issues/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Issues">
+<img src="https://img.shields.io/github/discussions/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Discussions">
+<img src="https://img.shields.io/github/last-commit/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Last Commit">
 
 <br/>
 <br/>
@@ -19,10 +27,12 @@
 
 [English](#quick-start) | [中文](README_zh.md)
 
-Unified proxy with intelligent routing, automatic failover, protocol translation,
-rate limiting, caching, MCP gateway, and a built-in admin dashboard.
+A unified proxy with true bidirectional protocol translation, error-classified
+failover, an MCP gateway with per-tool RBAC, pluggable guardrails, and a built-in
+admin dashboard — for OpenAI, Anthropic, Azure, DeepSeek, Qwen, Ollama, and any
+OpenAI-compatible provider.
 
-[Get Started](#quick-start) · [Features](#features) · [Architecture](#architecture) · [API Docs](#api-endpoints) · [Contributing](CONTRIBUTING.md)
+[Get Started](#quick-start) · [Highlights](#highlights) · [Features](#features) · [Architecture](#architecture) · [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -33,16 +43,48 @@ rate limiting, caching, MCP gateway, and a built-in admin dashboard.
 Every LLM provider has a different API format, auth mechanism, and feature set.
 Adapting your code for each one is tedious, error-prone, and locks you in.
 
-CrossLink solves this by acting as a **universal adapter** between your application and
-any LLM provider:
+CrossLink is a **universal adapter** between your application and any LLM provider:
 
 - **One endpoint** — Your code talks to a single API in either OpenAI or Anthropic format
 - **Any provider** — Requests are routed to OpenAI, Anthropic, Azure, DeepSeek, Qwen,
   Ollama, or any OpenAI-compatible service
-- **Automatic translation** — Full bidirectional protocol conversion including streaming SSE,
-  tool use, and extended thinking
-- **Resilient by default** — Circuit breakers, fallback chains, and retry policies keep your
-  application running when providers don't
+- **True bidirectional translation** — Full streaming SSE conversion between OpenAI,
+  Anthropic, and the OpenAI Responses API, including tool use and extended thinking
+- **Resilient by classification** — Failover isn't blind retry. Errors are classified as
+  persistent (quota/billing — one strike, long cooldown) or transient (rate limit —
+  threshold-based), so retries go where they can actually succeed
+- **Observable routing** — Every response carries `x-crosslink-fallback-*` headers, and a
+  routing-stats API shows configured-vs-actual traffic distribution so you can see drift
+
+---
+
+## Highlights
+
+What makes CrossLink different — each backed by code, not marketing.
+
+- 🔁 **Bidirectional streaming translation** — OpenAI ↔ Anthropic ↔ Responses API, all three
+  directions, via a real state machine (not request-level rewrites). Handles thinking blocks,
+  partial-JSON tool args, and token counting mid-stream. → [Architecture](docs/architecture.md)
+- 🛡️ **Error-classified failover** — DB-backed rule table distinguishes persistent vs.
+  transient failures; half-open single-flight probing prevents stampedes when a flaky
+  provider returns. → [Routing & Failover](docs/routing-and-failover.md)
+- 🔌 **MCP gateway with per-tool RBAC** — Not a thin proxy. Transport abstraction, tool
+  discovery with singleflight caching, encrypted credentials, and allow/deny lists scoped
+  by key, team, or role. → [MCP Gateway](docs/mcp-gateway.md)
+- 🚧 **Guardrails as a plugin registry** — Plug in any engine (regex, external API, future
+  ML) via `RegisterEngine`. Actions: block / log / mask. Per-model config, fail-open or
+  fail-closed. → [Architecture](docs/architecture.md)
+- 📊 **Routing transparency** — `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
+  headers on every response, plus a routing-distribution API showing configured-vs-actual
+  weight, deviation, error rate, and latency per provider.
+- ❤️‍🩹 **Self-healing dispatch counters** — Per-(provider, model) concurrency/RPM limits via
+  Redis Lua with a TTL heartbeat; a crashed process can't leave a provider stuck "busy".
+- 🇨🇳 **GM national crypto + air-gapped ready** — SM2/SM3/SM4 mode (including HMAC-SM3 JWT
+  signing) and a self-hosted slider CAPTCHA. No reCAPTCHA/hCaptcha dependency — deploys
+  fully offline for 信创 compliance. → [Deployment](docs/deployment.md)
+- 🎁 **Generous open core** — The Community edition (Apache 2.0) ships 39 actions including
+  MCP, RBAC, routing stats, and error rules. Pro adds guardrails/playground/secrets;
+  Enterprise adds multi-org, audit, and budgets.
 
 ---
 
@@ -50,14 +92,14 @@ any LLM provider:
 
 ### Core Gateway
 
-- **Dual Protocol** — Exposes both `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic)
-  endpoints with automatic bidirectional translation
-- **Multi-Provider** — Route to OpenAI, Anthropic, Azure OpenAI, DeepSeek, Qwen, Moonshot, Ollama,
+- **Dual Protocol** — `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) with
+  automatic bidirectional translation, streaming included
+- **Multi-Provider** — OpenAI, Anthropic, Azure OpenAI, DeepSeek, Qwen, Moonshot, Ollama,
   and any OpenAI-compatible provider
-- **Intelligent Routing** — 6 strategies: weighted random, round-robin, least latency, least cost,
-  least busy, and canary deployment
-- **Automatic Failover** — Multi-provider fallback chains with circuit breakers, configurable retry
-  policies (exponential/fixed/linear backoff), and error classification
+- **Intelligent Routing** — 6 strategies: weighted random, round-robin, least latency,
+  least cost, least busy, and canary deployment
+- **Automatic Failover** — Multi-provider fallback chains with circuit breakers, configurable
+  retry policies (exponential/fixed/linear backoff), and error classification
 - **Response Caching** — Redis-based caching with per-model TTL, gzip compression, and
   cache key isolation per user
 
@@ -66,7 +108,7 @@ any LLM provider:
 - **Rate Limiting** — Per-key RPM/TPM limits with global concurrency control (2000)
 - **RBAC** — Role-based access control for providers, models, API keys, and MCP
 - **Budget Management** — Per-key and per-team budget limits with automatic circuit breaking
-- **Guardrails** — Content safety engine framework with configurable rules and actions
+- **Guardrails** — Pluggable content-safety engine framework with configurable rules and actions
 - **Crypto Flexibility** — Standard (SHA-256/RSA/AES) or Chinese national cryptography (SM3/SM2/SM4)
 
 ### Observability
@@ -88,8 +130,8 @@ any LLM provider:
 - **Vue 3 Admin Dashboard** — Built-in web UI for providers, models, keys, usage, and MCP
   management ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard))
 - **Multi-Instance** — Redis Pub/Sub for provider registry sync and distributed round-robin
-- **Graceful Shutdown** — 4-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
-  background goroutine cancellation
+- **Graceful Shutdown** — 5-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
+  background goroutine cancellation → DB cleanup
 - **One-Command Deploy** — Docker Compose spins up gateway, frontend, PostgreSQL, and Redis in one command
 
 ---
@@ -99,6 +141,28 @@ any LLM provider:
 <p align="center">
   <img src="imgs/Architecture.png" alt="CrossLink Architecture" width="720">
 </p>
+
+See [Architecture](docs/architecture.md) for the request flow, the streaming translator
+state machine, the fallback engine's timeout budgeting, and the 5-phase graceful shutdown.
+
+---
+
+## Dashboard Preview
+
+<p align="center">
+  <img src="imgs/Dashboard.png" alt="Admin dashboard overview" width="720">
+</p>
+<p align="center"><em>The admin dashboard: request volume, cost, token usage, latency, error rate, and model distribution at a glance.</em></p>
+
+<p align="center">
+  <img src="imgs/MCP.png" alt="MCP server management" width="720">
+</p>
+<p align="center"><em>MCP server management: registry with transport types (HTTP/SSE/stdio), health status, and per-server configuration.</em></p>
+
+<p align="center">
+  <img src="imgs/Provider.png" alt="Provider and model configuration" width="720">
+</p>
+<p align="center"><em>Provider & model configuration: weight, priority, pricing, and routing strategy per model.</em></p>
 
 ---
 
@@ -137,7 +201,17 @@ make build
 
 ### Make Your First Request
 
-Create an API key via the admin dashboard (`http://localhost:8080`), then:
+Create an API key via the admin dashboard (`http://localhost:8080`), then try it in 30 seconds:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer cl-your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-chat",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
 
 **OpenAI SDK (Python)**
 
@@ -172,18 +246,6 @@ message = client.messages.create(
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(message.content[0].text)
-```
-
-**curl**
-
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer cl-your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
 ```
 
 ---
@@ -274,12 +336,12 @@ providers:
 | `CRUD` | `/admin/api/models` | Model mapping management |
 | `CRUD` | `/admin/api/keys` | API key management (regenerate via `POST /:id/regenerate`) |
 | `GET` | `/admin/api/usage` | Usage logs with multi-dimensional filtering |
-| `GET` | `/admin/api/usage/stats` | Usage statistics |
-| `GET` | `/admin/api/usage/daily` | Daily usage trends |
+| `GET` | `/admin/api/routing/stats` | Routing distribution: configured vs. actual per provider |
 | `CRUD` | `/admin/api/mcp/servers` | MCP server management |
 | `GET` | `/admin/api/mcp/servers/:id/tools` | List tools on MCP server |
 
-Full API reference is available in the [documentation](docs/).
+The full API reference — including request/response shapes, error codes, and the
+`x-crosslink-fallback-*` response headers — is in [docs/api-reference.md](docs/api-reference.md).
 
 ---
 
@@ -299,22 +361,49 @@ Use the CN variant with Go proxy (`goproxy.cn`) and npm mirror (`registry.npmmir
 docker compose -f deployments/docker-compose.cn.yaml up --build
 ```
 
-### Nginx
+### Nginx · Caddy · Systemd · GM
 
-Production-ready Nginx config with TLS, security headers, and SSE streaming support:
-`deployments/nginx/crosslink.conf`
+Production-ready Nginx config (TLS, security headers, SSE streaming) at
+`deployments/nginx/`, a Caddyfile for automatic HTTPS, a systemd unit, and a dedicated
+GM (SM2/SM3/SM4) deployment with GmSSL/Nginx + TLCP at `deployments/gm/`.
 
-### Systemd
+→ See [Deployment](docs/deployment.md) for all options and multi-instance scaling notes.
 
-```bash
-sudo cp deployments/systemd/crosslink.service /etc/systemd/system/
-sudo systemctl enable --now crosslink
-```
+---
 
-### GM (Chinese National Cryptography)
+## Documentation
 
-For SM2/SM3/SM4 compliance, a dedicated deployment with GmSSL/Nginx and TLCP protocol
-support is available at `deployments/gm/`.
+- [Architecture](docs/architecture.md) — request flow, translator state machine, fallback engine
+- [Routing & Failover](docs/routing-and-failover.md) — strategies, circuit breaker, error classification
+- [MCP Gateway](docs/mcp-gateway.md) — transport, per-tool RBAC, encrypted credentials
+- [API Reference](docs/api-reference.md) — full endpoint reference
+- [Deployment](docs/deployment.md) — all deployment variants
+
+---
+
+## Roadmap
+
+CrossLink is under active development. Current focus:
+
+- [x] Provider guardrails with health-aware routing
+- [x] Routing-distribution observability (`/admin/api/routing/stats`)
+- [x] Self-healing concurrency counters (TTL heartbeat)
+- [x] OpenAI Responses API translation (stream + non-stream)
+- [x] Self-hosted slider CAPTCHA (air-gapped ready)
+- [ ] Provider guard alert rules (Enterprise) — in progress
+- [ ] Expanded guardrail engine ecosystem (ML-based classifiers)
+- [ ] Multi-team budgets and audit (Enterprise)
+
+Have a request? Open a [Discussion](https://github.com/HotRiceNoodles/CrossLink/discussions) or a [feature request](https://github.com/HotRiceNoodles/CrossLink/issues/new/choose).
+
+---
+
+## Community & Support
+
+- 💬 **Questions & ideas** — [GitHub Discussions](https://github.com/HotRiceNoodles/CrossLink/discussions)
+- 🐛 **Bug reports** — [open an issue](https://github.com/HotRiceNoodles/CrossLink/issues/new/choose) (use the bug-report template)
+- 🔒 **Security reports** — see [SECURITY.md](SECURITY.md) for private disclosure
+- ⭐ **Like the project?** Give it a star — it helps others find CrossLink.
 
 ---
 
