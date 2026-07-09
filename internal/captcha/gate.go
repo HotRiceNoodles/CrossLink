@@ -39,9 +39,20 @@ func NewGate(provider Provider, cfg CaptchaGateConfig, jwtSecret []byte) *Gate {
 	return &Gate{
 		provider: provider,
 		cfg:      cfg,
-		secret:   jwtSecret,
+		secret:   deriveCaptchaKey(jwtSecret),
 		now:      time.Now,
 	}
+}
+
+// deriveCaptchaKey derives a purpose-bound HMAC key from the JWT signing secret.
+// Previously the trust-cookie HMAC reused the raw JWT secret, coupling two
+// unrelated security contexts: a leak / compromise of one could forge the other.
+// The derived key is isolated to "captcha-trust-cookie" and never equals the JWT
+// secret, so the two cannot be confused or cross-forged.
+func deriveCaptchaKey(jwtSecret []byte) []byte {
+	h := hmac.New(sha256.New, jwtSecret)
+	h.Write([]byte("crosslink:captcha-trust-cookie:v1"))
+	return h.Sum(nil)
 }
 
 // Enabled reports whether the captcha gate is active.
