@@ -660,11 +660,12 @@ func ensureAdminUser(db *gorm.DB, cfg *config.AdminConfig) {
 		return
 	}
 	user := &model.User{
-		Username:     cfg.Username,
-		PasswordHash: cfg.PasswordHash,
-		DisplayName:  "Administrator",
-		RoleID:       adminRole.ID,
-		Status:       1,
+		Username:          cfg.Username,
+		PasswordHash:      cfg.PasswordHash,
+		DisplayName:       "Administrator",
+		RoleID:            adminRole.ID,
+		Status:            1,
+		ForcePasswordChange: true,
 	}
 	if err := db.Create(user).Error; err != nil {
 		slog.Warn("failed to seed admin user", "error", err)
