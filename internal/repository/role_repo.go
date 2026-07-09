@@ -147,6 +147,11 @@ func (r *RoleRepo) CreateWithPermissions(ctx context.Context, input *RoleCreateI
 		if !license.TierAllowsAction(a) {
 			return nil, fmt.Errorf("action %s is not available in current tier", a)
 		}
+		// A newly created role is never the admin role, so it must not receive
+		// super-admin-exclusive actions.
+		if model.AdminExclusiveActions[a] {
+			return nil, fmt.Errorf("action %s is reserved for the admin role", a)
+		}
 	}
 
 	role := &model.Role{
@@ -187,12 +192,23 @@ func (r *RoleRepo) GetPermissions(ctx context.Context, roleID int64) ([]string, 
 
 func (r *RoleRepo) SetPermissions(ctx context.Context, roleID int64, actions []string) error {
 	actions = dedupActions(actions)
+	// Look up the role so we can gate super-admin-exclusive actions: only the
+	// admin (super-admin) role may hold AdminExclusiveActions (system:* / error_rule:*).
+	// Without this, a custom or org role granted one of these could edit global,
+	// non-org-scoped configuration affecting all tenants.
+	var role model.Role
+	if err := r.db.WithContext(ctx).First(&role, roleID).Error; err != nil {
+		return fmt.Errorf("lookup role: %w", err)
+	}
 	for _, a := range actions {
 		if !model.IsValidAction(a) {
 			return fmt.Errorf("invalid permission action: %s", a)
 		}
 		if !license.TierAllowsAction(a) {
 			return fmt.Errorf("action %s is not available in current tier", a)
+		}
+		if role.Name != model.RoleAdmin && model.AdminExclusiveActions[a] {
+			return fmt.Errorf("action %s is reserved for the admin role", a)
 		}
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

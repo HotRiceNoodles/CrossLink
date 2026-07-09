@@ -390,3 +390,50 @@ func TestGetByIDForOrg(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, globalRole.ID, found.ID)
 }
+// roleIDByName looks up a role ID by name in the test DB.
+func roleIDByName(t *testing.T, db *gorm.DB, name string) int64 {
+	t.Helper()
+	var r model.Role
+	require.NoError(t, db.Where("name = ?", name).First(&r).Error)
+	return r.ID
+}
+
+// TestSetPermissions_RejectsExclusiveForNonAdmin verifies H5: a non-admin role
+// must not receive AdminExclusiveActions (system:* / error_rule:*), which control
+// global, non-org-scoped configuration. Only the admin (super-admin) role may.
+func TestSetPermissions_RejectsExclusiveForNonAdmin(t *testing.T) {
+	db := setupRoleTestDB(t)
+	seedSystemRoles(t, db)
+	repo := NewRoleRepo(db)
+	ctx := context.Background()
+
+	custom, err := repo.CreateWithPermissions(ctx, &RoleCreateInput{
+		Name: "custom", DisplayName: "Custom", Permissions: communityActions(),
+	})
+	require.NoError(t, err)
+
+	// Non-admin role + admin-exclusive action -> rejected. error_rule:list is
+	// both Community-tier and AdminExclusiveActions, so it reaches our check.
+	err = repo.SetPermissions(ctx, custom.ID, []string{"error_rule:list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
+
+	// Admin role may hold admin-exclusive actions.
+	err = repo.SetPermissions(ctx, roleIDByName(t, db, model.RoleAdmin), []string{"error_rule:list"})
+	assert.NoError(t, err)
+}
+
+// TestCreateWithPermissions_RejectsExclusiveActions: a newly created role is
+// never the admin role, so it must not receive admin-exclusive actions.
+func TestCreateWithPermissions_RejectsExclusiveActions(t *testing.T) {
+	db := setupRoleTestDB(t)
+	seedSystemRoles(t, db)
+	repo := NewRoleRepo(db)
+	ctx := context.Background()
+
+	_, err := repo.CreateWithPermissions(ctx, &RoleCreateInput{
+		Name: "evil", DisplayName: "Evil", Permissions: []string{"error_rule:list"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
+}
