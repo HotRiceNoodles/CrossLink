@@ -114,17 +114,23 @@ func currentMinuteKeySuffix() string {
 	return strconv.FormatInt(time.Now().Unix()/60, 10)
 }
 
-// incrExpireGuard INCRs and sets TTL only on first increment (mirrors the
-// incrExpireScript Lua pattern in middleware/ratelimit.go).
+// incrExpireGuardScript atomically INCRs and sets the TTL only on the first
+// increment (n==1). Atomicity matters: the previous two-step INCR+EXPIRE left a
+// window where a crash after INCR (before EXPIRE) produced a TTL-less key,
+// permanently rate-limiting that (provider,model) RPM counter.
+var incrExpireGuardScript = redis.NewScript(`
+	local n = redis.call('INCR', KEYS[1])
+	if n == 1 then
+		redis.call('EXPIRE', KEYS[1], ARGV[1])
+	end
+	return n
+`)
+
+// incrExpireGuard atomically INCRs and sets TTL only on the first increment.
 func incrExpireGuard(rdb *redis.Client, ctx context.Context, key string, ttlSec int) (int64, error) {
-	n, err := rdb.Incr(ctx, key).Result()
+	n, err := incrExpireGuardScript.Run(ctx, rdb, []string{key}, ttlSec).Int64()
 	if err != nil {
 		return 0, err
-	}
-	if n == 1 {
-		if err := rdb.Expire(ctx, key, time.Duration(ttlSec)*time.Second).Err(); err != nil {
-			slog.Warn("guardrail rpm expire failed", "key", key, "error", err)
-		}
 	}
 	return n, nil
 }
