@@ -52,9 +52,17 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 		} else {
 			cost = inputPrice*float64(inputTokens)/1000 + outputPrice*float64(outputTokens)/1000
 		}
-		if cost <= 0 {
-				return
-			}
+
+		// C5: if a pre-request reservation was made, reconcile each counter by
+		// (actual - reserved) instead of adding the full actual cost on top. This
+		// also refunds the reservation when cost == 0 (failed/zero-token request),
+		// so reservations never leak as phantom spend.
+		resVal, _ := c.Get("budget_reservations")
+		reservations, _ := resVal.(*service.BudgetReservations)
+
+		if cost <= 0 && (reservations == nil || len(reservations.Reserved) == 0) {
+			return
+		}
 
 		// Use background context for all post-response Redis calls;
 		// c.Request.Context() may be cancelled after response is written.
@@ -63,8 +71,8 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 
 		// Report key-level budget usage
 		if apiKey.MaxBudget > 0 {
-			budgetSvc.ReportUsage(bgCtx, "key",
-				fmt.Sprintf("%d", apiKey.ID), apiKey.BudgetPeriod, cost)
+			applyBudgetDelta(budgetSvc, bgCtx, "key",
+				fmt.Sprintf("%d", apiKey.ID), apiKey.BudgetPeriod, cost, reservations)
 
 			// Check key-level alerts (async, own context)
 			spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "key",
@@ -85,8 +93,8 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 		// Report team-level budget usage
 		if teamPeriod, ok := c.Get("team_budget_period"); ok {
 			if p, _ := teamPeriod.(string); p != "" && apiKey.TeamID != nil {
-				budgetSvc.ReportUsage(bgCtx, "team",
-					fmt.Sprintf("%d", *apiKey.TeamID), p, cost)
+				applyBudgetDelta(budgetSvc, bgCtx, "team",
+					fmt.Sprintf("%d", *apiKey.TeamID), p, cost, reservations)
 
 				// Check team-level alerts (async, own context)
 				team := teamCache.Get(bgCtx, *apiKey.TeamID)
@@ -113,7 +121,7 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			if orgID := c.GetInt64("org_id"); orgID != 0 {
 				orgPd, _ := c.Get("org_budget_period")
 				if orgPeriod, ok := orgPd.(string); ok && orgPeriod != "" {
-					budgetSvc.ReportUsage(bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost)
+					applyBudgetDelta(budgetSvc, bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, reservations)
 					go func() {
 						defer func() { recover() }()
 						org := orgCache.Get(context.Background(), orgID)
@@ -125,6 +133,19 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			}
 		}
 	}
+}
+
+// applyBudgetDelta reconciles one budget counter. If a reservation was made for
+// this scope, adjust by (cost - reserved); otherwise report the full cost (the
+// legacy path for requests that did not reserve, e.g. estimate was zero).
+func applyBudgetDelta(budgetSvc service.BudgetServiceInterface, ctx context.Context, scope, targetID, period string, cost float64, reservations *service.BudgetReservations) {
+	if reservations != nil {
+		if reserved, ok := reservations.Reserved[scope]; ok {
+			budgetSvc.AdjustBudget(ctx, scope, targetID, period, cost-reserved)
+			return
+		}
+	}
+	budgetSvc.ReportUsage(ctx, scope, targetID, period, cost)
 }
 
 // AdminReportBudgetUsage reports team and org budget usage for admin/playground routes.

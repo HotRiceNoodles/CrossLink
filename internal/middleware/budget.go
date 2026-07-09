@@ -21,6 +21,11 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 			return
 		}
 
+		// Collect the budget scopes that have a limit, so the handler can do an
+		// atomic pre-request reservation (closing the check-then-act race that the
+		// GET-based checks above cannot). Order matters: key → team → org.
+		scopes := make([]service.BudgetScope, 0, 3)
+
 		if apiKey.MaxBudget > 0 {
 			spent, limit, exceeded := budgetSvc.CheckBudget(
 				c.Request.Context(), "key",
@@ -37,6 +42,10 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 				return
 			}
 			c.Set("key_budget_period", apiKey.BudgetPeriod)
+			scopes = append(scopes, service.BudgetScope{
+				Scope: "key", ID: fmt.Sprintf("%d", apiKey.ID),
+				Period: apiKey.BudgetPeriod, Limit: apiKey.MaxBudget,
+			})
 		}
 
 		if apiKey.MaxCalls > 0 {
@@ -73,6 +82,10 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 					return
 				}
 				c.Set("team_budget_period", team.BudgetPeriod)
+				scopes = append(scopes, service.BudgetScope{
+					Scope: "team", ID: fmt.Sprintf("%d", team.ID),
+					Period: team.BudgetPeriod, Limit: team.BudgetLimit,
+				})
 			}
 		}
 
@@ -90,10 +103,15 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 						return
 					}
 					c.Set("org_budget_period", org.BudgetPeriod)
+					scopes = append(scopes, service.BudgetScope{
+						Scope: "org", ID: fmt.Sprintf("%d", org.ID),
+						Period: org.BudgetPeriod, Limit: org.BudgetLimit,
+					})
 				}
 			}
 		}
 
+		c.Set("budget_scopes", scopes)
 		c.Next()
 	}
 }

@@ -29,6 +29,7 @@ func (m *mockBudgetSvc) CheckBudget(_ context.Context, _, _, _ string, _ float64
 	return m.budgetSpent, m.budgetLimit, m.budgetExceeded
 }
 func (m *mockBudgetSvc) ReportUsage(_ context.Context, _, _, _ string, _ float64)        {}
+func (m *mockBudgetSvc) AdjustBudget(_ context.Context, _, _, _ string, _ float64)        {}
 func (m *mockBudgetSvc) CheckCallLimit(_ context.Context, _, _ string, _ int) (int, bool) { return m.callsUsed, m.callsExceeded }
 func (m *mockBudgetSvc) ReportCallUsage(_ context.Context, _, _ string)                   {}
 
