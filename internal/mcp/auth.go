@@ -270,14 +270,14 @@ func NewAuthenticator(authType string, raw json.RawMessage, decrypt func(string)
 		}
 		t := transport
 		if t == nil {
-			t = &http.Transport{}
+			t = newFallbackMCPTransport()
 		}
 		return &oauth2Auth{
 			clientID:     clientID,
 			clientSecret: clientSecret,
 			tokenURL:     tokenURL,
 			scope:        getStr("scope"),
-			httpClient:   &http.Client{Timeout: 5 * time.Second, Transport: t},
+			httpClient:   mcpHTTPClient(t, 5*time.Second),
 		}, nil
 
 	case "sigv4":

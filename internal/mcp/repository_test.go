@@ -114,6 +114,9 @@ func TestMCPRepo_LogToolCall(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// MCP transports point at httptest servers on loopback; disable the
+	// production SSRF dialer (which blocks loopback) for this package's tests.
+	outboundSSRFGuard = false
 	var err error
 	testDB, err = gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

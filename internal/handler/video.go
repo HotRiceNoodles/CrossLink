@@ -15,12 +15,26 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/crosslink/internal/domain"
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/redis/go-redis/v9"
 )
+
+// videoDownloadClient streams remote video content to clients. It applies the
+// SSRF-safe dialer (blocks internal/loopback/link-local, DNS-rebinding-safe) and
+// refuses redirects to restricted addresses, so a redirecting upstream cannot
+// tunnel the gateway to cloud metadata or internal services. No Timeout is set:
+// the caller scopes each download via a context deadline.
+var videoDownloadClient = &http.Client{
+	CheckRedirect: guardrail.BlockInternalRedirect,
+	Transport: &http.Transport{
+		DialContext:    guardrail.NewSSRFSafeDialer(30 * time.Second),
+		DialTLSContext: guardrail.NewSSRFSafeTLSDialer(30*time.Second, nil),
+	},
+}
 
 type VideoHandler struct {
 	taskSvc       *service.VideoTaskService
@@ -286,7 +300,7 @@ func (h *VideoHandler) GetVideoContent(c *gin.Context) {
 		return
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := videoDownloadClient.Do(req)
 	if err != nil {
 		if dlCtx.Err() == context.DeadlineExceeded {
 			c.JSON(http.StatusGatewayTimeout, gin.H{"error": gin.H{"message": "download timeout", "type": "server_error", "code": "download_timeout"}})

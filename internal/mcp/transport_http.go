@@ -37,14 +37,11 @@ type HTTPTransport struct {
 func NewHTTPTransport(serverURL string, auth Authenticator, customHeaders map[string]string, sharedTransport *http.Transport) *HTTPTransport {
 	transport := sharedTransport
 	if transport == nil {
-		transport = &http.Transport{}
+		transport = newFallbackMCPTransport()
 	}
 	return &HTTPTransport{
-		serverURL: serverURL,
-		httpClient: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-		},
+		serverURL:     serverURL,
+		httpClient:    mcpHTTPClient(transport, 30*time.Second),
 		auth:          auth,
 		customHeaders: customHeaders,
 	}

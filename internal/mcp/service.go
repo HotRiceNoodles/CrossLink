@@ -70,11 +70,7 @@ func NewMCPService(repo *MCPRepo, registry *Registry, cfg config.MCPConfig, encS
 		toolCache: &toolCache{items: make(map[string]*toolCacheEntry)},
 		permCache: &permCache{items: make(map[int64]*permCacheEntry)},
 		logQueue: make(chan *MCPToolCallLog, logQueueSize),
-		sharedTransport: &http.Transport{
-			MaxIdleConnsPerHost: maxIdle,
-			MaxIdleConns:        maxIdle,
-			IdleConnTimeout:     90 * time.Second,
-		},
+		sharedTransport: newSharedMCPTransport(maxIdle),
 	}
 }
 

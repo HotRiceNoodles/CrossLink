@@ -26,14 +26,11 @@ type SSETransport struct {
 func NewSSETransport(serverURL string, auth Authenticator, customHeaders map[string]string, sharedTransport *http.Transport) *SSETransport {
 	transport := sharedTransport
 	if transport == nil {
-		transport = &http.Transport{}
+		transport = newFallbackMCPTransport()
 	}
 	return &SSETransport{
-		serverURL: serverURL,
-		httpClient: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-		},
+		serverURL:     serverURL,
+		httpClient:    mcpHTTPClient(transport, 30*time.Second),
 		auth:          auth,
 		customHeaders: customHeaders,
 	}
