@@ -19,6 +19,12 @@ var blockedHeaders = map[string]bool{
 	"connection":        true,
 	"host":              true,
 	"upgrade":           true,
+	// Auth headers are owned by the configured Authenticator (auth.Apply). Allowing
+	// them as custom headers would let a server's customHeaders override/strip the
+	// intended upstream authentication.
+	"authorization":  true,
+	"proxy-authorization": true,
+	"cookie":         true,
 }
 
 func isBlockedHeader(name string) bool {
@@ -90,7 +96,7 @@ func (t *HTTPTransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPC
 
 	// Direct JSON response
 	var rpcResp JSONRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBodySize)).Decode(&rpcResp); err != nil {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 		if len(respBody) > 0 {
 			return nil, fmt.Errorf("decode response: %w (body: %s)", err, string(respBody))

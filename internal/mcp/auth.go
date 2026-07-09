@@ -105,7 +105,7 @@ func (a *oauth2Auth) getToken() (string, error) {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
 		return "", fmt.Errorf("decode token response: %w", err)
 	}
 	if tr.AccessToken == "" {
