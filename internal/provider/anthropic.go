@@ -18,6 +18,12 @@ import (
 	"github.com/crosslink/internal/translator"
 )
 
+// maxAnthropicResponseSize caps the bytes read when decoding a non-streaming
+// Anthropic response, preventing a malicious/buggy upstream from exhausting
+// memory with an arbitrarily large JSON body (mirrors the OpenAI path's
+// maxResponseRead). 50MB matches the rest of the provider layer.
+const maxAnthropicResponseSize = 50 << 20
+
 type AnthropicProvider struct {
 	name         string
 	baseURL      string
@@ -84,7 +90,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *domain.OpenAIRequest,
 	}
 
 	var anthropicResp domain.AnthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAnthropicResponseSize)).Decode(&anthropicResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 

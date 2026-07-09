@@ -29,7 +29,9 @@ func (w *responseCapture) Write(data []byte) (int, error) {
 }
 
 func (w *responseCapture) WriteString(s string) (int, error) {
-	w.body.WriteString(s)
+	if w.body.Len() < maxCacheResponseSize {
+		w.body.WriteString(s)
+	}
 	return w.ResponseWriter.WriteString(s)
 }
 
