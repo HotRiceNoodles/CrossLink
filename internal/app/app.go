@@ -41,6 +41,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	buildAuth(db, cfg)
 
+	// Configure the SSRF internal allowlist for outbound provider/MCP/video
+	// connections. Empty = strict (block all restricted ranges). On invalid CIDRs
+	// we keep the strict default and log loudly rather than fail to boot.
+	if len(cfg.Gateway.InternalAllowCIDRs) > 0 {
+		if err := guardrail.SetInternalAllowlist(cfg.Gateway.InternalAllowCIDRs); err != nil {
+			slog.Error("invalid gateway.internal_allow_cidrs; SSRF allowlist stays strict", "error", err)
+		} else {
+			slog.Info("SSRF internal allowlist active", "cidrs", cfg.Gateway.InternalAllowCIDRs)
+		}
+	}
+
 	// Crypto provider (standard or GM mode)
 	cryptoProvider, err := crypto.NewProvider(cfg.Crypto.Mode)
 	if err != nil {

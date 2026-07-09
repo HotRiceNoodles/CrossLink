@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/debug/upstream"
+	"github.com/crosslink/internal/guardrail"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -21,29 +22,48 @@ const (
 	defaultMaxIdleConns          = 400
 	defaultIdleConnTimeout       = 90 * time.Second
 	defaultResponseHeaderTimeout = 60 * time.Second
+	defaultSSRFDialTimeout       = 30 * time.Second
 )
 
+// outboundSSRFGuard gates whether provider outbound transports apply SSRF
+// filtering (loopback/private/link-local blocked, DNS-rebinding-safe). It is
+// secure-by-default (true) in production builds. Tests flip it false via TestMain
+// so they can target httptest servers on the loopback interface; _test.go files
+// are excluded from production binaries, so this is never disabled in deployment.
+var outboundSSRFGuard = true
+
 func newStreamTransport() *http.Transport {
-	return &http.Transport{
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &tls.Dialer{Config: &tls.Config{NextProtos: []string{"http/1.1"}}}
-			return dialer.DialContext(ctx, network, addr)
-		},
+	t := &http.Transport{
 		MaxConnsPerHost:       defaultMaxConnsPerHost,
 		MaxIdleConns:          defaultMaxIdleConns,
 		MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
 		IdleConnTimeout:       defaultIdleConnTimeout,
 		ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 	}
+	if outboundSSRFGuard {
+		t.DialContext = guardrail.NewSSRFSafeDialer(defaultSSRFDialTimeout)
+		t.DialTLSContext = guardrail.NewSSRFSafeTLSDialer(defaultSSRFDialTimeout, &tls.Config{NextProtos: []string{"http/1.1"}})
+	} else {
+		t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &tls.Dialer{Config: &tls.Config{NextProtos: []string{"http/1.1"}}}
+			return dialer.DialContext(ctx, network, addr)
+		}
+	}
+	return t
 }
 
 func newDefaultTransport() *http.Transport {
-	return &http.Transport{
+	t := &http.Transport{
 		MaxConnsPerHost:     defaultMaxConnsPerHost,
 		MaxIdleConns:        defaultMaxIdleConns,
 		MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
 		IdleConnTimeout:     defaultIdleConnTimeout,
 	}
+	if outboundSSRFGuard {
+		t.DialContext = guardrail.NewSSRFSafeDialer(defaultSSRFDialTimeout)
+		t.DialTLSContext = guardrail.NewSSRFSafeTLSDialer(defaultSSRFDialTimeout, nil)
+	}
+	return t
 }
 
 // ── Transport factory functions ──
@@ -56,14 +76,16 @@ func newWrappedTransport(base http.RoundTripper) http.RoundTripper {
 
 func newDefaultClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: newWrappedTransport(newDefaultTransport()),
+		Timeout:       timeout,
+		CheckRedirect: guardrail.BlockInternalRedirect,
+		Transport:     newWrappedTransport(newDefaultTransport()),
 	}
 }
 
 func newStreamClient() *http.Client {
 	return &http.Client{
-		Transport: newWrappedTransport(newStreamTransport()),
+		CheckRedirect: guardrail.BlockInternalRedirect,
+		Transport:     newWrappedTransport(newStreamTransport()),
 	}
 }
 

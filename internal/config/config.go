@@ -102,6 +102,12 @@ func (r RedisConfig) Addr() string {
 type GatewayConfig struct {
 	AuthKey string `mapstructure:"auth_key"`
 	BaseURL string `mapstructure:"base_url"`
+	// InternalAllowCIDRs permits outbound provider/MCP/video connections to
+	// these restricted CIDRs (e.g. an on-prem VPC range) so self-hosted LLM
+	// providers on internal addresses work. Empty (default) = block all
+	// restricted ranges; cloud-metadata (169.254.x.x) and loopback stay blocked
+	// unless explicitly listed. Env override: CL_GATEWAY_INTERNAL_ALLOW_CIDRS.
+	InternalAllowCIDRs []string `mapstructure:"internal_allow_cidrs"`
 }
 
 type AdminConfig struct {

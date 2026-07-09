@@ -26,6 +26,12 @@ redis:
 gateway:
   auth_key: "lgw-change-me"
   # base_url: "https://api.your-gateway.com"  # Public URL for key delivery emails
+  # internal_allow_cidrs:                       # Permit outbound provider/MCP/video
+  #   - "10.0.0.0/8"                            # connections to these restricted CIDRs (on-prem
+  #   - "192.168.0.0/16"                        # self-hosted LLMs). Empty/absent = block ALL
+                                              # restricted ranges (default, most secure). Cloud
+                                              # metadata (169.254.x.x) and loopback stay blocked
+                                              # unless explicitly listed. Env: CL_GATEWAY_INTERNAL_ALLOW_CIDRS
 
 rate_limit:
   # Global defaults applied when API Key / Team / Org has no explicit RPM/TPM override.
