@@ -87,7 +87,7 @@ func (s *MCPService) CreateServer(ctx context.Context, srv *MCPServer) error {
 	}
 	if srv.TransportType == "stdio" {
 		if _, ok := s.transportFactories["stdio"]; !ok {
-			return fmt.Errorf("stdio transport requires Pro or Enterprise license")
+			return fmt.Errorf("stdio transport is not enabled on this gateway (requires commercial build with mcp.allow_stdio=true)")
 		}
 	}
 	if srv.TransportType == "http" || srv.TransportType == "sse" {

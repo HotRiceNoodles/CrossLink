@@ -205,6 +205,12 @@ type MCPConfig struct {
 	RateLimitEnabled    bool          `mapstructure:"rate_limit_enabled"`
 	RateLimitDefaultRPM int           `mapstructure:"rate_limit_default_rpm"`
 	LogRetentionDays    int           `mapstructure:"log_retention_days"`
+	// AllowStdio enables the stdio MCP transport, which spawns LOCAL subprocesses
+	// configured by MCP server admins. Disabled by default because stdio lets an
+	// admin with mcp:create execute arbitrary commands on the gateway host — a
+	// cross-tenant RCE risk in multi-tenant deployments. The platform owner must
+	// explicitly opt in. HTTP/SSE transports are unaffected. (Commercial build.)
+	AllowStdio bool `mapstructure:"allow_stdio"`
 }
 
 type CryptoConfig struct {

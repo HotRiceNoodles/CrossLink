@@ -89,3 +89,11 @@ captcha:
         bg_width: 300
         bg_height: 150
         piece_size: 44
+mcp:
+  enabled: true
+  # allow_stdio: false   # SECURITY: stdio MCP servers spawn LOCAL subprocesses
+                         # configured by MCP server admins. Disabled by default —
+                         # enabling lets any admin with mcp:create (incl. org_admin
+                         # in multi-tenant) execute arbitrary commands on the
+                         # gateway host. Only enable in a single-tenant/trusted
+                         # deployment or with host isolation. Commercial build.
