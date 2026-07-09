@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -185,13 +186,38 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 			return
 		}
 
+		// M7: resolve team/org membership fresh from DB (admin role has none) so
+		// that removing a user from an org/team takes effect on the next request,
+		// not when their JWT eventually expires. Falls back to the claim values on
+		// any lookup error (fail-closed on membership would lock users out on a DB
+		// hiccup, which is worse than the bounded staleness it would replace).
+		teamID := claims.TeamID
+		orgID := claims.OrgID
+		orgRole := claims.OrgRole
+		if roleName != model.RoleAdmin {
+			var tm model.TeamMember
+			if err := db.WithContext(c.Request.Context()).Select("team_id").Where("user_id = ?", claims.UserID).First(&tm).Error; err == nil {
+				teamID = tm.TeamID
+			} else if errors.Is(err, gorm.ErrRecordNotFound) {
+				teamID = 0
+			}
+			var om model.OrgMember
+			if err := db.WithContext(c.Request.Context()).Select("org_id", "role").Where("user_id = ?", claims.UserID).First(&om).Error; err == nil {
+				orgID = om.OrgID
+				orgRole = om.Role
+			} else if errors.Is(err, gorm.ErrRecordNotFound) {
+				orgID = 0
+				orgRole = ""
+			}
+		}
+
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role_id", roleID)
 		c.Set("role_name", roleName)
-		c.Set("team_id", claims.TeamID)
-		c.Set("org_id", claims.OrgID)
-		c.Set("org_role", claims.OrgRole)
+		c.Set("team_id", teamID)
+		c.Set("org_id", orgID)
+		c.Set("org_role", orgRole)
 
 		// Force password change: only allow self-service auth endpoints.
 		// SSO users (empty password_hash) skip this check — they cannot change password.
@@ -218,7 +244,7 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		// Auto-refresh token if expiring within 5 minutes
 		if claims.ExpiresAt != nil && time.Until(claims.ExpiresAt.Time) < 5*time.Minute {
 			u := &model.User{ID: claims.UserID, Username: claims.Username, RoleID: roleID}
-			if newToken, err := GenerateToken(u, roleName, claims.TeamID, claims.OrgID, claims.OrgRole, cfg, cp); err == nil {
+			if newToken, err := GenerateToken(u, roleName, teamID, orgID, orgRole, cfg, cp); err == nil {
 				c.Header("X-Token-Refresh", newToken)
 				c.SetCookie("admin_token", newToken, cfg.TokenExpiry*3600, "/", "", true, true)
 			}
