@@ -11,11 +11,11 @@ func TestValidateServerURL(t *testing.T) {
 		url     string
 		wantErr bool
 	}{
-		{"valid https", "https://example.com/mcp", false},
-		{"valid http", "http://example.com/mcp", false},
-		{"valid with port", "https://example.com:8080/mcp", false},
+		{"valid https", "https://8.8.8.8/mcp", false},
+		{"valid http", "http://1.1.1.1/mcp", false},
+		{"valid with port", "https://8.8.8.8:8080/mcp", false},
 		{"loopback IP", "http://127.0.0.1/mcp", true},
-		{"loopback localhost", "http://localhost/mcp", false}, // localhost is a hostname, not IP
+		{"loopback localhost", "http://localhost/mcp", true}, // resolves to 127.0.0.1 -> restricted
 		{"private class A", "http://10.0.0.1/mcp", true},
 		{"private class B", "http://172.16.0.1/mcp", true},
 		{"private class C", "http://192.168.1.1/mcp", true},

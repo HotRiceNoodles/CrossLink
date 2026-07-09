@@ -2,16 +2,13 @@ package mcp
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/admin"
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/secret"
 	"gorm.io/datatypes"
 )
@@ -416,27 +413,12 @@ func (h *AdminHandler) GetStats(c *gin.Context) {
 	})
 }
 func validateServerURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid url: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("url must use http or https scheme")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("url must have a hostname")
-	}
-	ip := net.ParseIP(host)
-	if ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return fmt.Errorf("url must not point to private, loopback, or link-local addresses")
-		}
-	}
-	if host == "169.254.169.254" || strings.HasSuffix(host, ".internal") {
-		return fmt.Errorf("url must not point to cloud metadata endpoints")
-	}
-	return nil
+	// Delegate to the shared SSRF validator: enforces http/https scheme, resolves
+	// the hostname via DNS, and rejects loopback/private/link-local/cloud-metadata
+	// targets (so "localhost" and domains that resolve to internal IPs are blocked).
+	// Operator-allowlisted internal CIDRs (gateway.internal_allow_cidrs) are honored,
+	// consistent with the outbound SSRF dialer.
+	return guardrail.ValidateURLSafety(rawURL)
 }
 
 func sanitizeServer(srv *MCPServer) {
