@@ -64,7 +64,7 @@ func TestValidateSameOrigin(t *testing.T) {
 		wantErr  bool
 	}{
 		{"same origin", "http://example.com/sse", "http://example.com/message", false},
-		{"same host different port", "http://example.com:8080/sse", "http://example.com:9090/message", false},
+		{"same host different port", "http://example.com:8080/sse", "http://example.com:9090/message", true},
 		{"different host", "http://example.com/sse", "http://evil.com/message", true},
 		{"different scheme", "https://example.com/sse", "http://example.com/message", true},
 		{"invalid target URL", "http://example.com/sse", "://bad", true},

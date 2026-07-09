@@ -179,7 +179,7 @@ func validateSameOrigin(baseURL, discoveredURL string) error {
 	if err != nil {
 		return fmt.Errorf("invalid message URL: %w", err)
 	}
-	if target.Scheme != base.Scheme || target.Hostname() != base.Hostname() {
+	if target.Scheme != base.Scheme || target.Hostname() != base.Hostname() || target.Port() != base.Port() {
 		return fmt.Errorf("SSE endpoint redirected to different origin: %s", discoveredURL)
 	}
 	return nil
