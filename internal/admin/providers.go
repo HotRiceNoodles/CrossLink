@@ -165,6 +165,10 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	}
 	if input.BaseURL != nil {
 		if *input.BaseURL != "" {
+			if !isValidProviderURL(*input.BaseURL) {
+				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
+				return
+			}
 			if u, err := url.Parse(*input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
 				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
 				return
