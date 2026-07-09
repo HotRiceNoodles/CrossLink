@@ -9,19 +9,24 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Lua script: atomically increment budget counter and return (new_spent, limit, exceeded).
-// Returns: new spent amount, whether it exceeds the limit.
-// The key gets a TTL only if newly created.
+// Lua script: atomically increment budget counter and check against the limit.
+// On exceed it ROLLS BACK the increment so rejected requests don't consume
+// budget (otherwise a burst of over-limit requests would permanently inflate the
+// counter). Returns (current_spent_after_decision, limit, exceeded).
 var budgetReserveScript = redis.NewScript(`
 	local key = KEYS[1]
 	local cost = tonumber(ARGV[1])
 	local limit = tonumber(ARGV[2])
 	local ttl = tonumber(ARGV[3])
-	local spent = redis.call("INCRBYFLOAT", key, cost)
+	local spent = tonumber(redis.call("INCRBYFLOAT", key, cost))
 	if spent == cost then
 		redis.call("EXPIRE", key, ttl)
 	end
-	return { spent, limit, spent >= limit and 1 or 0 }
+	if spent >= limit then
+		redis.call("INCRBYFLOAT", key, -cost)
+		return { spent - cost, limit, 1 }
+	end
+	return { spent, limit, 0 }
 `)
 
 type BudgetService struct {
@@ -109,6 +114,59 @@ func (s *BudgetService) ReportUsage(ctx context.Context, scope, targetID, period
 	if _, err := pipe.Exec(ctx); err != nil {
 		slog.Warn("budget report redis pipeline failed", "key", key, "error", err)
 	}
+}
+
+// AdjustBudget applies a delta (positive or negative) to a budget counter,
+// refreshing the TTL. Used by ReportBudgetUsage to reconcile a pre-request
+// reservation against the actual cost: delta = actual - reserved. A negative
+// delta refunds an over-reservation (or the full reservation on a zero-cost /
+// failed request).
+func (s *BudgetService) AdjustBudget(ctx context.Context, scope, targetID, period string, delta float64) {
+	if delta == 0 {
+		return
+	}
+	pk := PeriodKey(period)
+	key := fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk)
+	ttl := PeriodTTL(period)
+	pipe := s.rdb.Pipeline()
+	pipe.IncrByFloat(ctx, key, delta)
+	pipe.Expire(ctx, key, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		slog.Warn("budget adjust redis pipeline failed", "key", key, "delta", delta, "error", err)
+	}
+}
+
+// ReserveForRequest atomically reserves an estimated cost against each budget
+// scope in order (key → team → org). If a level would exceed its limit, that
+// level's reservation is rolled back by the Lua script and all lower levels are
+// refunded here; the returned exceededScope is non-empty. On success, every
+// reserved amount is recorded in the returned BudgetReservations for later
+// reconciliation. A non-positive estimate yields a no-op reservation.
+func (s *BudgetService) ReserveForRequest(ctx context.Context, scopes []BudgetScope, estimate float64) (*BudgetReservations, string) {
+	res := &BudgetReservations{Reserved: map[string]float64{}}
+	if estimate <= 0 || len(scopes) == 0 {
+		return res, ""
+	}
+	for i, sc := range scopes {
+		if sc.Limit <= 0 {
+			continue
+		}
+		_, _, exceeded := s.ReserveBudget(ctx, sc.Scope, sc.ID, sc.Period, estimate, sc.Limit)
+		if exceeded {
+			// Refund the levels reserved before this one; the script already
+			// rolled back this level's own increment. Clear their entries so the
+			// returned reservations reflect reality (nothing is held).
+			for j := 0; j < i; j++ {
+				if prev := res.Reserved[scopes[j].Scope]; prev > 0 {
+					s.AdjustBudget(ctx, scopes[j].Scope, scopes[j].ID, scopes[j].Period, -prev)
+					delete(res.Reserved, scopes[j].Scope)
+				}
+			}
+			return res, sc.Scope
+		}
+		res.Reserved[sc.Scope] = estimate
+	}
+	return res, ""
 }
 
 func (s *BudgetService) CheckCallLimit(ctx context.Context, keyID, period string, maxCalls int) (int, bool) {

@@ -12,6 +12,22 @@ type BudgetServiceInterface interface {
 	ReportCallUsage(ctx context.Context, keyID, period string)
 }
 
+// BudgetScope identifies one budget counter to reserve against during
+// pre-request reservation. Ordered key → team → org.
+type BudgetScope struct {
+	Scope  string  // "key" | "team" | "org"
+	ID     string
+	Period string
+	Limit  float64 // 0 = no limit at this level (skip)
+}
+
+// BudgetReservations records the amount reserved per scope during pre-request
+// reservation, so ReportBudgetUsage can reconcile each counter by (actual - reserved)
+// instead of adding the full actual cost on top of the reservation.
+type BudgetReservations struct {
+	Reserved map[string]float64 // scope -> reserved amount
+}
+
 // BudgetAlertServiceInterface decouples middleware from BudgetAlertService implementation.
 // Community passes nil (middleware skips alert checks).
 // Commercial injects real BudgetAlertService.
