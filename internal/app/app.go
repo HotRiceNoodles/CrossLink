@@ -41,6 +41,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	buildAuth(db, cfg)
 
+	// H1: warn loudly when the static config auth key is set. This key bypasses
+	// all per-API-key enforcement (budget, model/route allow-lists, rate limits)
+	// and has no expiry or disable mechanism — if leaked it is full, untraceable
+	// access. Prefer database-managed API keys; if used, treat as a root credential.
+	if cfg.Gateway.AuthKey != "" {
+		slog.Warn("gateway.auth_key is set — this static key bypasses all per-key limits and cannot be expired/disabled; use only as a root credential and rotate via config restart if compromised")
+	}
+
 	// Configure the SSRF internal allowlist for outbound provider/MCP/video
 	// connections. Empty = strict (block all restricted ranges). On invalid CIDRs
 	// we keep the strict default and log loudly rather than fail to boot.
