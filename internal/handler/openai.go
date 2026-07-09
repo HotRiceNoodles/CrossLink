@@ -35,6 +35,7 @@ type OpenAIHandler struct {
 	guardrailSvc  *guardrail.GuardrailService
 	classifier    *service.ErrorClassifier
 	guardRDB      *redis.Client // P3a: per-(provider,model) guardrail counters; nil = disabled
+	budgetSvc     *service.BudgetService // pre-request budget reservation (C5); nil = disabled
 }
 
 func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService, latencySvc *service.LatencyService, _ interface{}, activeTracker service.ProviderLoadTracker, idemCache *service.IdempotencyCache, budget *provider.RetryBudget, guardrailSvc *guardrail.GuardrailService) *OpenAIHandler {
@@ -60,6 +61,10 @@ func (h *OpenAIHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier
 // SetGuardRDB injects the Redis client used for P3a per-(provider,model)
 // guardrail counters. nil disables the guardrails (no-op on dispatch).
 func (h *OpenAIHandler) SetGuardRDB(rdb *redis.Client) { h.guardRDB = rdb }
+
+// SetBudgetSvc injects the budget service used for pre-request budget
+// reservation (concurrency-safe enforcement, C5). Optional; nil disables it.
+func (h *OpenAIHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b }
 
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
@@ -109,6 +114,24 @@ func extractLastOpenAIUserMessage(messages []domain.OpenAIMessage) string {
 const maxRequestBody = 10 << 20 // 10 MB
 const maxResponseBuffer = 1 << 20 // 1 MB buffer cap for content logging
 
+// estimateOpenAIInputTokens rough-estimates the input token count of an OpenAI
+// chat request, for pre-request budget reservation (C5). Mirrors the post-stream
+// fallback estimation; precision is not critical — the reservation is reconciled
+// against actual cost after the response.
+func estimateOpenAIInputTokens(req *domain.OpenAIRequest) int {
+	if req == nil {
+		return 0
+	}
+	n := 0
+	for _, msg := range req.Messages {
+		n += token.Estimate(domain.ContentText(msg.Content))
+		for _, tc := range msg.ToolCalls {
+			n += token.Estimate(tc.Function.Arguments)
+		}
+	}
+	return n
+}
+
 func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	var body []byte
 	if cached := middleware.GetBodyBytes(c); cached != nil {
@@ -147,6 +170,21 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	if err != nil {
 		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": safeProviderError(err)}})
 		return
+	}
+
+	// C5: concurrency-safe budget reservation against the primary route's price,
+	// closing the check-then-act race in BudgetCheck's GET-based check. Aborts
+	// with budget_exceeded before any upstream call if a level would be exceeded.
+	if len(routes) > 0 {
+		maxOut := 0
+		if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
+			maxOut = *req.MaxCompletionTokens
+		} else if req.MaxTokens != nil && *req.MaxTokens > 0 {
+			maxOut = *req.MaxTokens
+		}
+		if !reserveBudgetForRequest(c, h.budgetSvc, estimateOpenAIInputTokens(&req), maxOut, routes[0].InputPrice, routes[0].OutputPrice) {
+			return
+		}
 	}
 
 	sessionID := c.GetHeader("X-Session-ID")
@@ -602,10 +640,16 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		}
 	} else {
 		streamCtx := c.Request.Context()
+	streamLoop:
 		for chunk := range ch {
 			select {
 			case <-streamCtx.Done():
-				// Client disconnected — drain remaining chunks
+				// Client disconnected — drain remaining chunks in the background so
+				// the upstream producer doesn't block, then fall through to the
+				// post-loop reconciliation. We must NOT return here: doing so skips
+				// c.Set("input_tokens"/"output_tokens") and submitUsage, which leaves
+				// the TPM reservation unreconciled (ReportTokens sees total=0 and
+				// bails out) — sustained disconnects would drain the TPM quota (DoS).
 				go func() {
 					drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer drainCancel()
@@ -620,7 +664,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 						}
 					}
 				}()
-				return
+				break streamLoop
 			default:
 			}
 			if chunk.Done {

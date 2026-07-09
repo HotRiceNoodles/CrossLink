@@ -21,6 +21,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/translator"
+	"github.com/crosslink/pkg/token"
 	"gorm.io/datatypes"
 )
 
@@ -40,10 +41,31 @@ type AnthropicHandler struct {
 	usageSvc     *service.UsageService
 	idemCache    *service.IdempotencyCache
 	guardrailSvc *guardrail.GuardrailService
+	budgetSvc    *service.BudgetService // pre-request budget reservation (C5); nil = disabled
 }
 
 func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver, usageSvc *service.UsageService, idemCache *service.IdempotencyCache, guardrailSvc *guardrail.GuardrailService) *AnthropicHandler {
 	return &AnthropicHandler{svc: svc, resolver: resolver, usageSvc: usageSvc, idemCache: idemCache, guardrailSvc: guardrailSvc}
+}
+
+// SetBudgetSvc injects the budget service used for pre-request budget
+// reservation (concurrency-safe enforcement, C5). Optional; nil disables it.
+func (h *AnthropicHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b }
+
+// estimateAnthropicInputTokens rough-estimates the input token count of an
+// Anthropic /v1/messages request, for pre-request budget reservation (C5).
+func estimateAnthropicInputTokens(req *domain.AnthropicRequest) int {
+	if req == nil {
+		return 0
+	}
+	n := 0
+	for _, msg := range req.Messages {
+		n += token.Estimate(translator.ExtractContentText(msg.Content))
+	}
+	if len(req.System) > 0 {
+		n += token.Estimate(string(req.System))
+	}
+	return n
 }
 
 func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error, sessionID string) {
@@ -135,6 +157,16 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			return
 		}
 		c.Header("x-crosslink-capability", m.Name)
+	}
+
+	// C5: concurrency-safe budget reservation against the primary route's price,
+	// closing the check-then-act race in BudgetCheck's GET-based check. The
+	// Anthropic path delegates routing to GatewayService, so resolve the primary
+	// route here solely for the price estimate (resolver is cache-backed, cheap).
+	if routes, rerr := h.resolver.Resolve(c.Request.Context(), req.Model, orgID); rerr == nil && len(routes) > 0 {
+		if !reserveBudgetForRequest(c, h.budgetSvc, estimateAnthropicInputTokens(&req), req.MaxTokens, routes[0].InputPrice, routes[0].OutputPrice) {
+			return
+		}
 	}
 
 	// Idempotency cache check (non-stream only)

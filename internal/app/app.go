@@ -196,6 +196,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	infra.GatewaySvc.SetGuardRDB(rdb)
 	openaiHandler.SetClassifier(infra.Classifier)
 	openaiHandler.SetGuardRDB(rdb)
+	openaiHandler.SetBudgetSvc(svcs.BudgetSvc)
+	anthropicHandler.SetBudgetSvc(svcs.BudgetSvc)
 	videoHandler.SetClassifier(infra.Classifier)
 	videoHandler.SetGuardRDB(rdb)
 
