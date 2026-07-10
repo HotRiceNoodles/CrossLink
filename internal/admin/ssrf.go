@@ -1,24 +1,33 @@
 package admin
 
 import (
+	"context"
 	"net"
 	"net/url"
+	"time"
 )
 
+// providerHostLookupTimeout bounds the DNS lookup in isInternalHost so a slow or
+// unresponsive resolver cannot hang an admin provider-create/update request.
+const providerHostLookupTimeout = 5 * time.Second
+
 // isInternalHost blocks SSRF targets: loopback, link-local, private ranges, unspecified.
-// It also resolves hostnames via DNS to catch names that point to internal IPs.
+// It also resolves hostnames via DNS (bounded by providerHostLookupTimeout) to catch
+// names that point to internal IPs.
 func isInternalHost(host string) bool {
 	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
-		ips, err := net.LookupIP(host)
+		ctx, cancel := context.WithTimeout(context.Background(), providerHostLookupTimeout)
+		defer cancel()
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil || len(ips) == 0 {
 			return true
 		}
 		for _, resolved := range ips {
-			if isInternalIP(resolved) {
+			if isInternalIP(resolved.IP) {
 				return true
 			}
 		}
