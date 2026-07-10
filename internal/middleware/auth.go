@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,18 +21,9 @@ import (
 // If an IP exceeds the failure threshold, it is blocked before any key validation attempt.
 func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check if IP is temporarily blocked due to too many auth failures
-		if rdb != nil {
-			failKey := fmt.Sprintf("authfail:ip:%s", c.ClientIP())
-			if count, _ := rdb.Get(c.Request.Context(), failKey).Int(); count >= 10 {
-				c.JSON(http.StatusTooManyRequests, gin.H{
-					"type":  "error",
-					"error": gin.H{"type": "rate_limit_error", "message": "too many authentication failures, try again later"},
-				})
-				c.Abort()
-				return
-			}
-		}
+		// IP-based auth-failure blocking is enforced by the AuthFailureLimit
+		// middleware (mounted on the gateway group). Failure counting is done
+		// solely by RecordAuthFailure below on the failure path.
 
 		apiKey := extractAPIKey(c)
 		if apiKey == "" {
@@ -97,7 +87,7 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 			return
 		}
 
-		RecordAuthFailure(rdb, c.ClientIP(), 20, 15*time.Minute, "")
+		RecordAuthFailure(rdb, c.ClientIP(), 15*time.Minute, "")
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "authentication_error", "message": "invalid api key"},

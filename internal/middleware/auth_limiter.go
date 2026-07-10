@@ -9,41 +9,32 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// authFailCheckScript atomically checks failure count and increments.
-var authFailCheckScript = redis.NewScript(`
-	local count = redis.call('GET', KEYS[1])
-	if count and tonumber(count) >= tonumber(ARGV[1]) then
-		return tonumber(count)
+// authFailIncrScript atomically increments the auth-failure counter and sets the
+// TTL only on the first failure. Incrementing is the sole responsibility of
+// RecordAuthFailure (called on the failure path); AuthFailureLimit only reads.
+var authFailIncrScript = redis.NewScript(`
+	local n = redis.call('INCR', KEYS[1])
+	if n == 1 then
+		redis.call('EXPIRE', KEYS[1], ARGV[1])
 	end
-	local new_count = redis.call('INCR', KEYS[1])
-	if new_count == 1 then
-		redis.call('EXPIRE', KEYS[1], ARGV[2])
-	end
-	return new_count
+	return n
 `)
 
-// AuthFailureLimit creates middleware that blocks requests from IPs
-// with too many recent authentication failures.
+// AuthFailureLimit blocks requests from an IP once it has accumulated too many
+// authentication failures. Read-only: it does not increment the counter, so legit
+// requests are not counted as failures. RecordAuthFailure does the increment on
+// the actual failure path.
 func AuthFailureLimit(rdb *redis.Client, maxFailures int, window time.Duration, keyPrefix string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rdb == nil || maxFailures <= 0 {
 			c.Next()
 			return
 		}
-
 		if keyPrefix == "" {
 			keyPrefix = "auth_fail:"
 		}
-		ip := c.ClientIP()
-		key := keyPrefix + ip
-
-		count, err := authFailCheckScript.Run(c.Request.Context(), rdb, []string{key}, maxFailures, int(window.Seconds())).Int64()
-		if err != nil {
-			c.Next()
-			return
-		}
-
-		if count > int64(maxFailures) {
+		count, err := rdb.Get(c.Request.Context(), keyPrefix+c.ClientIP()).Int()
+		if err == nil && count >= maxFailures {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"type":  "error",
 				"error": gin.H{"type": "rate_limit_error", "message": "too many failed authentication attempts"},
@@ -51,25 +42,23 @@ func AuthFailureLimit(rdb *redis.Client, maxFailures int, window time.Duration, 
 			c.Abort()
 			return
 		}
-
 		c.Next()
 	}
 }
 
-// RecordAuthFailure increments the auth failure counter for an IP.
-func RecordAuthFailure(rdb *redis.Client, ip string, maxFailures int, window time.Duration, keyPrefix string) {
+// RecordAuthFailure increments the auth-failure counter for an IP. This is the
+// single incrementer; call it only when authentication actually fails.
+func RecordAuthFailure(rdb *redis.Client, ip string, window time.Duration, keyPrefix string) {
 	if rdb == nil {
 		return
 	}
 	if keyPrefix == "" {
 		keyPrefix = "auth_fail:"
 	}
-	key := keyPrefix + ip
-	ctx := context.Background()
-	authFailCheckScript.Run(ctx, rdb, []string{key}, maxFailures, int(window.Seconds()))
+	authFailIncrScript.Run(context.Background(), rdb, []string{keyPrefix + ip}, int(window.Seconds()))
 }
 
-// ClearAuthFailures resets the auth failure counter for an IP.
+// ClearAuthFailures resets the auth failure counter for an IP (on success).
 func ClearAuthFailures(rdb *redis.Client, ip string, keyPrefix string) {
 	if rdb == nil {
 		return
@@ -79,4 +68,3 @@ func ClearAuthFailures(rdb *redis.Client, ip string, keyPrefix string) {
 	}
 	rdb.Del(context.Background(), keyPrefix+ip)
 }
-
