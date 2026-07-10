@@ -24,6 +24,7 @@ type MCPService struct {
 	permCache          *permCache
 	sharedTransport    *http.Transport
 	transportFactories map[string]func(*MCPServer) Transport
+	transportMu        sync.RWMutex
 	logQueue           chan *MCPToolCallLog
 	toolSF             singleflight.Group
 }
@@ -69,16 +70,27 @@ func NewMCPService(repo *MCPRepo, registry *Registry, cfg config.MCPConfig, encS
 		encStore: encStore,
 		toolCache: &toolCache{items: make(map[string]*toolCacheEntry)},
 		permCache: &permCache{items: make(map[int64]*permCacheEntry)},
+		transportFactories: make(map[string]func(*MCPServer) Transport),
 		logQueue: make(chan *MCPToolCallLog, logQueueSize),
 		sharedTransport: newSharedMCPTransport(maxIdle),
 	}
 }
 
 func (s *MCPService) RegisterTransportFactory(transportType string, factory func(*MCPServer) Transport) {
-	if s.transportFactories == nil {
-		s.transportFactories = make(map[string]func(*MCPServer) Transport)
-	}
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
 	s.transportFactories[transportType] = factory
+}
+
+// transportFactory returns the registered factory for a transport type under the
+// read lock. Factories are registered once at startup, but the map is read on
+// every CreateServer/createTransport at runtime; the lock guards against any
+// future runtime registration (e.g. hot-reload) racing with reads.
+func (s *MCPService) transportFactory(transportType string) (func(*MCPServer) Transport, bool) {
+	s.transportMu.RLock()
+	defer s.transportMu.RUnlock()
+	fn, ok := s.transportFactories[transportType]
+	return fn, ok
 }
 
 func (s *MCPService) CreateServer(ctx context.Context, srv *MCPServer) error {
@@ -86,7 +98,7 @@ func (s *MCPService) CreateServer(ctx context.Context, srv *MCPServer) error {
 		return err
 	}
 	if srv.TransportType == "stdio" {
-		if _, ok := s.transportFactories["stdio"]; !ok {
+		if _, ok := s.transportFactory("stdio"); !ok {
 			return fmt.Errorf("stdio transport is not enabled on this gateway (requires commercial build with mcp.allow_stdio=true)")
 		}
 	}
@@ -295,7 +307,7 @@ func (s *MCPService) createTransport(srv *MCPServer) Transport {
 	case "sse":
 		return NewSSETransport(srv.URL, auth, headers, s.sharedTransport)
 	default:
-		if fn, ok := s.transportFactories[srv.TransportType]; ok {
+		if fn, ok := s.transportFactory(srv.TransportType); ok {
 			return fn(srv)
 		}
 		slog.Warn("unsupported transport type", "type", srv.TransportType, "server", srv.Name)
