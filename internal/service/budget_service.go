@@ -105,26 +105,24 @@ func (s *BudgetService) ReportUsage(ctx context.Context, scope, targetID, period
 	if cost <= 0 {
 		return
 	}
-	pk := PeriodKey(period)
-	key := fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk)
-	ttl := PeriodTTL(period)
-	pipe := s.rdb.Pipeline()
-	pipe.IncrByFloat(ctx, key, cost)
-	pipe.Expire(ctx, key, ttl)
-	if _, err := pipe.Exec(ctx); err != nil {
-		slog.Warn("budget report redis pipeline failed", "key", key, "error", err)
-	}
+	s.applyBudgetDelta(ctx, scope, targetID, period, cost)
 }
 
-// AdjustBudget applies a delta (positive or negative) to a budget counter,
-// refreshing the TTL. Used by ReportBudgetUsage to reconcile a pre-request
-// reservation against the actual cost: delta = actual - reserved. A negative
-// delta refunds an over-reservation (or the full reservation on a zero-cost /
-// failed request).
+// AdjustBudget applies a signed delta to a budget counter, refreshing the TTL.
+// Used by ReportBudgetUsage to reconcile a pre-request reservation against the
+// actual cost: delta = actual - reserved. A negative delta refunds an
+// over-reservation (or the full reservation on a zero-cost / failed request).
 func (s *BudgetService) AdjustBudget(ctx context.Context, scope, targetID, period string, delta float64) {
 	if delta == 0 {
 		return
 	}
+	s.applyBudgetDelta(ctx, scope, targetID, period, delta)
+}
+
+// applyBudgetDelta applies a non-zero delta to a budget counter and refreshes
+// its TTL. Shared body of ReportUsage (positive cost) and AdjustBudget (signed
+// delta, including negative refunds).
+func (s *BudgetService) applyBudgetDelta(ctx context.Context, scope, targetID, period string, delta float64) {
 	pk := PeriodKey(period)
 	key := fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk)
 	ttl := PeriodTTL(period)
@@ -132,7 +130,7 @@ func (s *BudgetService) AdjustBudget(ctx context.Context, scope, targetID, perio
 	pipe.IncrByFloat(ctx, key, delta)
 	pipe.Expire(ctx, key, ttl)
 	if _, err := pipe.Exec(ctx); err != nil {
-		slog.Warn("budget adjust redis pipeline failed", "key", key, "delta", delta, "error", err)
+		slog.Warn("budget delta redis pipeline failed", "key", key, "delta", delta, "error", err)
 	}
 }
 
