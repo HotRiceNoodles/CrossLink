@@ -554,6 +554,35 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	var gotDone bool
 	var firstTokenAt time.Time
 
+	// C6-closure: every exit path must publish token usage so ReportTokens can
+	// reconcile the TPM reservation made by TPMLimit. Early returns below
+	// (guardrail block, SSE write failure, client disconnect) used to skip
+	// c.Set("input_tokens"/"output_tokens"), leaving the reservation permanently
+	// consumed — sustained guardrail hits / disconnects would drain TPM quota
+	// (DoS). The normal completion path sets these inline first; this defer only
+	// backfills the early-return cases.
+	defer func() {
+		if _, ok := c.Get("input_tokens"); ok {
+			return
+		}
+		it, ot := inputTokens, outputTokens
+		if ot == 0 {
+			ot = outputEstimate
+		}
+		if it == 0 && req.Messages != nil {
+			for _, msg := range req.Messages {
+				it += token.Estimate(domain.ContentText(msg.Content))
+				for _, tc := range msg.ToolCalls {
+					it += token.Estimate(tc.Function.Arguments)
+				}
+			}
+		}
+		c.Set("input_tokens", it)
+		c.Set("output_tokens", ot)
+		c.Set("input_price", route.InputPrice)
+		c.Set("output_price", route.OutputPrice)
+	}()
+
 	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		apiKeyID = key.ID

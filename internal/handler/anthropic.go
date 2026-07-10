@@ -452,6 +452,25 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		setFallbackHeaders(c, route.ProviderModel, fallbackCount)
 	}, sessionID, orgID)
 
+	// C6-closure: publish token usage on every exit so ReportTokens can reconcile
+	// the TPM reservation made by TPMLimit. Early returns below (guardrail final
+	// block, stream error) used to skip c.Set("input_tokens"/"output_tokens"),
+	// leaking the reservation. The normal path sets them inline first; this defer
+	// only backfills the early-return cases.
+	defer func() {
+		if _, ok := c.Get("input_tokens"); ok {
+			return
+		}
+		it, ot := result.InputTokens, result.OutputTokens
+		if it == 0 {
+			it = estimateAnthropicInputTokens(req)
+		}
+		c.Set("input_tokens", it)
+		c.Set("output_tokens", ot)
+		c.Set("input_price", result.InputPrice)
+		c.Set("output_price", result.OutputPrice)
+	}()
+
 	// Final-drain: check any remaining buffered content after stream ends
 	if grWrapper != nil && grWrapper.BufferLen() > 0 {
 		blocked, grResult := grWrapper.FinalCheck(c.Request.Context(), grWrapper.BufferText())
