@@ -85,6 +85,24 @@ func blockedIP(ip net.IP) bool {
 	return isRestrictedIP(ip) && !AllowedInternal(ip)
 }
 
+// ssrfControl validates the actual destination IP at the socket Control layer,
+// blocking restricted addresses to prevent DNS rebinding between resolution and
+// connection. Shared by the plain and TLS SSRF-safe dialers.
+func ssrfControl(network, address string, _ syscall.RawConn) error {
+	h, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return fmt.Errorf("ssrf: non-IP destination %q", h)
+	}
+	if blockedIP(ip) {
+		return fmt.Errorf("ssrf: blocked connection to restricted address %s", ip)
+	}
+	return nil
+}
+
 // resolveAndCheck resolves host and returns an error if any resolved address is
 // in a restricted range, or if resolution fails/yields no addresses. It is the
 // single source of truth shared by ValidateURLSafety, the SSRF-safe dialers and
@@ -153,20 +171,7 @@ func (d *ssrfSafeDialer) DialContext(ctx context.Context, network, addr string) 
 	// Use Control callback to validate the actual destination IP at socket level,
 	// preventing DNS rebinding between resolution and connection.
 	dd := *d.dialer
-	dd.Control = func(network, address string, c syscall.RawConn) error {
-		h, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		ip := net.ParseIP(h)
-		if ip == nil {
-			return fmt.Errorf("ssrf: non-IP destination %q", h)
-		}
-		if blockedIP(ip) {
-			return fmt.Errorf("ssrf: blocked connection to restricted address %s", ip)
-		}
-		return nil
-	}
+	dd.Control = ssrfControl
 	return dd.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 }
 
@@ -197,20 +202,7 @@ func (d *ssrfTLSDialer) DialTLSContext(ctx context.Context, network, addr string
 		return nil, err
 	}
 	dd := *d.dialer
-	dd.Control = func(network, address string, c syscall.RawConn) error {
-		h, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		ip := net.ParseIP(h)
-		if ip == nil {
-			return fmt.Errorf("ssrf: non-IP destination %q", h)
-		}
-		if blockedIP(ip) {
-			return fmt.Errorf("ssrf: blocked connection to restricted address %s", ip)
-		}
-		return nil
-	}
+	dd.Control = ssrfControl
 	raw, err := dd.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	if err != nil {
 		return nil, err
