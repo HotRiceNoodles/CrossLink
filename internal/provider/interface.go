@@ -56,3 +56,18 @@ type ResponsesProvider interface {
 	Provider
 	Responses(ctx context.Context, rawBody []byte, apiKey string) (io.ReadCloser, int, error)
 }
+
+// ModelsLister is implemented by adapters that can enumerate upstream models
+// (e.g. OpenAI-compatible GET /v1/models). Adapters whose upstream exposes no
+// such endpoint (Anthropic, Azure OpenAI via deployment) do NOT implement this;
+// callers fall back to a connectivity-only probe and manual model entry.
+type ModelsLister interface {
+	Provider
+	ListUpstreamModels(ctx context.Context, apiKey string) ([]UpstreamModel, error)
+}
+
+// UpstreamModel is a single entry returned by an adapter's ListUpstreamModels.
+type UpstreamModel struct {
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by,omitempty"`
+}
