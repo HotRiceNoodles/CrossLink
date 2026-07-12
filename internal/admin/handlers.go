@@ -26,6 +26,7 @@ type AdminHandlers struct {
 	Preferences  *PreferencesHandler
 	ErrorRule    *ErrorRuleHandler
 	Routing      *RoutingHandler
+	Onboarding   *OnboardingHandler
 	Perms        gin.HandlerFunc
 }
 
@@ -94,6 +95,16 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
 		ErrorRule: NewErrorRuleHandler(deps.Repos.ErrorRuleRepo, deps.AuditSvc),
 		Routing:  NewRoutingHandler(deps.DB, deps.Repos.ProviderModelRepo),
+		Onboarding: NewOnboardingHandler(
+			deps.DB,
+			deps.EncStore,
+			deps.Crypto,
+			deps.SecretResolver,
+			deps.Registry,
+			deps.Resolver,
+			deps.CacheSvc,
+			deps.AuditSvc,
+		),
 		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo),
 	}
 }

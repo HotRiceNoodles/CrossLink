@@ -328,6 +328,13 @@ func (s *KeyService) ListHashes(ctx context.Context, apiKeyID int64) ([]model.AP
 	return s.hashRepo.ListByAPIKeyID(ctx, apiKeyID)
 }
 
+// GenerateRawKey produces a new random API key string (cl-<48 hex chars>).
+// Exported so the onboarding handler can generate a key inside its own
+// cross-table transaction without going through KeyService.Create.
+func GenerateRawKey() (string, error) {
+	return generateRawKey()
+}
+
 func generateRawKey() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {

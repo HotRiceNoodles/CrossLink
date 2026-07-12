@@ -272,13 +272,15 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Wire registry sync: notify other instances on provider mutations,
 	// subscribe for reload notifications from other instances.
 	if infra.RegistrySync != nil {
-		handlers.Provider.OnRegistryChange = func(action, providerName string) {
+		registrySyncFn := func(action, providerName string) {
 			if action == "remove" {
 				infra.RegistrySync.NotifyRemove(providerName)
 			} else {
 				infra.RegistrySync.NotifyReload(providerName)
 			}
 		}
+		handlers.Provider.OnRegistryChange = registrySyncFn
+		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
 		go infra.RegistrySync.Start(appCtx)
 	}
 	// Login endpoint (no auth, rate limited)
@@ -320,6 +322,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.DELETE("/providers/:id", middleware.RequireAction(permCache, "provider:delete"), handlers.Provider.Delete)
 		adminGroup.POST("/providers/:id/test", middleware.RequireAction(permCache, "provider:test"), handlers.Provider.Test)
 		adminGroup.GET("/providers/:id/models", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.ListModels)
+		// Onboarding wizard: stateless upstream probe (no RequireAction — login-only,
+		// like /adapters and /system:info) and atomic provider+models+key creator.
+		adminGroup.POST("/providers/probe", handlers.Onboarding.Probe)
+		adminGroup.POST("/system/onboarding", handlers.Onboarding.Commit)
 
 		// Models
 		adminGroup.GET("/models", middleware.RequireAction(permCache, "model:list"), handlers.Model.List)
