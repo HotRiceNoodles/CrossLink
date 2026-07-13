@@ -95,30 +95,15 @@ func buildSecrets(db *gorm.DB, cfg *config.Config, ext *Extensions, cp crypto.Cr
 	secretResolver := secret.NewSecretResolver(cfg.SecretManager.CacheTTL)
 	secretResolver.Register(secret.NewEnvSecretStore())
 
-	// Determine active encryption key: DB (post-rotation) takes priority over config
-	activeKey := cfg.SecretManager.EncryptionKey
-	activeKeyPtr := &activeKey
-	var dbKey model.SystemSetting
-	if result := db.Where("key = ?", "encryption_key").First(&dbKey); result.Error == nil && dbKey.Value != "" {
-		activeKey = dbKey.Value
+	// Resolve active encryption key + construct store via the shared helper.
+	encStore, activeKey, err := secret.InitActiveEncryption(db, cfg.SecretManager.EncryptionKey, cp)
+	if err != nil {
+		slog.Error("no valid encryption key available, encrypted secrets are inaccessible", "error", err)
+		os.Exit(1)
 	}
+	activeKeyPtr := &activeKey
 
-	var encStore *secret.EncryptedDBStore
-	if activeKey != "" {
-		var err error
-		encStore, err = secret.NewEncryptedDBStore(activeKey, cp)
-		if err != nil {
-			// DB key corrupted: try fallback to config key
-			if cfg.SecretManager.EncryptionKey != "" && cfg.SecretManager.EncryptionKey != activeKey {
-				slog.Warn("DB encryption key invalid, falling back to config key", "error", err)
-				activeKey = cfg.SecretManager.EncryptionKey
-				encStore, err = secret.NewEncryptedDBStore(activeKey, cp)
-			}
-			if err != nil {
-				slog.Error("no valid encryption key available, encrypted secrets are inaccessible", "error", err)
-				os.Exit(1)
-			}
-		}
+	if encStore != nil {
 		secretResolver.Register(encStore)
 		secretResolver.Register(encStore.AsV2())
 		if result, err := secret.MigratePlaintextSecrets(db, encStore); err != nil {
