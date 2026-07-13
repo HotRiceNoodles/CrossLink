@@ -48,6 +48,7 @@ const (
 	// Providers
 	ErrProviderURLInvalid    = "provider_url_invalid"
 	ErrProviderHasModels     = "provider_has_models"
+	ErrProviderExists        = "provider_exists"
 
 	// Models
 	ErrPricesNegative        = "prices_negative"

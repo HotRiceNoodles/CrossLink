@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -200,8 +201,116 @@ func TestOnboarding_Commit_TransactionRollback(t *testing.T) {
 	assert.EqualValues(t, 0, keyCount, "no keys should leak on rollback")
 }
 
-// --- Commit: validation rejections ---
+// --- Commit: existing-provider reuse (B2+C root-cause fix) ---
 
+// When a provider with the same name already exists (e.g. from the seed file)
+// and reuse_provider is NOT set, Commit must return a structured 409 with the
+// existing provider's id/name so the wizard can prompt "reuse or rename".
+func TestOnboarding_Commit_ExistingProviderReturnsStructured409(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+	// Pre-seed an existing provider (simulates configs/providers.yaml).
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "deepseek", DisplayName: "DeepSeek", AdapterType: "openai_compatible",
+		BaseURL: "https://api.deepseek.com/v1", APIKey: "sk-existing", Status: 1,
+	}).Error)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
+		"provider": gin.H{"name": "deepseek", "display_name": "DeepSeek", "adapter_type": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-new"},
+		"models":   []gin.H{{"model_name": "deepseek-chat", "provider_model": "deepseek-chat"}},
+		"key":      gin.H{"name": "k"},
+	})
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+
+	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, ErrProviderExists, resp["error_code"])
+	assert.NotZero(t, resp["existing_provider_id"])
+	assert.Equal(t, "deepseek", resp["existing_provider_name"])
+
+	// No new provider / key created.
+	var keyCount int64
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	assert.EqualValues(t, 0, keyCount)
+}
+
+// With reuse_provider=true, Commit reuses the existing provider (no new row),
+// skips models that already exist under it, creates missing models + the key.
+func TestOnboarding_Commit_ReuseProviderCreatesKeyOnly(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "deepseek", DisplayName: "DeepSeek", AdapterType: "openai_compatible",
+		BaseURL: "https://api.deepseek.com/v1", APIKey: "sk-existing", Status: 1,
+	}).Error)
+	var pid int64
+	db.Model(&model.Provider{}).Where("name = ?", "deepseek").Pluck("id", &pid)
+	// An existing model under deepseek (should be skipped, not duplicated).
+	require.NoError(t, db.Create(&model.ProviderModel{
+		ProviderID: pid, ModelName: "deepseek-chat", ProviderModel: "deepseek-chat",
+		Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+	}).Error)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
+		"provider":       gin.H{"name": "deepseek", "display_name": "DeepSeek", "adapter_type": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-new"},
+		"models":         []gin.H{{"model_name": "deepseek-chat", "provider_model": "deepseek-chat"}, {"model_name": "deepseek-reasoner", "provider_model": "deepseek-reasoner"}},
+		"key":            gin.H{"name": "reused-key"},
+		"reuse_provider": true,
+	})
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Data struct {
+			ProviderID     int64  `json:"provider_id"`
+			Key            string `json:"key"`
+			ReusedProvider bool   `json:"reused_provider"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Data.ReusedProvider, "reused_provider flag must be true")
+	assert.Equal(t, pid, resp.Data.ProviderID, "must reuse existing provider id")
+	assert.NotEmpty(t, resp.Data.Key)
+
+	// No new provider row, exactly one key, and the pre-existing model not duplicated.
+	var providerCount, keyCount, modelCount int64
+	db.Model(&model.Provider{}).Where("name = ?", "deepseek").Count(&providerCount)
+	assert.EqualValues(t, 1, providerCount)
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	assert.EqualValues(t, 1, keyCount)
+	db.Model(&model.ProviderModel{}).Where("provider_id = ?", pid).Count(&modelCount)
+	assert.EqualValues(t, 2, modelCount, "1 pre-existing + 1 newly added (deepseek-reasoner)")
+}
+
+// TestIsDuplicateNameErr_Locales guards the duplicate-name detection against
+// Postgres locale variants. Production reported a zh_CN regression where
+// "重复键违反唯一约束" was not recognized and the handler returned 500 instead
+// of 409 — SQLSTATE 23505 (locale-independent) and the Chinese keyword close it.
+func TestIsDuplicateNameErr_Locales(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf(`pq: duplicate key value violates unique constraint "providers_name_key"`), true},
+		{fmt.Errorf(`create provider: 错误: 重复键违反唯一约束"providers_name_key" (SQLSTATE 23505)`), true},
+		{fmt.Errorf(`重复键违反唯一约束`), true},
+		{fmt.Errorf("UNIQUE constraint failed: providers.name"), true},
+		{fmt.Errorf("duplicate key"), true},
+		{fmt.Errorf("connection refused"), false},
+		{fmt.Errorf("invalid input syntax"), false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := isDuplicateNameErr(c.err); got != c.want {
+			t.Errorf("isDuplicateNameErr(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// --- Commit: validation rejections ---
 func TestOnboarding_Commit_ValidationErrors(t *testing.T) {
 	cases := []struct {
 		name string

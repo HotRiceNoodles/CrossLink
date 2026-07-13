@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/domain"
+	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -187,9 +189,10 @@ type onboardingKeyInput struct {
 }
 
 type onboardingRequest struct {
-	Provider onboardingProviderInput `json:"provider" binding:"required"`
-	Models   []onboardingModelInput  `json:"models"`
-	Key      onboardingKeyInput      `json:"key" binding:"required"`
+	Provider      onboardingProviderInput `json:"provider" binding:"required"`
+	Models        []onboardingModelInput  `json:"models"`
+	Key           onboardingKeyInput      `json:"key" binding:"required"`
+	ReuseProvider bool                    `json:"reuse_provider"` // skip provider creation if name exists, just add models + key
 }
 
 // Commit creates provider + models + api key + hash in a single transaction.
@@ -239,6 +242,45 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 
 	orgID := GetOrgID(c)
 
+	// Enterprise "global view" (OrgID=0) must not create resources — they would
+	// be orphans belonging to no org. Community/Pro are single-tenant and rely on
+	// OrgID=0 (backfilled by ensureDefaultOrganization), so only block Enterprise.
+	// This is a backend backstop against any frontend hole that lets the wizard
+	// open from the global view.
+	if orgID == 0 && license.G().CurrentTier() == license.TierEnterprise {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest,
+			"请先切换到具体企业（不要使用全局视角）再运行配置向导")
+		return
+	}
+
+	// --- pre-check: does a provider with this name already exist? ---
+	// Provider.Name has a global uniqueIndex, so the check is name-only.
+	// This lets the wizard offer "reuse existing provider, just create a key"
+	// instead of failing blindly on the DB constraint.
+	var existingProvider model.Provider
+	reuseMode := false
+	{
+		var found model.Provider
+		result := h.db.WithContext(c.Request.Context()).Select("id", "name").Where("name = ?", input.Provider.Name).First(&found)
+		if result.Error == nil {
+			if !input.ReuseProvider {
+				// Structured 409: wizard prompts the user to reuse or rename.
+				c.JSON(http.StatusConflict, gin.H{
+					"error":                 "provider name already exists",
+					"error_code":            ErrProviderExists,
+					"existing_provider_id":  found.ID,
+					"existing_provider_name": found.Name,
+				})
+				return
+			}
+			existingProvider = found
+			reuseMode = true
+		} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			internalErr(c, result.Error, "check existing provider failed")
+			return
+		}
+	}
+
 	// --- build models in memory (provider_id filled inside tx) ---
 	models := make([]*model.ProviderModel, 0, len(input.Models))
 	for _, m := range input.Models {
@@ -268,9 +310,14 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	if orgID != 0 {
 		p.OrgID = &orgID
 	}
-	if err := h.encryptProvider(p); err != nil {
-		internalErr(c, err, "encrypt provider failed")
-		return
+	if !reuseMode {
+		// In reuse mode the provider row already exists; don't re-encrypt/overwrite.
+		if err := h.encryptProvider(p); err != nil {
+			internalErr(c, err, "encrypt provider failed")
+			return
+		}
+	} else {
+		p.ID = existingProvider.ID
 	}
 
 	// --- generate key material (pure CPU, outside tx) ---
@@ -310,11 +357,34 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 
 	// --- transaction: provider → models → key → hash ---
 	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(p).Error; err != nil {
-			return classifyCreateErr(err, "create provider")
+		if !reuseMode {
+			if err := tx.Create(p).Error; err != nil {
+				return classifyCreateErr(err, "create provider")
+			}
 		}
-		for _, mm := range models {
-			mm.ProviderID = p.ID
+		providerID := p.ID
+		// In reuse mode, soft-dedup models: skip any model_name that already
+		// exists under this provider. Single-process CLI/wizard use; the soft
+		// check is sufficient and matches the import tool's behavior.
+		newModels := models
+		if reuseMode {
+			newModels = newModels[:0]
+			for _, mm := range models {
+				var cnt int64
+				if err := tx.Model(&model.ProviderModel{}).Where("provider_id = ? AND model_name = ?", providerID, mm.ModelName).Count(&cnt).Error; err != nil {
+					return classifyCreateErr(err, "check existing model")
+				}
+				if cnt > 0 {
+					continue // model already exists under this provider — skip
+				}
+				mm.ProviderID = providerID
+				newModels = append(newModels, mm)
+			}
+			models = newModels
+		} else {
+			for _, mm := range models {
+				mm.ProviderID = providerID
+			}
 		}
 		if len(models) > 0 {
 			if err := tx.CreateInBatches(models, 100).Error; err != nil {
@@ -338,7 +408,8 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	})
 	if err != nil {
 		if isDuplicateNameErr(err) {
-			errorResp(c, http.StatusConflict, ErrConflict, "Provider name already exists, please choose another")
+			// Race fallback: provider was inserted between pre-check and tx.
+			errorResp(c, http.StatusConflict, ErrProviderExists, "provider name already exists")
 			return
 		}
 		internalErr(c, err, err.Error())
@@ -346,15 +417,19 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 
 	// --- post-commit side effects (best effort) ---
-	h.syncRegistry(p)
+	// Only sync the runtime registry when a NEW provider was created. In reuse
+	// mode the existing provider is already registered from its original creation.
+	if !reuseMode {
+		h.syncRegistry(p)
+		if h.onRegistryChange != nil {
+			h.onRegistryChange("reload", p.Name)
+		}
+	}
 	if h.resolver != nil {
 		h.resolver.Invalidate()
 	}
 	if h.cacheSvc != nil {
 		h.cacheSvc.FlushAll(c.Request.Context())
-	}
-	if h.onRegistryChange != nil {
-		h.onRegistryChange("reload", p.Name)
 	}
 	if input.Key.Name != "" && OnKeyCreated != nil {
 		OnKeyCreated(input.Key.Name, "", rawKey, "")
@@ -365,6 +440,7 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			"model_count":    len(models),
 			"key_name":       input.Key.Name,
 			"api_key_length": len(input.Provider.APIKey),
+			"reused_provider": reuseMode,
 		}))
 	}
 
@@ -373,10 +449,11 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		modelIDs = append(modelIDs, mm.ID)
 	}
 	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
-		"provider_id": p.ID,
-		"model_ids":   modelIDs,
-		"key":         rawKey,
-		"key_prefix":  prefix,
+		"provider_id":     p.ID,
+		"model_ids":       modelIDs,
+		"key":             rawKey,
+		"key_prefix":      prefix,
+		"reused_provider": reuseMode,
 	}})
 }
 
@@ -473,9 +550,18 @@ func classifyCreateErr(err error, step string) error {
 // isDuplicateNameErr reports whether err is a unique-constraint violation
 // (e.g. duplicate provider.Name). Matches Postgres, SQLite and MySQL shapes.
 func isDuplicateNameErr(err error) bool {
+	if err == nil {
+		return false
+	}
 	msg := err.Error()
-	return strings.Contains(msg, "duplicate key") ||
+	// SQLSTATE 23505 (unique_violation) is locale-independent — Postgres
+	// appends "(SQLSTATE 23505)" regardless of message language, so this
+	// catches the zh_CN "重复键违反唯一约束" form too. The English/MySQL/
+	// SQLite keyword matches stay as fallbacks for other drivers.
+	return strings.Contains(msg, "23505") ||
+		strings.Contains(msg, "duplicate key") ||
 		strings.Contains(msg, "Duplicate entry") ||
 		strings.Contains(msg, "UNIQUE constraint") ||
-		strings.Contains(msg, "uniqueIndex")
+		strings.Contains(msg, "uniqueIndex") ||
+		strings.Contains(msg, "重复键")
 }
