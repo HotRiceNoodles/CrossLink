@@ -25,7 +25,7 @@
 
 **OpenAI & Anthropic Compatible LLM API Gateway**
 
-[English](#quick-start) | [中文](README_zh.md)
+[English](#quick-start) | [中文](README_zh.md) | [العربية](README_ar.md)
 
 A unified proxy with true bidirectional protocol translation, error-classified
 failover, an MCP gateway with per-tool RBAC, pluggable guardrails, and a built-in
@@ -434,12 +434,6 @@ make clean          # Remove build artifacts
 ## Security
 
 See [SECURITY.md](SECURITY.md) for our security policy and vulnerability reporting instructions.
-
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date)](https://star-history.com/#HotRiceNoodles/CrossLink&Date)
 
 ---
 

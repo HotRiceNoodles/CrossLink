@@ -25,7 +25,7 @@
 
 **OpenAI & Anthropic 兼容 LLM API 网关**
 
-[English](README.md) | [中文](#快速开始)
+[English](README.md) | [中文](#快速开始) | [العربية](README_ar.md)
 
 真·双向协议翻译、错误分类容灾、带 per-tool RBAC 的 MCP 网关、可插拔护栏、内置
 管理后台——覆盖 OpenAI、Anthropic、Azure、DeepSeek、通义千问、Ollama 及任意
@@ -426,12 +426,6 @@ make clean          # 清理构建产物
 ## 安全
 
 请参阅 [SECURITY.md](SECURITY.md) 了解安全政策和漏洞报告方式。
-
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date)](https://star-history.com/#HotRiceNoodles/CrossLink&Date)
 
 ---
 
