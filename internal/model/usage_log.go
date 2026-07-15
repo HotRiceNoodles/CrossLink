@@ -36,6 +36,7 @@ type UsageLog struct {
 	ReasoningTokens    int        `gorm:"default:0" json:"reasoning_tokens"`
 	CacheReadTokens    int        `gorm:"default:0" json:"cache_read_tokens"`
 	SessionID          string     `gorm:"size:255;index" json:"session_id,omitempty"`
+	TemplateID         *int64     `gorm:"index" json:"template_id,omitempty"` // which prompt template assembled this request (NULL = none)
 	CreatedAt          time.Time  `gorm:"not null;index" json:"created_at"`
 }
 
