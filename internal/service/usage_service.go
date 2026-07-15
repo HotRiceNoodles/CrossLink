@@ -110,6 +110,7 @@ type UsageEntry struct {
 	ReasoningTokens     int
 	CacheReadTokens     int
 	SessionID           string
+	TemplateID      *int64 // prompt template that assembled this request (nil = none)
 	PrecomputedCost float64
 }
 
@@ -159,6 +160,9 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 	}
 	if entry.OrgID > 0 {
 		log.OrgID = &entry.OrgID
+	}
+	if entry.TemplateID != nil {
+		log.TemplateID = entry.TemplateID
 	}
 	if entry.UserMessage != "" {
 		log.UserMessage = &entry.UserMessage
