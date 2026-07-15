@@ -75,6 +75,7 @@ type Extensions struct {
 	ExtraEngineRoutes  func(*gin.Engine, *Extensions)  // main router (for docs, etc.)
 	MCPEncSetter       func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
 	IPPolicy           service.IPPolicy
+	AssemblerHook      middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
 	Gate             GateInterface
 	Deps             *AppDeps
 }

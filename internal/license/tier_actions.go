@@ -36,6 +36,11 @@ var communityActions = map[string]bool{
 	"error_rule:create": true,
 	"error_rule:update": true,
 	"error_rule:delete": true,
+	// Prompt templates (context engineering) — community-core feature.
+	"template:list":     true,
+	"template:create":   true,
+	"template:update":   true,
+	"template:delete":   true,
 }
 
 // proExtraActions defines additional actions available to the Pro tier (on top of Community).

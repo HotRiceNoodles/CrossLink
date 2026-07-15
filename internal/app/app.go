@@ -190,6 +190,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
 	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
+	templateCatalogHandler := handler.NewTemplateCatalogHandler(db)
 
 	// Video gateway
 	videoTaskSvc := service.NewVideoTaskService(rdb, secrets.EncStore, infra.Registry, svcs.UsageSvc)
@@ -251,6 +252,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	// Admin handlers — created after ExtraPublicRoutes so commercial builds can inject AuditSvc.
+	templateRegistry := service.NewTemplateRegistry(db)
+	var templateSync *service.TemplateRegistrySync
+	if rdb != nil {
+		templateSync = service.NewTemplateRegistrySync(rdb, templateRegistry, db)
+	}
 	handlers := admin.ProvideAdminHandlers(&admin.AdminDeps{
 		DB:             db,
 		RDB:            rdb,
@@ -267,6 +273,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		Crypto:         cryptoProvider,
 		Config:         cfg,
 		AuditSvc:       ext.Deps.AuditSvc,
+		TemplateRegistry: templateRegistry,
+		TemplateSync:     templateSync,
 	})
 
 	// Wire registry sync: notify other instances on provider mutations,
@@ -282,6 +290,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		handlers.Provider.OnRegistryChange = registrySyncFn
 		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
 		go infra.RegistrySync.Start(appCtx)
+	}
+	// TemplateRegistrySync: keep prompt-template cache consistent across instances.
+	if templateSync != nil {
+		go templateSync.Start(appCtx)
 	}
 	// Login endpoint (no auth, rate limited)
 	// Registered after ExtraPublicRoutes so deps.AuditSvc is available.
@@ -351,8 +363,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/usage/stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.Stats)
 		adminGroup.GET("/usage/daily", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.DailyTrend)
 		adminGroup.GET("/usage/models", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.ModelDistribution)
+		adminGroup.GET("/usage/templates", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.TemplateStats)
 		adminGroup.GET("/usage/team-stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.TeamStats)
 		adminGroup.GET("/routing/stats", middleware.RequireAction(permCache, "routing:stats"), handlers.Routing.Stats)
+
+		// Prompt templates (context engineering). Super-admin only (AdminExclusiveActions).
+		adminGroup.GET("/templates", middleware.RequireAction(permCache, "template:list"), handlers.Templates.List)
+		adminGroup.POST("/templates", middleware.RequireAction(permCache, "template:create"), handlers.Templates.Create)
+		adminGroup.GET("/templates/:id", middleware.RequireAction(permCache, "template:list"), handlers.Templates.Get)
+		adminGroup.PUT("/templates/:id", middleware.RequireAction(permCache, "template:update"), handlers.Templates.Update)
+		adminGroup.DELETE("/templates/:id", middleware.RequireAction(permCache, "template:delete"), handlers.Templates.Delete)
+		adminGroup.POST("/templates/:id/preview", middleware.RequireAction(permCache, "template:list"), handlers.Templates.Preview)
 
 		// System info (self-service, no RequireAction)
 		adminGroup.GET("/system/info", handlers.System.Info)
@@ -384,6 +405,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(dm.Middleware())
 	gwGroup.Use(middleware.ConcurrencyLimit(2000))
 	gwGroup.Use(middleware.ReadBody(10 << 20))
+	gwGroup.Use(middleware.ContextAssembler(templateRegistry, ext.AssemblerHook))
 	gwGroup.Use(debug.Middleware(debugStore))
 	gwGroup.Use(middleware.UsageLog(svcs.UsageSvc))
 	gwGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
@@ -424,6 +446,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageGroup := r.Group("/")
 	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
+	// Consumer discovery: key holders list available prompt templates (metadata only,
+	// prompt content stays server-side) + ready-to-use curl examples. See §B.
+	usageGroup.GET("/v1/templates", templateCatalogHandler.List)
 
 	// MCP gateway route extension point (independent route group from gwGroup)
 	if cfg.MCP.Enabled && ext.ExtraMCPRoutes != nil {

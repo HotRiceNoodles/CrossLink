@@ -27,6 +27,7 @@ type AdminHandlers struct {
 	ErrorRule    *ErrorRuleHandler
 	Routing      *RoutingHandler
 	Onboarding   *OnboardingHandler
+	Templates    *TemplateHandler
 	Perms        gin.HandlerFunc
 }
 
@@ -47,6 +48,8 @@ type AdminDeps struct {
 	Crypto         crypto.CryptoProvider
 	Config         *config.Config
 	AuditSvc       *service.AuditService // set by commercial build; nil in Community
+	TemplateRegistry *service.TemplateRegistry
+	TemplateSync     *service.TemplateRegistrySync // nil when Redis absent
 }
 
 // ProvideAdminHandlers constructs all admin handlers from their dependencies.
@@ -105,6 +108,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.CacheSvc,
 			deps.AuditSvc,
 		),
+		Templates: NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
 		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo),
 	}
 }

@@ -322,6 +322,40 @@ type ModelDist struct {
 	Cost   float64 `json:"cost"`
 }
 
+type TemplateStat struct {
+	TemplateID    int64   `json:"template_id"`
+	TemplateName  string  `json:"template_name"`
+	TotalRequests int64   `json:"total_requests"`
+	TotalTokens   int64   `json:"total_tokens"`
+	TotalCost     float64 `json:"total_cost"`
+}
+
+// TemplateStats aggregates usage by prompt template (template_id), joining
+// prompt_templates for display names. Only requests that used a template
+// (template_id IS NOT NULL) are counted. Returns [] when no template usage.
+func (h *UsageHandler) TemplateStats(c *gin.Context) {
+	days := 7
+	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 {
+		days = d
+	}
+	var results []TemplateStat
+
+	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
+		Model(&model.UsageLog{}), c), c), c).
+		Select("usage_logs.template_id as template_id, prompt_templates.name as template_name, COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(cost), 0) as total_cost").
+		Joins("LEFT JOIN prompt_templates ON prompt_templates.id = usage_logs.template_id").
+		Where("usage_logs.template_id IS NOT NULL AND usage_logs.created_at >= ?", time.Now().AddDate(0, 0, -days)).
+		Group("usage_logs.template_id, prompt_templates.name").
+		Order("total_requests DESC").
+		Limit(20).
+		Scan(&results)
+
+	if results == nil {
+		results = []TemplateStat{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
 func (h *UsageHandler) ModelDistribution(c *gin.Context) {
 	days := 7
 	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 {

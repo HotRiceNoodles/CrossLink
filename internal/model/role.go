@@ -111,6 +111,10 @@ var ValidActions = map[string]bool{
 	"capability:create":           true,
 	"capability:update":           true,
 	"capability:delete":           true,
+	"template:list":               true,
+	"template:create":             true,
+	"template:update":             true,
+	"template:delete":             true,
 }
 
 // AdminRequiredActions are actions that must always remain on the admin role.
@@ -133,6 +137,10 @@ var AdminExclusiveActions = map[string]bool{
 	"error_rule:create": true,
 	"error_rule:update": true,
 	"error_rule:delete": true,
+	"template:list":     true,
+	"template:create":   true,
+	"template:update":   true,
+	"template:delete":   true,
 }
 
 func IsValidAction(action string) bool {
