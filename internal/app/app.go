@@ -71,6 +71,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	if err := config.SeedProviders(db, "configs/providers.yaml"); err != nil {
 		slog.Warn("failed to seed providers", "error", err)
 	}
+	if err := config.SeedPromptTemplates(db, "configs/prompt_templates.yaml"); err != nil {
+		slog.Warn("failed to seed prompt templates", "error", err)
+	}
 
 	// Secrets
 	secrets := buildSecrets(db, cfg, ext, cryptoProvider, rdb)
