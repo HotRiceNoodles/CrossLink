@@ -70,6 +70,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	var keyID int64
 	var teamID int64
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		keyID = key.ID
 		if key.TeamID != nil {
@@ -98,6 +99,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     retryCount,
 			SessionID:      sessionID,
+			TemplateID:     templateID,
 		})
 	})
 }
@@ -239,6 +241,7 @@ func writeStreamInterruptedAnthropic(w io.Writer) {
 
 func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 	// Idempotency cache check
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		var idemKeyID int64
@@ -433,6 +436,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
 			CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
 			SessionID:       sessionID,
+			TemplateID:      templateID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -471,6 +475,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 
 func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
@@ -804,6 +809,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			ReasoningTokens: reasoningTokens,
 			CacheReadTokens: cacheReadTokens,
 			SessionID:       sessionID,
+			TemplateID:      templateID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {

@@ -72,6 +72,7 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.T
 	var keyID int64
 	var teamID int64
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		keyID = key.ID
 		if key.TeamID != nil {
@@ -106,6 +107,7 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.T
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  fallbackCount,
 			RetryCount:     retryCount,
+			TemplateID:     templateID,
 		})
 	})
 }
@@ -151,6 +153,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	// Modality guard: a capability alias must match this endpoint's modality.
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 	if m, ok := h.resolver.AliasMetaLookup(c.Request.Context(), req.Model, orgID); ok {
 		if m.Modality != string(domain.ModalityText) {
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": "capability modality mismatch"}})
@@ -304,6 +307,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			ReasoningTokens: result.ReasoningTokens,
 			CacheReadTokens: result.CacheReadTokens,
 			SessionID:       sessionID,
+			TemplateID:      templateID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -373,6 +377,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		}
 	}
 	orgID := c.GetInt64("org_id")
+	templateID := readTemplateID(c)
 
 	var grWrapper *guardrail.CallbackStreamGuardrail
 	var messageStopSent bool
@@ -555,6 +560,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			ReasoningTokens: result.ReasoningTokens,
 			CacheReadTokens: result.CacheReadTokens,
 			SessionID:       sessionID,
+			TemplateID:      templateID,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {

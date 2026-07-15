@@ -157,6 +157,7 @@ func buildCacheKey(path string, body []byte, c *gin.Context, cp crypto.CryptoPro
 	delete(raw, "stream")
 	delete(raw, "stream_options")
 	delete(raw, "user")
+	delete(raw, "x_context") // defensive: ContextAssembler already strips it pre-cache
 
 	canonical, _ := json.Marshal(raw)
 
