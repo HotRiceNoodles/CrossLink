@@ -189,3 +189,26 @@ func runAssemblerWithHook(t *testing.T, reg *service.TemplateRegistry, hook Asse
 	ContextAssembler(reg, hook)(c)
 	return c, w
 }
+
+// TestContextAssembler_TargetFormatMismatchUsesPath: template says anthropic but
+// request hits /v1/chat/completions → must use openai format (path-based), NOT
+// the template's target_format. Prevents system prompt silently lost when the
+// admin sets the wrong format. Regression for the target_format mismatch fix.
+func TestContextAssembler_TargetFormatMismatchUsesPath(t *testing.T) {
+	tpl := &model.PromptTemplate{
+		Name: "mismatch", SystemPrompt: "sys-prompt", TargetFormat: "anthropic", Status: 1,
+	}
+	reg, _ := setupAssemblerRegistry(t, tpl)
+	c, w := runAssembler(t, reg, "/v1/chat/completions", gin.H{
+		"x_context": gin.H{"template": "mismatch"},
+		"messages":  []gin.H{{"role": "user", "content": "hi"}},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(GetBodyBytes(c), &got))
+	// openai format: system is a message with role:system, NOT a top-level "system" field
+	assert.Nil(t, got["system"], "must NOT set top-level system (openai format from path)")
+	msgs := got["messages"].([]any)
+	assert.Equal(t, "system", msgs[0].(map[string]any)["role"], "first message must be system (openai inject)")
+	assert.Equal(t, "sys-prompt", msgs[0].(map[string]any)["content"])
+}

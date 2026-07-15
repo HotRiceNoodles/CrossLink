@@ -72,10 +72,11 @@ func ContextAssembler(reg *service.TemplateRegistry, hook AssemblerHook) gin.Han
 			return
 		}
 
-		format := tpl.TargetFormat
-		if format == "" || format == "auto" {
-			format = autoFormat(c.Request.URL.Path)
-		}
+		// Always derive format from the request path — the gateway knows the
+		// protocol from the endpoint, not from the template. Ignoring the
+		// template's target_format avoids a mismatch footgun (e.g. template says
+		// anthropic but request hits /v1/chat/completions → system silently lost).
+		format := autoFormat(c.Request.URL.Path)
 		switch format {
 		case "anthropic":
 			if _, hasSys := raw["system"]; hasSys && !isNil(raw["system"]) {
