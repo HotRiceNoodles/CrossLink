@@ -21,14 +21,46 @@ import (
 // See docs/plans/2026-07-15-mock-adapter-design.md.
 type MockProvider struct {
 	name         string
-	responseText string // custom response text (empty = fixed mode)
-	delayMs      int    // simulated latency (0 = instant)
+	responseText string       // custom response text (empty = fixed mode)
+	delayMs      int          // simulated latency (0 = instant)
+	fixtures     FixtureStore // optional: VCR playback (nil = canned only)
 }
 
 func (p *MockProvider) Name() string { return p.name }
 
-// Chat returns a canned non-streaming response. Never errors (mock always succeeds).
+// activeFixtureStore returns the fixture store to use for VCR playback.
+// Reads the package-level globalFixtureStore dynamically (not cached at
+// construction time) because MockProvider instances are constructed during
+// ProvideInfrastructure → RegisterProvidersFromDB, BEFORE SetGlobalFixtureStore
+// runs in FullSetup. Caching at construction would capture nil.
+func (p *MockProvider) activeFixtureStore() FixtureStore {
+	if p.fixtures != nil {
+		return p.fixtures
+	}
+	return globalFixtureStore
+}
+
+// Chat returns a recorded response (if fixture exists) or a canned response.
 func (p *MockProvider) Chat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (*domain.OpenAIResponse, error) {
+	// VCR playback: check fixture first.
+	store := p.activeFixtureStore()
+	if store != nil {
+		if f, ok, _ := store.Lookup(ctx, req.Model, RequestHash(req)); ok && !f.IsStream {
+			var resp domain.OpenAIResponse
+			if json.Unmarshal(f.ResponseBody, &resp) == nil {
+				// Apply configured delay (consistent with StreamChat VCR path).
+				if p.delayMs > 0 {
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(time.Duration(p.delayMs) * time.Millisecond):
+					}
+				}
+				return &resp, nil
+			}
+		}
+	}
+	// Fallback: canned response.
 	if p.delayMs > 0 {
 		select {
 		case <-ctx.Done():
@@ -59,9 +91,29 @@ func (p *MockProvider) Chat(ctx context.Context, req *domain.OpenAIRequest, apiK
 	}, nil
 }
 
-// StreamChat returns a channel that emits canned SSE chunks then [DONE].
-// Checks ctx.Done() between chunks to avoid goroutine leaks on client disconnect.
+// StreamChat returns a channel that emits recorded SSE chunks (if fixture exists)
+// or canned chunks. Checks ctx.Done() between chunks to avoid goroutine leaks.
 func (p *MockProvider) StreamChat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (<-chan domain.SSEChunk, error) {
+	// VCR playback: check stream fixture first.
+	store := p.activeFixtureStore()
+	if store != nil {
+		if f, ok, _ := store.Lookup(ctx, req.Model, RequestHash(req)); ok && f.IsStream {
+			var chunks []domain.SSEChunk
+			if json.Unmarshal(f.StreamChunks, &chunks) == nil && len(chunks) > 0 {
+				ch := make(chan domain.SSEChunk, len(chunks))
+				go func() {
+					defer close(ch)
+					for _, c := range chunks {
+						if !sendChunk(ctx, ch, c, p.delayMs) {
+							return
+						}
+					}
+				}()
+				return ch, nil
+			}
+		}
+	}
+	// Fallback: canned stream.
 	text := p.buildResponse(req)
 	parts := splitText(text, 4)
 	completionTokens := tokenEstimate(text)
@@ -211,7 +263,7 @@ func chunkWithFinish(completionTokens int) domain.SSEChunk {
 func init() {
 	RegisterAdapter("mock", func(p *model.Provider, timeout time.Duration) (Provider, error) {
 		rt, delay := parseMockConfig(p.ExtraConfig)
-		return &MockProvider{name: p.Name, responseText: rt, delayMs: delay}, nil
+		return &MockProvider{name: p.Name, responseText: rt, delayMs: delay, fixtures: globalFixtureStore}, nil
 	}, &AdapterMeta{
 		DisplayName:  "Mock (测试用)",
 		Description:  "返回伪造响应，不调用上游。用于开发/CI/Demo。",

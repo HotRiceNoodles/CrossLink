@@ -294,9 +294,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
 		go infra.RegistrySync.Start(appCtx)
 	}
-	// VCR recording: construct fixture repo + enable recording on providers.
+	// VCR recording/playback: construct fixture repo, enable on providers + mock.
 	fixtureRepo := repository.NewFixtureRepo(db)
 	handlers.Provider.SetFixtureStore(fixtureRepo)
+	provider.SetGlobalFixtureStore(fixtureRepo)
 	// TemplateRegistrySync: keep prompt-template cache consistent across instances.
 	if templateSync != nil {
 		go templateSync.Start(appCtx)
