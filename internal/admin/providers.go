@@ -30,6 +30,7 @@ type ProviderHandler struct {
 	auditSvc       *service.AuditService
 	usageSvc       *service.UsageService
 	latencySvc     *service.LatencyService
+	fixtureStore   provider.FixtureStore // nil = recording disabled
 	// OnRegistryChange is called after a local registry mutation (create/update/delete).
 	// action is "reload" or "remove"; providerName is the affected provider.
 	// When nil (single-instance Community), the call is skipped.
@@ -37,8 +38,11 @@ type ProviderHandler struct {
 }
 
 func NewProviderHandler(repo ProviderRepository, modelRepo ProviderModelRepository, cache CacheInvalidator, registry *provider.Registry, cacheSvc *service.CacheService, secretResolver *secret.SecretResolver, encStore *secret.EncryptedDBStore, auditSvc *service.AuditService, usageSvc *service.UsageService, latencySvc *service.LatencyService) *ProviderHandler {
-	return &ProviderHandler{repo: repo, modelRepo: modelRepo, cache: cache, registry: registry, cacheSvc: cacheSvc, secretResolver: secretResolver, encStore: encStore, auditSvc: auditSvc, usageSvc: usageSvc, latencySvc: latencySvc}
+	return &ProviderHandler{repo: repo, modelRepo: modelRepo, cache: cache, registry: registry, cacheSvc: cacheSvc, secretResolver: secretResolver, encStore: encStore, auditSvc: auditSvc, usageSvc: usageSvc, latencySvc: latencySvc, fixtureStore: nil}
 }
+
+// SetFixtureStore enables VCR recording. Called from app.go after construction.
+func (h *ProviderHandler) SetFixtureStore(store provider.FixtureStore) { h.fixtureStore = store }
 
 func (h *ProviderHandler) List(c *gin.Context) {
 	orgID := GetOrgID(c)
@@ -291,6 +295,11 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 	if err != nil {
 		slog.Error("failed to create provider", "name", p.Name, "adapter_type", p.AdapterType, "error", err)
 		return
+	}
+	// VCR recording: wrap in RecordingProvider when extra_config.record=true.
+	if provider.IsRecordEnabled(cp.ExtraConfig) && h.fixtureStore != nil {
+		prov = provider.NewRecordingProvider(prov, p.Name, h.fixtureStore)
+		slog.Info("recording enabled for provider", "name", p.Name)
 	}
 	h.registry.Register(p.Name, prov)
 	slog.Info("synced provider to registry", "name", p.Name, "adapter_type", p.AdapterType)

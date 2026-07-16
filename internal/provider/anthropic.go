@@ -191,6 +191,7 @@ func init() {
 		Capabilities: []string{"chat", "stream"},
 		ExtraFields: []AdapterField{
 			{Name: "api_version", Type: "text", Label: "API Version", Placeholder: "2023-06-01", DefaultValue: "2023-06-01"},
+			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
 		},
 	})
 }

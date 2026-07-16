@@ -187,6 +187,12 @@ func (s *RegistrySync) reloadProvider(name string) {
 		slog.Error("registry_sync: create provider failed", "name", name, "adapter_type", p.AdapterType, "error", err)
 		return
 	}
+	// VCR recording: wrap when record=true. store=nil → activeStore() reads
+	// globalFixtureStore dynamically (same pattern as MockProvider).
+	if IsRecordEnabled(cp.ExtraConfig) {
+		prov = NewRecordingProvider(prov, name, nil)
+		slog.Info("registry_sync: recording enabled", "name", name)
+	}
 
 	s.registry.Register(name, prov)
 	slog.Info("registry_sync: reloaded provider", "name", name, "adapter_type", p.AdapterType)

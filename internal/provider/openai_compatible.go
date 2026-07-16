@@ -504,7 +504,9 @@ func init() {
 		NeedsBaseURL: true,
 		NeedsAPIKey:  true,
 		Capabilities: []string{"chat", "stream", "embeddings", "images", "video", "audio_speech", "audio_transcription", "audio_translation", "batch"},
-		ExtraFields:  []AdapterField{},
+		ExtraFields: []AdapterField{
+			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
+		},
 	})
 
 	RegisterAdapter("ollama", func(p *model.Provider, timeout time.Duration) (Provider, error) {
@@ -515,6 +517,8 @@ func init() {
 		NeedsBaseURL: true,
 		NeedsAPIKey:  false,
 		Capabilities: []string{"chat", "stream"},
-		ExtraFields:  []AdapterField{},
+		ExtraFields: []AdapterField{
+			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
+		},
 	})
 }

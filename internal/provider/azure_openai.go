@@ -183,6 +183,7 @@ func init() {
 		ExtraFields: []AdapterField{
 			{Name: "deployment_name", Type: "text", Required: true, Label: "Deployment Name", Placeholder: "my-gpt4-deployment"},
 			{Name: "api_version", Type: "text", Label: "API Version", DefaultValue: "2024-02-15-preview"},
+			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
 		},
 	})
 }

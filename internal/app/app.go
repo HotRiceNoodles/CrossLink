@@ -294,6 +294,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
 		go infra.RegistrySync.Start(appCtx)
 	}
+	// VCR recording: construct fixture repo + enable recording on providers.
+	fixtureRepo := repository.NewFixtureRepo(db)
+	handlers.Provider.SetFixtureStore(fixtureRepo)
 	// TemplateRegistrySync: keep prompt-template cache consistent across instances.
 	if templateSync != nil {
 		go templateSync.Start(appCtx)
@@ -621,6 +624,13 @@ func RegisterProvidersFromDB(cfg *config.Config, db *gorm.DB, registry *provider
 		if err != nil {
 			slog.Warn("skipping unsupported provider", "name", p.Name, "adapter_type", p.AdapterType, "error", err)
 			continue
+		}
+		// VCR recording: wrap in RecordingProvider when extra_config.record=true.
+		// store=nil is fine — RecordingProvider.activeStore() reads globalFixtureStore
+		// dynamically, which is set later in FullSetup.
+		if provider.IsRecordEnabled(p.ExtraConfig) {
+			prov = provider.NewRecordingProvider(prov, p.Name, nil)
+			slog.Info("recording enabled at startup", "name", p.Name)
 		}
 		registry.Register(p.Name, prov)
 		slog.Info("registered provider", "name", p.Name, "adapter_type", p.AdapterType)
