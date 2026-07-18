@@ -25,6 +25,28 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 		// middleware (mounted on the gateway group). Failure counting is done
 		// solely by RecordAuthFailure below on the failure path.
 
+		// Internal replay bypass: if X-Replay-KeyID is present AND request is from
+		// localhost, resolve the key by ID directly (no plaintext needed). This lets
+		// the admin replay Debug entries from the UI without pasting API keys.
+		if replayKeyID := c.GetHeader("X-Replay-KeyID"); replayKeyID != "" && isLocalhost(c.ClientIP()) && keySvc != nil {
+			var keyID int64
+			for _, ch := range replayKeyID {
+				if ch >= '0' && ch <= '9' {
+					keyID = keyID*10 + int64(ch-'0')
+				}
+			}
+			if keyID > 0 {
+				key, err := keySvc.GetByID(c.Request.Context(), 0, keyID)
+				if err == nil && key != nil && key.Status == 1 {
+					c.Set("api_key", key)
+					c.Set("api_key_id", key.ID)
+					c.Set("team_id", key.TeamID)
+					c.Next()
+					return
+				}
+			}
+		}
+
 		apiKey := extractAPIKey(c)
 		if apiKey == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -243,6 +265,11 @@ func extractAPIKey(c *gin.Context) string {
 		}
 	}
 	return apiKey
+}
+
+// isLocalhost reports whether the client IP is a loopback address.
+func isLocalhost(ip string) bool {
+	return ip == "127.0.0.1" || ip == "::1" || ip == "[::1]"
 }
 
 // ExtractAPIKey extracts the API key from x-api-key header or Authorization Bearer token.

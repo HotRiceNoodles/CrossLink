@@ -1,11 +1,16 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/debug"
@@ -13,12 +18,24 @@ import (
 )
 
 type DebugHandler struct {
-	store    *debug.Store
-	auditSvc *service.AuditService
+	store      *debug.Store
+	auditSvc   *service.AuditService
+	port       int
+	httpClient *http.Client
 }
 
-func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService) *DebugHandler {
-	return &DebugHandler{store: store, auditSvc: auditSvc}
+func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, port int) *DebugHandler {
+	return &DebugHandler{
+		store:    store,
+		auditSvc: auditSvc,
+		port:     port,
+		httpClient: &http.Client{
+			Timeout: 120 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse // don't follow redirects
+			},
+		},
+	}
 }
 
 type debugEntrySummary struct {
@@ -182,6 +199,110 @@ func (h *DebugHandler) Clear(c *gin.Context) {
 }
 
 const maxDebugBodySize = 10 * 1024 // 10 KB
+
+// --- Replay ---
+
+var replayPathWhitelist = map[string]bool{
+	"/v1/chat/completions": true,
+	"/v1/messages":         true,
+}
+
+// Replay loads a historical Debug entry, merges admin-supplied overrides into
+// the original request body, and re-sends it through the full gateway chain via
+// an internal HTTP call to localhost. The admin provides an API key whose quota
+// is consumed. See docs/plans/2026-07-17-request-replay-design.md.
+func (h *DebugHandler) Replay(c *gin.Context) {
+	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)
+	if err != nil {
+		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
+		return
+	}
+	entry := h.store.Get(seq)
+	if entry == nil {
+		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
+		return
+	}
+	if orgID := GetOrgID(c); orgID != 0 && entry.OrgID != orgID {
+		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
+		return
+	}
+
+	// Validate: truncated / path whitelist.
+	if entry.Truncated {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_truncated: original body was truncated, cannot replay")
+		return
+	}
+	if !replayPathWhitelist[entry.Path] {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_path_not_allowed: only /v1/chat/completions and /v1/messages are replayable")
+		return
+	}
+
+	var input struct {
+		Overrides map[string]any `json:"overrides"`
+		KeyID     int64          `json:"key_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
+	}
+
+	// Parse original body and apply top-level overrides.
+	var body map[string]any
+	if err := json.Unmarshal(entry.ReqBody, &body); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_invalid_body: original request body is not valid JSON")
+		return
+	}
+	for k, v := range input.Overrides {
+		body[k] = v
+	}
+	delete(body, "x_context")  // defensive: ContextAssembler already ran before Debug
+	delete(body, "stream")     // replay as non-streaming (MVP doesn't proxy SSE)
+
+	newBody, err := json.Marshal(body)
+	if err != nil {
+		internalErr(c, err, "replay marshal failed")
+		return
+	}
+
+	// Internal HTTP call to self — full gateway chain.
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", h.port, entry.Path)
+	req, err := http.NewRequestWithContext(c.Request.Context(), entry.Method, url, bytes.NewReader(newBody))
+	if err != nil {
+		internalErr(c, err, "replay request creation failed")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Replay-KeyID", strconv.FormatInt(input.KeyID, 10))
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		slog.Error("replay: internal HTTP call failed", "seq", seq, "error", err)
+		errorResp(c, http.StatusInternalServerError, "replay_failed", "internal replay request failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
+	if err != nil {
+		errorResp(c, http.StatusInternalServerError, "replay_failed", "failed to read replay response")
+		return
+	}
+
+	// Audit.
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{
+			"key_id":      input.KeyID,
+			"resp_status": resp.StatusCode,
+		}))
+	}
+
+	// Transparent passthrough: copy status + content-type + body.
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" {
+		c.Header("Content-Type", contentType)
+	}
+	c.Data(resp.StatusCode, contentType, respBody)
+}
 
 // truncateBody truncates a string to maxDebugBodySize and appends "[truncated]" if needed.
 func truncateBody(s string) string {

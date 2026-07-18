@@ -93,6 +93,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Debug: NewDebugHandler(
 			deps.DebugStore,
 			deps.AuditSvc,
+			deps.Config.Server.Port,
 		),
 		License: NewLicenseHandler(deps.DB, deps.Config),
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
