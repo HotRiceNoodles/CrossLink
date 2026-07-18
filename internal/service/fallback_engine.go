@@ -11,6 +11,10 @@ import (
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
+	otelattr "go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // RouteResolver resolves model names to route results.
@@ -222,14 +226,26 @@ func (e *FallbackEngine) attemptNonStream(
 	if attempt > 0 {
 		callCtx = upstream.WithFallback(callCtx, true)
 	}
+	// Create a provider child span so Jaeger/Tempo shows gateway vs upstream latency.
+	tracer := otel.Tracer("github.com/crosslink/fallback")
+	callCtx, span := tracer.Start(callCtx, "provider.chat",
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			otelattr.String("llm.provider", name),
+			otelattr.String("llm.model", model),
+		),
+	)
+	defer span.End()
 	resp, err = callFn(callCtx, route)
 	callCancel()
 	latency = time.Since(start).Milliseconds()
 
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		classified = e.classify(route, err)
 		return resp, classified, latency, err
 	}
+	span.SetAttributes(otelattr.Int64("llm.latency_ms", latency))
 	if e.health != nil {
 		e.health.RecordSuccessModel(name, model)
 	}
@@ -347,9 +363,20 @@ func (e *FallbackEngine) attemptStream(
 	if attempt > 0 {
 		streamCtx = upstream.WithFallback(streamCtx, true)
 	}
+	// Provider child span for stream path.
+	tracer := otel.Tracer("github.com/crosslink/fallback")
+	streamCtx, span := tracer.Start(streamCtx, "provider.stream",
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			otelattr.String("llm.provider", name),
+			otelattr.String("llm.model", model),
+		),
+	)
+	defer span.End()
 	ch, err = connectFn(streamCtx, route)
 	connectCancel()
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, e.classify(route, err), err
 	}
 	if e.health != nil {
