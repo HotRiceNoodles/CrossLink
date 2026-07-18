@@ -71,6 +71,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	var teamID int64
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
+	priceMult := readPriceMultiplier(c)
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		keyID = key.ID
 		if key.TeamID != nil {
@@ -100,6 +101,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			RetryCount:     retryCount,
 			SessionID:      sessionID,
 			TemplateID:     templateID,
+				PriceMultiplier: priceMult,
 		})
 	})
 }
@@ -242,6 +244,7 @@ func writeStreamInterruptedAnthropic(w io.Writer) {
 func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
+	priceMult := readPriceMultiplier(c)
 	// Idempotency cache check
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		var idemKeyID int64
@@ -437,6 +440,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
 			SessionID:       sessionID,
 			TemplateID:      templateID,
+				PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -476,6 +480,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
+	priceMult := readPriceMultiplier(c)
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
@@ -810,6 +815,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			CacheReadTokens: cacheReadTokens,
 			SessionID:       sessionID,
 			TemplateID:      templateID,
+				PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {

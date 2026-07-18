@@ -371,6 +371,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/usage/daily", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.DailyTrend)
 		adminGroup.GET("/usage/models", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.ModelDistribution)
 		adminGroup.GET("/usage/templates", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.TemplateStats)
+		adminGroup.GET("/usage/reconciliation/export", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.ReconciliationExport)
 		adminGroup.GET("/usage/team-stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.TeamStats)
 		adminGroup.GET("/routing/stats", middleware.RequireAction(permCache, "routing:stats"), handlers.Routing.Stats)
 

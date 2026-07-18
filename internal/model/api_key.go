@@ -20,6 +20,7 @@ type APIKey struct {
 	RPMLimit      int            `gorm:"not null;default:0" json:"rpm_limit"`
 	MaxBudget     float64        `gorm:"type:decimal(12,4);not null;default:0" json:"max_budget"`
 	BudgetPeriod  string         `gorm:"size:16;not null;default:'monthly'" json:"budget_period"`
+	PriceMultiplier float64      `gorm:"type:decimal(6,4);not null;default:1.0" json:"price_multiplier"` // 1.0 = no markup; 1.3 = charge customer 30% more
 	MaxCalls      int            `gorm:"not null;default:0" json:"max_calls"`
 	CallPeriod    string         `gorm:"size:16;not null;default:'daily'" json:"call_period"`
 	ExpiresAt     *time.Time     `json:"expires_at"`

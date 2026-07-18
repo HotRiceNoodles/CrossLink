@@ -17,6 +17,7 @@ type UsageLog struct {
 	InputTokens      int        `gorm:"not null;default:0" json:"input_tokens"`
 	OutputTokens     int        `gorm:"not null;default:0" json:"output_tokens"`
 	Cost             float64    `gorm:"type:decimal(16,8);not null;default:0" json:"cost"`
+	BillableCost     float64    `gorm:"type:decimal(16,8);not null;default:0" json:"billable_cost"` // upstream cost × key price_multiplier
 	LatencyMs        int        `gorm:"not null;default:0" json:"latency_ms"`
 	FirstTokenMs     *int       `json:"first_token_ms"`
 	StatusCode       int        `gorm:"not null" json:"status_code"`

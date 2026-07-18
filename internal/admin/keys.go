@@ -47,18 +47,19 @@ func (h *KeyHandler) checkKeyOwnership(c *gin.Context, key *model.APIKey) bool {
 
 func (h *KeyHandler) Create(c *gin.Context) {
 	var input struct {
-		Name          string   `json:"name" binding:"required,max=64"`
-		Email         string   `json:"email" binding:"omitempty,email"`
-		Lang          string   `json:"lang"`
-		AllowedModels []string `json:"allowed_models"`
-		AllowedRoutes []string `json:"allowed_routes"`
-		TPMLimit      int      `json:"tpm_limit"`
-		RPMLimit      int      `json:"rpm_limit"`
-		MaxBudget     float64  `json:"max_budget"`
-		BudgetPeriod  string   `json:"budget_period"`
-		MaxCalls      int       `json:"max_calls"`
-		CallPeriod    string    `json:"call_period"`
-		ExpiresAt     *time.Time `json:"expires_at"`
+		Name            string   `json:"name" binding:"required,max=64"`
+		Email           string   `json:"email" binding:"omitempty,email"`
+		Lang            string   `json:"lang"`
+		AllowedModels   []string `json:"allowed_models"`
+		AllowedRoutes   []string `json:"allowed_routes"`
+		TPMLimit        int      `json:"tpm_limit"`
+		RPMLimit        int      `json:"rpm_limit"`
+		MaxBudget       float64  `json:"max_budget"`
+		BudgetPeriod    string   `json:"budget_period"`
+		MaxCalls        int      `json:"max_calls"`
+		CallPeriod      string   `json:"call_period"`
+		ExpiresAt       *time.Time `json:"expires_at"`
+		PriceMultiplier *float64 `json:"price_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
@@ -84,22 +85,27 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
+	if input.PriceMultiplier != nil && (*input.PriceMultiplier < 0.01 || *input.PriceMultiplier > 10) {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "price_multiplier must be between 0.01 and 10")
+		return
+	}
 
 	result, err := h.keySvc.Create(c.Request.Context(), &service.CreateKeyInput{
-		Name:          input.Name,
-		Email:         input.Email,
-		AllowedModels: input.AllowedModels,
-		AllowedRoutes: input.AllowedRoutes,
-		TPMLimit:      input.TPMLimit,
-		RPMLimit:      input.RPMLimit,
-		MaxBudget:     input.MaxBudget,
-		BudgetPeriod:  input.BudgetPeriod,
-		MaxCalls:      input.MaxCalls,
-		CallPeriod:    input.CallPeriod,
-		ExpiresAt:     input.ExpiresAt,
-		CreatedByID:   GetUserID(c),
-		TeamID:        GetTeamID(c),
-		OrgID:         GetOrgID(c),
+		Name:            input.Name,
+		Email:           input.Email,
+		AllowedModels:   input.AllowedModels,
+		AllowedRoutes:   input.AllowedRoutes,
+		TPMLimit:        input.TPMLimit,
+		RPMLimit:        input.RPMLimit,
+		MaxBudget:       input.MaxBudget,
+		BudgetPeriod:    input.BudgetPeriod,
+		MaxCalls:        input.MaxCalls,
+		CallPeriod:      input.CallPeriod,
+		ExpiresAt:       input.ExpiresAt,
+		PriceMultiplier: input.PriceMultiplier,
+		CreatedByID:     GetUserID(c),
+		TeamID:          GetTeamID(c),
+		OrgID:           GetOrgID(c),
 	})
 	if err != nil {
 		internalErr(c, err, "create key failed")
@@ -149,16 +155,17 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	var input struct {
-		Status        *int16     `json:"status"`
-		TPMLimit      *int       `json:"tpm_limit"`
-		RPMLimit      *int       `json:"rpm_limit"`
-		MaxBudget     *float64   `json:"max_budget"`
-		BudgetPeriod  *string    `json:"budget_period"`
-		MaxCalls      *int       `json:"max_calls"`
-		CallPeriod    *string    `json:"call_period"`
-		AllowedModels *[]string  `json:"allowed_models"`
-		AllowedRoutes *[]string  `json:"allowed_routes"`
-		ExpiresAt     *time.Time `json:"expires_at"`
+		Status          *int16     `json:"status"`
+		TPMLimit        *int       `json:"tpm_limit"`
+		RPMLimit        *int       `json:"rpm_limit"`
+		MaxBudget       *float64   `json:"max_budget"`
+		BudgetPeriod    *string    `json:"budget_period"`
+		MaxCalls        *int       `json:"max_calls"`
+		CallPeriod      *string    `json:"call_period"`
+		AllowedModels   *[]string  `json:"allowed_models"`
+		AllowedRoutes   *[]string  `json:"allowed_routes"`
+		ExpiresAt       *time.Time `json:"expires_at"`
+		PriceMultiplier *float64   `json:"price_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
@@ -181,6 +188,10 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
+	if input.PriceMultiplier != nil && (*input.PriceMultiplier < 0.01 || *input.PriceMultiplier > 10) {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "price_multiplier must be between 0.01 and 10")
+		return
+	}
 
 	orgID := GetOrgID(c)
 	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
@@ -194,7 +205,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod, "expires_at": key.ExpiresAt}
+	before := map[string]any{"name": key.Name, "status": key.Status, "tpm_limit": key.TPMLimit, "rpm_limit": key.RPMLimit, "max_budget": key.MaxBudget, "budget_period": key.BudgetPeriod, "allowed_models": string(key.AllowedModels), "allowed_routes": string(key.AllowedRoutes), "max_calls": key.MaxCalls, "call_period": key.CallPeriod, "expires_at": key.ExpiresAt, "price_multiplier": key.PriceMultiplier}
 
 	if input.Status != nil {
 		key.Status = *input.Status
@@ -216,6 +227,9 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 	if input.CallPeriod != nil {
 		key.CallPeriod = *input.CallPeriod
+	}
+	if input.PriceMultiplier != nil {
+		key.PriceMultiplier = *input.PriceMultiplier
 	}
 	if input.AllowedModels != nil {
 		data, err := json.Marshal(*input.AllowedModels)

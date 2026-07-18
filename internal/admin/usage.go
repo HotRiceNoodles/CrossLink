@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -424,4 +426,78 @@ func (h *UsageHandler) TeamStats(c *gin.Context) {
 		results = []TeamStat{}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": results, "currency": primaryCurrency})
+}
+
+// --- Reconciliation Export ---
+
+type reconciliationRow struct {
+	KeyName      string  `json:"key_name"`
+	KeyPrefix    string  `json:"key_prefix"`
+	ModelUsed    string  `json:"model_used"`
+	Requests     int64   `json:"requests"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	UpstreamCost float64 `json:"upstream_cost"`
+	BillableCost float64 `json:"billable_cost"`
+	Profit       float64 `json:"profit"`
+	Currency     string  `json:"currency"`
+}
+
+// ReconciliationExport exports per-Key+Model aggregated usage as CSV for
+// customer billing reconciliation. Uses /usage/reconciliation/export path
+// to avoid conflicting with the Enterprise-gated /usage/export.
+func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
+	days := 30
+	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 {
+		days = d
+	}
+	keyIDStr := c.Query("key_id")
+
+	q := h.db.WithContext(c.Request.Context()).
+		Table("usage_logs AS u").
+		Select(`k.name AS key_name, COALESCE(k.key_prefix, '') AS key_prefix,
+			u.model_used,
+			COUNT(*) AS requests,
+			COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+			COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+			COALESCE(SUM(u.cost), 0) AS upstream_cost,
+			COALESCE(SUM(u.billable_cost), 0) AS billable_cost,
+			COALESCE(SUM(u.billable_cost - u.cost), 0) AS profit,
+			u.currency`).
+		Joins("LEFT JOIN api_keys k ON k.id = u.api_key_id").
+		Where("u.created_at >= ?", time.Now().AddDate(0, 0, -days))
+
+	if keyIDStr != "" {
+		q = q.Where("u.api_key_id = ?", keyIDStr)
+	}
+	if orgID := GetOrgID(c); orgID != 0 {
+		q = q.Where("u.org_id = ? OR u.org_id IS NULL", orgID)
+	}
+
+	var rows []reconciliationRow
+	q.Group("k.name, k.key_prefix, u.model_used, u.currency").
+		Order("billable_cost DESC").
+		Scan(&rows)
+
+	// Build CSV with UTF-8 BOM for Excel compatibility.
+	var buf bytes.Buffer
+	buf.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+	startDate := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	endDate := time.Now().Format("2006-01-02")
+	buf.WriteString(fmt.Sprintf("# 日期范围: %s ~ %s\n", startDate, endDate))
+	buf.WriteString("Key名称,Key前缀,模型,请求数,Input Tokens,Output Tokens,上游成本,计费成本,利润,币种\n")
+	for _, r := range rows {
+		profit := "-"
+		if r.BillableCost > 0 {
+			profit = strconv.FormatFloat(r.Profit, 'f', 4, 64)
+		}
+		fmt.Fprintf(&buf, "%s,%s,%s,%d,%d,%d,%.4f,%.4f,%s,%s\n",
+			r.KeyName, r.KeyPrefix, r.ModelUsed, r.Requests,
+			r.InputTokens, r.OutputTokens,
+			r.UpstreamCost, r.BillableCost, profit, r.Currency)
+	}
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"reconciliation-%s.csv\"", endDate))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
 }

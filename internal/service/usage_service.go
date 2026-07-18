@@ -112,6 +112,7 @@ type UsageEntry struct {
 	SessionID           string
 	TemplateID      *int64 // prompt template that assembled this request (nil = none)
 	PrecomputedCost float64
+	PriceMultiplier float64 // key's price multiplier (1.0 = no markup)
 }
 
 func (e *UsageEntry) cost() float64 {
@@ -122,6 +123,11 @@ func (e *UsageEntry) cost() float64 {
 }
 
 func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
+	mult := entry.PriceMultiplier
+	if mult <= 0 {
+		mult = 1.0
+	}
+	upstreamCost := entry.cost()
 	log := &model.UsageLog{
 		RequestID:      uuid.New().String()[:8],
 		RouteType:      entry.RouteType,
@@ -129,7 +135,8 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 		ModelUsed:      entry.ModelUsed,
 		InputTokens:    entry.InputTokens,
 		OutputTokens:   entry.OutputTokens,
-		Cost:           entry.cost(),
+		Cost:           upstreamCost,
+		BillableCost:   upstreamCost * mult,
 		Currency:       model.ValidCurrency(entry.Currency),
 		LatencyMs:      int(entry.LatencyMs),
 		StatusCode:     entry.StatusCode,

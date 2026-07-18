@@ -46,8 +46,9 @@ type CreateKeyInput struct {
 	BudgetPeriod  string
 	MaxCalls      int
 	CallPeriod    string
-	ExpiresAt     *time.Time
-	CreatedByID   int64
+	ExpiresAt       *time.Time
+	PriceMultiplier *float64
+	CreatedByID     int64
 	TeamID        int64
 	OrgID         int64
 }
@@ -83,6 +84,7 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 		MaxCalls:     input.MaxCalls,
 		CallPeriod:   input.CallPeriod,
 		ExpiresAt:     input.ExpiresAt,
+		PriceMultiplier: multOrDefault(input.PriceMultiplier),
 	}
 	if len(input.AllowedModels) > 0 {
 		key.AllowedModels, _ = json.Marshal(input.AllowedModels)
@@ -341,4 +343,12 @@ func generateRawKey() (string, error) {
 		return "", fmt.Errorf("crypto/rand unavailable: %w", err)
 	}
 	return "cl-" + hex.EncodeToString(b), nil
+}
+
+// multOrDefault returns the multiplier value, defaulting to 1.0 if nil.
+func multOrDefault(m *float64) float64 {
+	if m == nil || *m <= 0 {
+		return 1.0
+	}
+	return *m
 }
