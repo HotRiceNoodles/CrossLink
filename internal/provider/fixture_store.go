@@ -43,16 +43,3 @@ func RequestHash(req *domain.OpenAIRequest) string {
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
-
-// globalFixtureStore is the process-wide FixtureStore, set once at startup by
-// app.go via SetGlobalFixtureStore. When non-nil, MockProvider gets VCR playback
-// and RecordingProvider gets VCR recording without each carrying their own handle.
-// Both read it dynamically (not at construction) because provider instances are
-// built during ProvideInfrastructure → RegisterProvidersFromDB, BEFORE
-// SetGlobalFixtureStore runs in FullSetup — caching then would capture nil.
-var globalFixtureStore FixtureStore
-
-// SetGlobalFixtureStore installs the process-wide fixture store, enabling VCR
-// recording (RecordingProvider) and playback (MockProvider). Called once from
-// app.go at startup.
-func SetGlobalFixtureStore(store FixtureStore) { globalFixtureStore = store }

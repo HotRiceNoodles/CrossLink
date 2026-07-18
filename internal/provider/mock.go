@@ -260,6 +260,14 @@ func chunkWithFinish(completionTokens int) domain.SSEChunk {
 	}}
 }
 
+// globalFixtureStore is set once at startup by app.go via SetGlobalFixtureStore.
+// When non-nil, every MockProvider instance gets VCR playback capability.
+var globalFixtureStore FixtureStore
+
+// SetGlobalFixtureStore enables VCR playback on all MockProvider instances
+// constructed after this call. Called once from app.go at startup.
+func SetGlobalFixtureStore(store FixtureStore) { globalFixtureStore = store }
+
 func init() {
 	RegisterAdapter("mock", func(p *model.Provider, timeout time.Duration) (Provider, error) {
 		rt, delay := parseMockConfig(p.ExtraConfig)
