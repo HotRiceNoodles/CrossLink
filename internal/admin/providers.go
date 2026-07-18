@@ -180,7 +180,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		}
 		p.BaseURL = *input.BaseURL
 	}
-	if input.APIKey != nil {
+	if input.APIKey != nil && *input.APIKey != "" {
 		p.APIKey = *input.APIKey
 		if p.APIKey != "" && h.encStore != nil && !secret.IsReference(p.APIKey) && !h.encStore.IsEncrypted(p.APIKey) {
 			encrypted, err := h.encStore.Encrypt(p.APIKey)

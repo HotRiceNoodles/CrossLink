@@ -115,6 +115,82 @@ func TestProviderHandler_Create_InvalidRequest(t *testing.T) {
 	}
 }
 
+// --- Update tests ---
+
+// TestProviderHandler_Update_EmptyAPIKey_PreservesExisting verifies that sending
+// an empty api_key on edit (which the frontend does when opening the edit dialog)
+// does NOT overwrite the existing key with an empty value.
+func TestProviderHandler_Update_EmptyAPIKey_PreservesExisting(t *testing.T) {
+	repo, _ := defaultProviderMocks()
+	const existingKey = "secret-existing-key"
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: "test-provider", Status: 1, AdapterType: "openai_compatible", APIKey: existingKey}, nil
+	}
+	var saved *model.Provider
+	repo.updateFn = func(ctx context.Context, p *model.Provider) error {
+		saved = p
+		return nil
+	}
+	h := newProviderHandler(repo, nil)
+
+	body := map[string]any{
+		"display_name": "Updated Name",
+		"api_key":      "",
+	}
+	c, w := newTestContext(t, http.MethodPut, "/api/v1/providers/1", body)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "1"}})
+
+	h.Update(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if saved == nil {
+		t.Fatal("updateFn was not called")
+	}
+	if saved.APIKey != existingKey {
+		t.Errorf("APIKey = %q, want %q (existing key should be preserved when api_key is empty)", saved.APIKey, existingKey)
+	}
+	if saved.DisplayName != "Updated Name" {
+		t.Errorf("DisplayName = %q, want %q", saved.DisplayName, "Updated Name")
+	}
+}
+
+// TestProviderHandler_Update_NewAPIKey_Overwrites verifies that a non-empty
+// api_key on edit replaces the existing key.
+func TestProviderHandler_Update_NewAPIKey_Overwrites(t *testing.T) {
+	repo, _ := defaultProviderMocks()
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: "test-provider", Status: 1, AdapterType: "openai_compatible", APIKey: "old-key"}, nil
+	}
+	var saved *model.Provider
+	repo.updateFn = func(ctx context.Context, p *model.Provider) error {
+		saved = p
+		return nil
+	}
+	h := newProviderHandler(repo, nil)
+
+	body := map[string]any{
+		"api_key": "new-key",
+	}
+	c, w := newTestContext(t, http.MethodPut, "/api/v1/providers/1", body)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "1"}})
+
+	h.Update(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if saved == nil {
+		t.Fatal("updateFn was not called")
+	}
+	if saved.APIKey != "new-key" {
+		t.Errorf("APIKey = %q, want %q", saved.APIKey, "new-key")
+	}
+}
+
 // --- Delete tests ---
 
 func TestProviderHandler_Delete_HasModels(t *testing.T) {
