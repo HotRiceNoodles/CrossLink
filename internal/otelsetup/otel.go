@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
-	"google.golang.org/grpc/credentials"
 )
 
 // InitTracer initializes the OpenTelemetry tracing pipeline.
@@ -98,12 +97,7 @@ func newOTLPExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 		addr := strings.TrimPrefix(endpoint, "grpc://")
 		var opts []otlptracegrpc.Option
 		opts = append(opts, otlptracegrpc.WithEndpoint(addr))
-		if insecure == "true" || !strings.HasPrefix(addr, "https") {
-			opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(nil)))
-			// For insecure connections, use WithInsecure instead.
-			opts = opts[:0] // reset
-			opts = append(opts, otlptracegrpc.WithEndpoint(addr))
-			//nolint:staticcheck // WithInsecure is the correct option for non-TLS gRPC
+		if insecure == "true" {
 			opts = append(opts, otlptracegrpc.WithInsecure())
 		}
 		slog.Info("OTLP gRPC exporter", "endpoint", addr, "insecure", insecure)
