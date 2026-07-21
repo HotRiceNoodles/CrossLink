@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -245,8 +243,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Prometheus metrics endpoint (requires gateway auth key)
 	r.GET("/metrics", middleware.GatewayMetricsAuth(cfg.Gateway.AuthKey), gin.WrapH(promhttp.Handler()))
 
-	// Serve Vue3 frontend static files
-	serveFrontend(r)
+	// NOTE: the gateway serves API traffic only. Frontend static files (admin SPA
+	// + customer portal) are served by the reverse proxy (Caddy/nginx) or a
+	// separate static server — the backend intentionally has no knowledge of any
+	// frontend entry filename. See deployments/Caddyfile and README.
 
 	// Commercial public route extension point (SSO login, callback, metadata)
 	// Must run BEFORE login route registration so that commercial builds can
@@ -663,40 +663,6 @@ func InitRedis(cfg *config.RedisConfig) *redis.Client {
 		slog.Info("redis connected", "addr", cfg.Addr())
 	}
 	return rdb
-}
-
-func serveFrontend(r *gin.Engine) {
-	distDir := "web/dist"
-	if _, err := os.Stat(distDir); os.IsNotExist(err) {
-		slog.Info("frontend dist not found, skipping static file serving")
-		return
-	}
-
-	absPath, _ := filepath.Abs(distDir)
-	r.Use(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		// Skip API and gateway paths
-		if len(path) >= 3 && (path[:3] == "/v1" || path[:7] == "/admin/" || path[:6] == "/docs/" || path == "/health" || path == "/metrics") {
-			c.Next()
-			return
-		}
-		// Try to serve static file
-		filePath := filepath.Join(absPath, filepath.Clean(path))
-		// Prevent path traversal: ensure resolved path is within distDir
-		if !strings.HasPrefix(filePath, absPath+string(os.PathSeparator)) && filePath != absPath {
-			c.AbortWithStatus(http.StatusNotFound)
-			return
-		}
-		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
-			http.ServeFile(c.Writer, c.Request, filePath)
-			c.Abort()
-			return
-		}
-		// Fallback to index.html for Vue Router history mode
-		http.ServeFile(c.Writer, c.Request, filepath.Join(absPath, "index.html"))
-		c.Abort()
-	})
-	slog.Info("serving frontend", "dir", absPath)
 }
 
 func ensureAdminUser(db *gorm.DB, cfg *config.AdminConfig) {
