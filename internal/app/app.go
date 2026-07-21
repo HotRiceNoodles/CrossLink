@@ -193,6 +193,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, nil)
 	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
 	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
+	portalUsageHandler := handler.NewPortalUsageHandler(svcs.BudgetSvc)
 	templateCatalogHandler := handler.NewTemplateCatalogHandler(db)
 
 	// Video gateway
@@ -455,6 +456,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageGroup := r.Group("/")
 	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
+	// Portal self-service API: same auth, but returns the portal-owned clean
+	// contract (decoupled from /v1/usage internal shape). See PortalUsageHandler.
+	usageGroup.GET("/portal/api/usage", portalUsageHandler.GetUsage)
 	// Consumer discovery: key holders list available prompt templates (metadata only,
 	// prompt content stays server-side) + ready-to-use curl examples. See §B.
 	usageGroup.GET("/v1/templates", templateCatalogHandler.List)
