@@ -424,7 +424,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Gateway endpoints (auth + model permission + rate limit)
 	gwGroup := r.Group("/")
 	gwGroup.Use(dm.Middleware())
-	gwGroup.Use(middleware.ConcurrencyLimit(2000))
+	concurrencyLimit := cfg.Gateway.ConcurrencyLimit
+	if concurrencyLimit <= 0 {
+		concurrencyLimit = 2000
+	}
+	gwGroup.Use(middleware.ConcurrencyLimit(concurrencyLimit))
 	gwGroup.Use(middleware.ReadBody(10 << 20))
 	gwGroup.Use(middleware.ContextAssembler(templateRegistry, ext.AssemblerHook))
 	gwGroup.Use(debug.Middleware(debugStore))

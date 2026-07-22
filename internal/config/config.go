@@ -110,6 +110,11 @@ type GatewayConfig struct {
 	// restricted ranges; cloud-metadata (169.254.x.x) and loopback stay blocked
 	// unless explicitly listed. Env override: CL_GATEWAY_INTERNAL_ALLOW_CIDRS.
 	InternalAllowCIDRs []string `mapstructure:"internal_allow_cidrs"`
+	// ConcurrencyLimit caps the number of in-flight gateway (LLM proxy)
+	// requests. 0 means use the built-in default (2000). Lower it for
+	// resource-constrained or public demo deployments. Env override:
+	// CL_GATEWAY_CONCURRENCY_LIMIT.
+	ConcurrencyLimit int `mapstructure:"concurrency_limit"`
 }
 
 // DemoConfig controls the optional zero-cost demo mode (public /demo try page
@@ -454,6 +459,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("captcha.slider.bg_width", 300)
 	v.SetDefault("captcha.slider.bg_height", 150)
 
+	v.SetDefault("gateway.concurrency_limit", 2000)
 	v.SetDefault("demo.enabled", false)
 	v.SetDefault("demo.api_key", "")
 	v.SetDefault("captcha.slider.piece_size", 44)
