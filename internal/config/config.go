@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -32,6 +33,7 @@ type Config struct {
 	Crypto         CryptoConfig         `mapstructure:"crypto"`
 	DataLens       DataLensConfig       `mapstructure:"datalens"`
 	Captcha        CaptchaConfig        `mapstructure:"captcha"`
+	Demo           DemoConfig           `mapstructure:"demo"`
 }
 
 type ServerConfig struct {
@@ -108,6 +110,13 @@ type GatewayConfig struct {
 	// restricted ranges; cloud-metadata (169.254.x.x) and loopback stay blocked
 	// unless explicitly listed. Env override: CL_GATEWAY_INTERNAL_ALLOW_CIDRS.
 	InternalAllowCIDRs []string `mapstructure:"internal_allow_cidrs"`
+}
+
+// DemoConfig controls the optional zero-cost demo mode (public /demo try page
+// backed by a mock provider + embedded demo key). Disabled by default.
+type DemoConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	APIKey  string `mapstructure:"api_key"` // mock-only, embedded in the /demo page
 }
 
 type AdminConfig struct {
@@ -353,6 +362,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("GM mode requires 16-byte encryption key (SM4), got %d bytes", len(encKey))
 		}
 	}
+	if c.Demo.Enabled && strings.TrimSpace(c.Demo.APIKey) == "" {
+		return fmt.Errorf("demo.enabled is true but demo.api_key is empty")
+	}
 	return nil
 }
 
@@ -441,6 +453,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("captcha.slider.min_points", 5)
 	v.SetDefault("captcha.slider.bg_width", 300)
 	v.SetDefault("captcha.slider.bg_height", 150)
+
+	v.SetDefault("demo.enabled", false)
+	v.SetDefault("demo.api_key", "")
 	v.SetDefault("captcha.slider.piece_size", 44)
 
 	v.SetDefault("rate_limit.rpm", 0)

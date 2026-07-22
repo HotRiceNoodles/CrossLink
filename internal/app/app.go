@@ -73,6 +73,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		slog.Warn("failed to seed prompt templates", "error", err)
 	}
 
+	// Optional zero-cost demo mode: seed a mock provider + embedded demo key.
+	// Disabled by default; only enabled in the demo deployment. Errors are
+	// non-fatal (logged) — a refused seed never blocks startup.
+	if cfg.Demo.Enabled {
+		if err := service.EnsureDemoSeed(db, cfg.Database.Driver, cfg.Demo.APIKey, cryptoProvider); err != nil {
+			slog.Warn("demo seed skipped", "error", err)
+		} else {
+			slog.Info("demo mode seeded", "provider", "mock-demo")
+		}
+	}
+
 	// Secrets
 	secrets := buildSecrets(db, cfg, ext, cryptoProvider, rdb)
 	defer secrets.CleanupCancel()
