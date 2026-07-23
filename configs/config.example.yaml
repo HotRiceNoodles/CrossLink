@@ -32,6 +32,23 @@ gateway:
                                               # restricted ranges (default, most secure). Cloud
                                               # metadata (169.254.x.x) and loopback stay blocked
                                               # unless explicitly listed. Env: CL_GATEWAY_INTERNAL_ALLOW_CIDRS
+  # concurrency_limit: 2000                    # Max in-flight gateway (LLM proxy) requests.
+                                              # 0/unset = built-in default (2000). Lower it for
+                                              # resource-constrained or public demo deployments.
+                                              # Env: CL_GATEWAY_CONCURRENCY_LIMIT
+
+# Zero-cost demo mode. When enabled, the gateway idempotently seeds a mock
+# provider (mock-sonnet, mock-gpt4) + a PUBLIC mock-only API key, and serves the
+# interactive /demo try page (dual-format Anthropic↔OpenAI visualization).
+#
+# The demo key is safe to expose: AllowedModels restricts it to the mock models
+# only, so even on a gateway with real (billed) providers it CANNOT route to
+# them — no real cost can be incurred. Disabled by default; enable only where
+# you intend a public demo.
+demo:
+  enabled: false                              # Set true to enable demo mode + /demo page
+  api_key: "cl-demo-0000-0000-0000-0000"      # Mock-only key embedded in the /demo page.
+                                              # Must be set when enabled. Env: CL_DEMO_API_KEY
 
 rate_limit:
   # Global defaults applied when API Key / Team / Org has no explicit RPM/TPM override.
