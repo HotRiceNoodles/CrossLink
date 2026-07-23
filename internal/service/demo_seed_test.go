@@ -67,27 +67,32 @@ func TestEnsureDemoSeed_Idempotent(t *testing.T) {
 	assert.Equal(t, int64(1), hashCount, "hash not duplicated")
 }
 
-func TestEnsureDemoSeed_RefusesNonSQLite(t *testing.T) {
+func TestEnsureDemoSeed_NonSQLiteStillSeeds(t *testing.T) {
+	// The demo key is mock-only via allowed_models, so it is safe to seed even
+	// on a non-sqlite DB. The operator set demo.enabled=true — that is the
+	// intent signal; we warn but proceed rather than refuse (otherwise the demo
+	// cannot work on an existing gateway).
 	db := setupDemoSeedDB(t)
 	cp, _ := crypto.NewProvider("standard")
 	err := EnsureDemoSeed(db, "postgres", demoKeyLiteral, cp)
-	require.Error(t, err)
+	require.NoError(t, err)
 	var keyCount int64
-	db.Model(&model.APIKey{}).Count(&keyCount)
-	assert.Equal(t, int64(0), keyCount, "no key seeded on non-sqlite")
+	db.Model(&model.APIKey{}).Where("key_prefix = ?", "cl-demo").Count(&keyCount)
+	assert.Equal(t, int64(1), keyCount, "demo key seeded even on non-sqlite")
 }
 
-func TestEnsureDemoSeed_RefusesExistingNonMockProvider(t *testing.T) {
+func TestEnsureDemoSeed_RealProvidersStillSeeds(t *testing.T) {
+	// A public demo key alongside real providers is safe: allowed_models bounds
+	// it to mock models only, so it cannot route to billed backends.
 	db := setupDemoSeedDB(t)
 	cp, _ := crypto.NewProvider("standard")
-	// Pre-existing real provider
 	db.Create(&model.Provider{Name: "openai-prod", DisplayName: "OpenAI", AdapterType: "openai", BaseURL: "https://api.openai.com", APIKey: "x", Status: 1})
 
 	err := EnsureDemoSeed(db, "sqlite", demoKeyLiteral, cp)
-	require.Error(t, err)
+	require.NoError(t, err)
 	var keyCount int64
 	db.Model(&model.APIKey{}).Where("key_prefix = ?", "cl-demo").Count(&keyCount)
-	assert.Equal(t, int64(0), keyCount, "no demo key seeded when real provider exists")
+	assert.Equal(t, int64(1), keyCount, "demo key seeded alongside real provider")
 }
 
 func TestEnsureDemoSeed_DemoKeyAllowListBounded(t *testing.T) {

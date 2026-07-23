@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/model"
@@ -23,27 +24,29 @@ var demoModels = []string{"mock-sonnet", "mock-gpt4"}
 // API key for the zero-cost demo mode. It creates NO admin user and NO usage
 // logs. The demo key is the fixed literal (needed to embed in the /demo page).
 //
-// Safety guards (refuse to seed rather than risk injecting into a real deployment):
-//   - driver must be sqlite (demo is single-container, no external deps)
-//   - refuse if a non-mock provider already exists
+// Safety model: the operator explicitly set demo.enabled=true (the intent
+// signal), and the seeded demo key is mock-only via AllowedModels
+// (enforced by middleware.Auth — it cannot route to billed backends even when
+// real providers exist). So seeding is safe in any environment; we only WARN
+// on conditions that suggest an operator surprise (non-sqlite driver, existing
+// real providers) rather than refusing — refusing would make the demo
+// unrunnable on any non-fresh gateway, defeating its purpose.
 //
 // Idempotent: keyed on provider name + key prefix, so re-runs are a no-op.
 func EnsureDemoSeed(db *gorm.DB, driver, demoAPIKey string, cp crypto.CryptoProvider) error {
-	if driver != "sqlite" {
-		return errors.New("demo mode requires sqlite database driver")
-	}
 	if demoAPIKey == "" {
 		return errors.New("demo api key is empty")
 	}
 
-	// Refuse if a real (non-mock) provider already exists — avoids injecting a
-	// public demo key into a gateway that already routes to billed backends.
+	if driver != "sqlite" {
+		slog.Warn("demo mode enabled on non-sqlite database; proceeding (demo key is mock-only)")
+	}
 	var realProviders int64
 	if err := db.Model(&model.Provider{}).Where("adapter_type <> ?", "mock").Count(&realProviders).Error; err != nil {
 		return fmt.Errorf("demo seed: check providers: %w", err)
 	}
 	if realProviders > 0 {
-		return errors.New("demo mode refused: a non-mock provider already exists")
+		slog.Warn("demo mode seeding a public mock-only key alongside existing real providers", "real_providers", realProviders)
 	}
 
 	keyHash := cp.HashHex([]byte(demoAPIKey))
