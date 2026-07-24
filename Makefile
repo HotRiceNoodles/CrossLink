@@ -29,3 +29,21 @@ clean:
 
 release:
 	bash scripts/build-release.sh $(VERSION)
+
+# Bundle the modular OpenAPI spec (docs/api/*) into a single embedded JSON.
+# Output goes into the apidoc package so go:embed can pick it up (go:embed
+# cannot traverse parent dirs). Commit the output; CI runs spec-check to fail
+# if it drifts from the modular source.
+SPEC_DIR := docs/api
+SPEC_BUNDLE := internal/apidoc/openapi.bundled.json
+
+.PHONY: spec-bundle spec-check
+
+spec-bundle:
+	go run ./cmd/merge-spec $(SPEC_DIR) $(SPEC_BUNDLE)
+
+spec-check: spec-bundle
+	@git diff --exit-code -- $(SPEC_BUNDLE) || { \
+		echo ""; \
+		echo "ERROR: $(SPEC_BUNDLE) is stale. Run 'make spec-bundle' and commit the result."; \
+		exit 1; }

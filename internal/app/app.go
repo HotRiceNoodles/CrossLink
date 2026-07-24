@@ -251,6 +251,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Health endpoint (no auth)
 	r.GET("/health", healthCheck(db))
 
+	// Public OpenAPI spec — for Postman/codegen import. No auth (published docs).
+	r.GET("/openapi.json", handler.OpenAPIHandler)
+
 	// Prometheus metrics endpoint (requires gateway auth key)
 	r.GET("/metrics", middleware.GatewayMetricsAuth(cfg.Gateway.AuthKey), gin.WrapH(promhttp.Handler()))
 
