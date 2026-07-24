@@ -400,6 +400,11 @@ func Load(configPath string) (*Config, error) {
 	v.AddConfigPath(".")
 
 	v.SetEnvPrefix("CL")
+	// Map nested config keys (e.g. "database.driver") to underscore env vars
+	// (e.g. "CL_DATABASE_DRIVER"). Without this, Viper looks for a literal-dot
+	// env var ("CL_DATABASE.DRIVER") which no shell can set — so every nested
+	// CL_* override used by the docker-compose files silently did nothing.
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	setDefaults(v)
@@ -436,6 +441,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.password", "")
 	v.SetDefault("database.dbname", "crosslink")
 	v.SetDefault("database.sslmode", "disable")
+	v.SetDefault("database.sqlite_path", "")
 
 	v.SetDefault("redis.host", "localhost")
 	v.SetDefault("redis.port", 6379)
@@ -460,6 +466,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("captcha.slider.bg_height", 150)
 
 	v.SetDefault("gateway.concurrency_limit", 2000)
+	// Empty defaults so CL_GATEWAY_AUTH_KEY / CL_ENCRYPTION_KEY env overrides
+	// are honored in docker (where no config.yaml is present, AutomaticEnv only
+	// resolves env for keys Viper already knows).
+	v.SetDefault("gateway.auth_key", "")
+	v.SetDefault("secret_manager.encryption_key", "")
 	v.SetDefault("demo.enabled", false)
 	v.SetDefault("demo.api_key", "")
 	v.SetDefault("captcha.slider.piece_size", 44)
