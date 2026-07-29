@@ -139,7 +139,7 @@ func TestRequireAction_TierBlocked(t *testing.T) {
 		expected int
 	}{
 		{"community allows provider:list", "provider:list", 200},
-		{"community blocks guardrail:list", "guardrail:list", 403},
+		{"community allows guardrail:list", "guardrail:list", 200},
 		{"db missing blocks audit:list", "audit:list", 403},
 	}
 

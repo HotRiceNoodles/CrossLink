@@ -41,6 +41,14 @@ var communityActions = map[string]bool{
 	"template:create":   true,
 	"template:update":   true,
 	"template:delete":   true,
+	// Guardrail CRUD (keyword/length/credential_detection engines) — community-core
+	// feature. Pro-only engines (PII/injection/moderation) and guardrail_alert:*
+	// remain Pro-gated.
+	"guardrail:list":   true,
+	"guardrail:create": true,
+	"guardrail:update": true,
+	"guardrail:delete": true,
+	"guardrail:test":   true,
 }
 
 // proExtraActions defines additional actions available to the Pro tier (on top of Community).
@@ -60,11 +68,6 @@ var proExtraActions = map[string]bool{
 	"capability:create":           true,
 	"capability:update":           true,
 	"capability:delete":           true,
-	"guardrail:list":              true,
-	"guardrail:create":            true,
-	"guardrail:update":            true,
-	"guardrail:delete":            true,
-	"guardrail:test":              true,
 	"guardrail_alert:list":        true,
 	"guardrail_alert:create":      true,
 	"guardrail_alert:update":      true,

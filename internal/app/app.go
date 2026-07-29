@@ -101,6 +101,15 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
 
+	// Seed the default credential_detection baseline rule (zero-config safety
+	// floor). Idempotent; non-fatal — guardrails are non-critical, a seed error
+	// must not block startup.
+	if err := guardrail.SeedDefaultRules(db); err != nil {
+		slog.Warn("failed to seed default guardrail rules", "error", err)
+	} else {
+		slog.Info("guardrail default rules seeded")
+	}
+
 	// Load middleware log config from DB
 	var mlCfg model.SystemSetting
 	if db.Where("key = ?", "log_middleware_errors").First(&mlCfg).Error == nil {
@@ -389,6 +398,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/usage/reconciliation/export", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.ReconciliationExport)
 		adminGroup.GET("/usage/team-stats", middleware.RequireAction(permCache, "usage:stats"), handlers.Usage.TeamStats)
 		adminGroup.GET("/routing/stats", middleware.RequireAction(permCache, "routing:stats"), handlers.Routing.Stats)
+
+		// Guardrails (Community baseline)
+		guardrailHandler := admin.NewGuardrailHandler(db, guardrailSvc, ext.Deps.AuditSvc)
+		adminGroup.GET("/guardrails", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.List)
+		adminGroup.POST("/guardrails", middleware.RequireAction(permCache, "guardrail:create"), guardrailHandler.Create)
+		adminGroup.PUT("/guardrails/:id", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.Update)
+		adminGroup.DELETE("/guardrails/:id", middleware.RequireAction(permCache, "guardrail:delete"), guardrailHandler.Delete)
+		adminGroup.POST("/guardrails/:id/test", middleware.RequireAction(permCache, "guardrail:test"), guardrailHandler.Test)
+		adminGroup.GET("/guardrails/stats", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.Stats)
+		adminGroup.GET("/guardrails/config", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.GetConfig)
+		adminGroup.PUT("/guardrails/config", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.UpdateConfig)
 
 		// Prompt templates (context engineering). Super-admin only (AdminExclusiveActions).
 		adminGroup.GET("/templates", middleware.RequireAction(permCache, "template:list"), handlers.Templates.List)
