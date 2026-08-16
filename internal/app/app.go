@@ -572,6 +572,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	go func() {
 		slog.Info("starting gateway", "addr", addr)
+		// Surface effective rate-limit settings so a config file picked up from
+		// an unexpected location can't enable limits silently (429 incident).
+		slog.Info("rate limit config",
+			"rpm", cfg.RateLimit.RPM,
+			"tpm", cfg.RateLimit.TPM,
+			"tpm_reservation", cfg.RateLimit.Reservation,
+			"fail_closed", cfg.RateLimit.FailClosed)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("failed to start server", "error", err)
 		}
