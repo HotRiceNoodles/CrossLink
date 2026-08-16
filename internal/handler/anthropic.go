@@ -626,8 +626,16 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 	}
 
 	slog.Error("gateway error", "error", err, "model", model)
+	// Upstream 429 must surface as rate_limit_error + Retry-After so clients
+	// can back off with correct semantics instead of treating it as a generic
+	// API failure.
+	errType := "api_error"
+	if providerRateLimited(err) {
+		errType = "rate_limit_error"
+		providerRetryAfterHeader(c, err)
+	}
 	c.JSON(status, gin.H{
 		"type":  "error",
-		"error": gin.H{"type": "api_error", "message": safeProviderError(err)},
+		"error": gin.H{"type": errType, "message": safeProviderError(err)},
 	})
 }

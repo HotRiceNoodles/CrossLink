@@ -2,8 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -28,6 +31,21 @@ func mapProviderErrorStatus(err error) int {
 		}
 	}
 	return http.StatusBadGateway
+}
+
+// providerRateLimited reports whether err is an upstream 429.
+func providerRateLimited(err error) bool {
+	var pe *provider.ProviderError
+	return errors.As(err, &pe) && pe.StatusCode == http.StatusTooManyRequests
+}
+
+// providerRetryAfterHeader sets the Retry-After response header when err carries
+// an upstream hint, so clients can back off correctly on a propagated 429.
+func providerRetryAfterHeader(c *gin.Context, err error) {
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) && pe.RetryAfter > 0 {
+		c.Header("Retry-After", fmt.Sprintf("%d", int(pe.RetryAfter.Seconds())))
+	}
 }
 
 // safeProviderError returns a client-safe error message.

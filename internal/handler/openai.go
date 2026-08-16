@@ -316,6 +316,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		slog.Error("all openai providers failed", "model", req.Model, "attempts", len(result.Attempts))
 		statusCode := mapProviderErrorStatus(result.FinalError)
 		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries, sessionID)
+		providerRetryAfterHeader(c, result.FinalError)
 		c.JSON(statusCode, gin.H{"error": map[string]string{"message": safeProviderError(result.FinalError)}})
 		return
 	}
@@ -536,6 +537,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		slog.Error("all stream providers failed", "model", req.Model, "attempts", len(result.Attempts))
 		statusCode := mapProviderErrorStatus(result.FinalError)
 		h.logFailure(c, req.Model, statusCode, start, routes, result, totalRetries, sessionID)
+		providerRetryAfterHeader(c, result.FinalError)
 		c.JSON(statusCode, gin.H{"error": map[string]string{"message": safeProviderError(result.FinalError)}})
 		return
 	}

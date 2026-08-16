@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
@@ -124,6 +127,76 @@ func TestMapProviderErrorStatus(t *testing.T) {	tests := []struct {
 			}
 		})
 	}
+}
+
+// Upstream 429 must surface as rate_limit_error with Retry-After so clients
+// back off correctly instead of treating it as a generic API failure.
+func TestAnthropicWriteError_UpstreamRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newCtx := func() (*gin.Context, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		return c, w
+	}
+
+	t.Run("429 with Retry-After hint", func(t *testing.T) {
+		c, w := newCtx()
+		h := &AnthropicHandler{}
+		h.writeError(c, &provider.ProviderError{StatusCode: 429, RetryAfter: 12 * time.Second}, "m")
+		if w.Code != http.StatusTooManyRequests {
+			t.Errorf("status = %d, want 429", w.Code)
+		}
+		if ra := w.Header().Get("Retry-After"); ra != "12" {
+			t.Errorf("Retry-After = %q, want %q", ra, "12")
+		}
+		var body struct {
+			Error struct {
+				Type string `json:"type"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if body.Error.Type != "rate_limit_error" {
+			t.Errorf("error type = %q, want rate_limit_error", body.Error.Type)
+		}
+	})
+
+	t.Run("429 without hint keeps no Retry-After", func(t *testing.T) {
+		c, w := newCtx()
+		h := &AnthropicHandler{}
+		h.writeError(c, &provider.ProviderError{StatusCode: 429}, "m")
+		if w.Code != http.StatusTooManyRequests {
+			t.Errorf("status = %d, want 429", w.Code)
+		}
+		if ra := w.Header().Get("Retry-After"); ra != "" {
+			t.Errorf("Retry-After = %q, want empty", ra)
+		}
+	})
+
+	t.Run("non-429 stays api_error", func(t *testing.T) {
+		c, w := newCtx()
+		h := &AnthropicHandler{}
+		h.writeError(c, &provider.ProviderError{StatusCode: 500, RetryAfter: 30 * time.Second}, "m")
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("status = %d, want 500", w.Code)
+		}
+		if ra := w.Header().Get("Retry-After"); ra != "" {
+			t.Errorf("Retry-After = %q, want empty", ra)
+		}
+		var body struct {
+			Error struct {
+				Type string `json:"type"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if body.Error.Type != "api_error" {
+			t.Errorf("error type = %q, want api_error", body.Error.Type)
+		}
+	})
 }
 
 func TestResolveErrorStatus(t *testing.T) {
