@@ -174,17 +174,25 @@ func estimateTokens(c *gin.Context) int {
 		return 0
 	}
 
-	if probe.MaxTokens > 0 {
-		// Cap max_tokens to prevent excessive TPM reservation
-		maxTok := probe.MaxTokens
-		if maxTok > 32768 {
-			maxTok = 32768
-		}
-		total += maxTok
-	} else {
-		total += 1024
-	}
+	total += outputTokenReservation(probe.MaxTokens)
 	return total
+}
+
+// outputTokenReservation estimates the output-token portion of a TPM reservation.
+// TPM is a rate-shaping quota reconciled to actual usage by ReportTokens, so
+// reserving the full max_tokens (worst case) systematically overestimates
+// concurrent in-flight demand and rejects requests whose actual usage fits.
+// Reserve half the requested cap, bounded — under-reservation self-corrects at
+// settlement, over-reservation causes spurious 429s.
+func outputTokenReservation(maxTokens int) int {
+	if maxTokens <= 0 {
+		return 512
+	}
+	half := maxTokens / 2
+	if half > 8192 {
+		half = 8192
+	}
+	return half
 }
 
 // estimateResponsesTokens estimates TPM reservation for a Responses API body.
@@ -227,15 +235,7 @@ func estimateResponsesTokens(bodyBytes []byte) int {
 	if total == 0 {
 		return 0
 	}
-	if probe.MaxOutputTokens > 0 {
-		maxTok := probe.MaxOutputTokens
-		if maxTok > 32768 {
-			maxTok = 32768
-		}
-		total += maxTok
-	} else {
-		total += 1024
-	}
+	total += outputTokenReservation(probe.MaxOutputTokens)
 	return total
 }
 

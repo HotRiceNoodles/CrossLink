@@ -504,8 +504,8 @@ func TestEstimateTokens_ChatMessages(t *testing.T) {
 	estimated := estimateTokens(c)
 	assert.Greater(t, estimated, 0, "should estimate tokens from chat messages")
 	// Input tokens for "Hello world, this is a test message for token estimation" ≈ 10
-	// Plus max_tokens=500 → should be around 510
-	assert.GreaterOrEqual(t, estimated, 500, "should include max_tokens")
+	// Plus output reservation = max_tokens/2 = 250 → should be around 260
+	assert.GreaterOrEqual(t, estimated, 250, "should include half of max_tokens as output reservation")
 }
 
 func TestEstimateTokens_CompletionPrompt(t *testing.T) {
@@ -517,10 +517,10 @@ func TestEstimateTokens_CompletionPrompt(t *testing.T) {
 
 	estimated := estimateTokens(c)
 	assert.Greater(t, estimated, 0, "should estimate tokens from prompt field")
-	assert.GreaterOrEqual(t, estimated, 256, "should include max_tokens")
+	assert.GreaterOrEqual(t, estimated, 128, "should include half of max_tokens as output reservation")
 }
 
-func TestEstimateTokens_NoMaxTokens_DefaultsTo1024(t *testing.T) {
+func TestEstimateTokens_NoMaxTokens_DefaultsTo512(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -528,7 +528,17 @@ func TestEstimateTokens_NoMaxTokens_DefaultsTo1024(t *testing.T) {
 	c.Set(BodyKey, body)
 
 	estimated := estimateTokens(c)
-	assert.GreaterOrEqual(t, estimated, 1024, "should default to 1024 output tokens when max_tokens not set")
+	assert.GreaterOrEqual(t, estimated, 512, "should default to 512 output tokens when max_tokens not set")
+}
+
+func TestOutputTokenReservation(t *testing.T) {
+	// No max_tokens: fixed default reservation
+	assert.Equal(t, 512, outputTokenReservation(0))
+	// Half of requested cap
+	assert.Equal(t, 250, outputTokenReservation(500))
+	// Capped at 8192 even for huge max_tokens
+	assert.Equal(t, 8192, outputTokenReservation(32768))
+	assert.Equal(t, 8192, outputTokenReservation(1000000))
 }
 
 func TestEstimateTokens_NoBody_ReturnsZero(t *testing.T) {
