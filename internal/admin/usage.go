@@ -58,6 +58,9 @@ func applyUsageFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
 			query = query.Where("status_code = 429")
 		}
 	}
+	if rt := c.Query("route_type"); rt != "" {
+		query = query.Where("route_type = ?", rt)
+	}
 	return query
 }
 
@@ -130,6 +133,7 @@ type usageStats struct {
 	AvgFirstTokenMs float64 `json:"avg_first_token_ms"`
 	ErrorRate       float64 `json:"error_rate"`
 	ActiveAPIKeys   int64   `json:"active_api_keys"`
+	TotalImages     int64   `json:"total_images"`
 	FallbackRate    float64 `json:"fallback_rate"`
 	RetryRate       float64 `json:"retry_rate"`
 	GuardrailRate   float64 `json:"guardrail_block_rate"`
@@ -168,7 +172,8 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, " +
 			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, " +
 			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, " +
-			"COUNT(DISTINCT api_key_id) as active_api_keys",
+			"COUNT(DISTINCT api_key_id) as active_api_keys, " +
+			"COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as total_images",
 	).Scan(&stats)
 
 	// Error/fallback/retry/guardrail counts (same base query)
@@ -226,6 +231,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		"avg_first_token_ms": stats.AvgFirstTokenMs,
 		"error_rate":        stats.ErrorRate,
 		"active_api_keys":   stats.ActiveAPIKeys,
+		"total_images":      stats.TotalImages,
 		"fallback_rate":     stats.FallbackRate,
 		"retry_rate":        stats.RetryRate,
 		"guardrail_block_rate": stats.GuardrailRate,
@@ -318,10 +324,11 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 }
 
 type ModelDist struct {
-	Model  string  `json:"model"`
-	Count  int64   `json:"count"`
-	Tokens int64   `json:"tokens"`
-	Cost   float64 `json:"cost"`
+	Model      string  `json:"model"`
+	Count      int64   `json:"count"`
+	Tokens     int64   `json:"tokens"`
+	Cost       float64 `json:"cost"`
+	ImageCount *int64  `json:"image_count"`
 }
 
 type TemplateStat struct {
@@ -367,7 +374,7 @@ func (h *UsageHandler) ModelDistribution(c *gin.Context) {
 
 	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
-		Select("model_requested as model, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
+		Select("model_requested as model, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost, COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as image_count").
 		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)).
 		Group("model_requested").
 		Order("count DESC").
@@ -437,6 +444,7 @@ type reconciliationRow struct {
 	Requests     int64   `json:"requests"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
+	ImageCount   int64   `json:"image_count"`
 	UpstreamCost float64 `json:"upstream_cost"`
 	BillableCost float64 `json:"billable_cost"`
 	Profit       float64 `json:"profit"`
@@ -460,6 +468,7 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 			COUNT(*) AS requests,
 			COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
 			COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+			COALESCE(SUM(CASE WHEN u.status_code = 200 THEN u.image_count END), 0) AS image_count,
 			COALESCE(SUM(u.cost), 0) AS upstream_cost,
 			COALESCE(SUM(u.billable_cost), 0) AS billable_cost,
 			COALESCE(SUM(u.billable_cost - u.cost), 0) AS profit,
@@ -485,15 +494,15 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 	startDate := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 	endDate := time.Now().Format("2006-01-02")
 	buf.WriteString(fmt.Sprintf("# 日期范围: %s ~ %s\n", startDate, endDate))
-	buf.WriteString("Key名称,Key前缀,模型,请求数,Input Tokens,Output Tokens,上游成本,计费成本,利润,币种\n")
+	buf.WriteString("Key名称,Key前缀,模型,请求数,Input Tokens,Output Tokens,图片数,上游成本,计费成本,利润,币种\n")
 	for _, r := range rows {
 		profit := "-"
 		if r.BillableCost > 0 {
 			profit = strconv.FormatFloat(r.Profit, 'f', 4, 64)
 		}
-		fmt.Fprintf(&buf, "%s,%s,%s,%d,%d,%d,%.4f,%.4f,%s,%s\n",
+		fmt.Fprintf(&buf, "%s,%s,%s,%d,%d,%d,%d,%.4f,%.4f,%s,%s\n",
 			r.KeyName, r.KeyPrefix, r.ModelUsed, r.Requests,
-			r.InputTokens, r.OutputTokens,
+			r.InputTokens, r.OutputTokens, r.ImageCount,
 			r.UpstreamCost, r.BillableCost, profit, r.Currency)
 	}
 
