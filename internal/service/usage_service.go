@@ -111,6 +111,9 @@ type UsageEntry struct {
 	CacheReadTokens     int
 	SessionID           string
 	TemplateID      *int64 // prompt template that assembled this request (nil = none)
+	ImageCount      int
+	ImageSize       string
+	ImageQuality    string
 	PrecomputedCost float64
 	PriceMultiplier float64 // key's price multiplier (1.0 = no markup)
 }
@@ -122,7 +125,7 @@ func (e *UsageEntry) cost() float64 {
 	return e.InputPrice*float64(e.InputTokens)/1000 + e.OutputPrice*float64(e.OutputTokens)/1000
 }
 
-func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
+func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 	mult := entry.PriceMultiplier
 	if mult <= 0 {
 		mult = 1.0
@@ -177,7 +180,21 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 	if entry.ModelResponse != "" {
 		log.ModelResponse = &entry.ModelResponse
 	}
+	if entry.ImageCount > 0 {
+		cnt := int64(entry.ImageCount)
+		log.ImageCount = &cnt
+	}
+	if entry.ImageSize != "" {
+		log.ImageSize = &entry.ImageSize
+	}
+	if entry.ImageQuality != "" {
+		log.ImageQuality = &entry.ImageQuality
+	}
+	return log
+}
 
+func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
+	log := buildUsageLog(entry)
 	if err := s.repo.Create(ctx, log); err != nil {
 		slog.Error("failed to write usage log", "error", err)
 	}

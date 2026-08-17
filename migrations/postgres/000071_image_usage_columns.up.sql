@@ -1,0 +1,4 @@
+ALTER TABLE usage_logs
+    ADD COLUMN image_count BIGINT DEFAULT NULL,
+    ADD COLUMN image_size VARCHAR(16) DEFAULT NULL,
+    ADD COLUMN image_quality VARCHAR(16) DEFAULT NULL;

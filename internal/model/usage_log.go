@@ -38,6 +38,9 @@ type UsageLog struct {
 	CacheReadTokens    int        `gorm:"default:0" json:"cache_read_tokens"`
 	SessionID          string     `gorm:"size:255;index" json:"session_id,omitempty"`
 	TemplateID         *int64     `gorm:"index" json:"template_id,omitempty"` // which prompt template assembled this request (NULL = none)
+	ImageCount         *int64     `gorm:"default:null" json:"image_count,omitempty"`  // image requests: number of images (NULL = non-image)
+	ImageSize          *string    `gorm:"size:16" json:"image_size,omitempty"`        // image requests: e.g. "1024x1024"
+	ImageQuality       *string    `gorm:"size:16" json:"image_quality,omitempty"`     // image requests: e.g. "hd"
 	CreatedAt          time.Time  `gorm:"not null;index" json:"created_at"`
 }
 
