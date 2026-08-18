@@ -101,7 +101,7 @@ func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	h.handleStream(c, routes, req, time.Now(), "test-session")
+	h.handleStream(c, routes, req, nil, 0, time.Now(), "test-session")
 
 	it, ok := c.Get("input_tokens")
 	if !ok {

@@ -232,6 +232,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	videoHandler.SetClassifier(infra.Classifier)
 	videoHandler.SetGuardRDB(rdb)
 
+	// Token-estimation calibration (context analysis); nil redis -> memory-only
+	calibSvc := service.NewCalibrationService(rdb)
+	anthropicHandler.SetCalibration(calibSvc)
+	openaiHandler.SetCalibration(calibSvc)
+
 	usageWorkers := worker.NewPool(15, 1000)
 	handler.SetUsageWorkers(usageWorkers)
 	modelsHandler := handler.NewModelsHandler(db)
@@ -613,6 +618,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Phase 4: Cancel background goroutines
 	videoTaskSvc.Close()
 	appCancel()
+	calibSvc.Stop() // flush calibration EMA state and stop its loop
 
 	// Phase 5: Database cleanup
 	if err := dia.Shutdown(db); err != nil {

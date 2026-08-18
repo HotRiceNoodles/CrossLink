@@ -36,6 +36,7 @@ type OpenAIHandler struct {
 	classifier    *service.ErrorClassifier
 	guardRDB      *redis.Client // P3a: per-(provider,model) guardrail counters; nil = disabled
 	budgetSvc     *service.BudgetService // pre-request budget reservation (C5); nil = disabled
+	calibration   *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
 }
 
 func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService, latencySvc *service.LatencyService, _ interface{}, activeTracker service.ProviderLoadTracker, idemCache *service.IdempotencyCache, budget *provider.RetryBudget, guardrailSvc *guardrail.GuardrailService) *OpenAIHandler {
@@ -65,6 +66,10 @@ func (h *OpenAIHandler) SetGuardRDB(rdb *redis.Client) { h.guardRDB = rdb }
 // SetBudgetSvc injects the budget service used for pre-request budget
 // reservation (concurrency-safe enforcement, C5). Optional; nil disables it.
 func (h *OpenAIHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b }
+
+// SetCalibration injects the token-estimation calibration service
+// (context analysis). Optional; nil disables calibration.
+func (h *OpenAIHandler) SetCalibration(c *service.CalibrationService) { h.calibration = c }
 
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
@@ -176,29 +181,34 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 		return
 	}
 
+	// Context analysis inputs, captured synchronously (gin.Context must not be
+	// read inside the async submitUsage closure).
+	var maxCtx *int
+	maxOut := 0
+	if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
+		maxOut = *req.MaxCompletionTokens
+	} else if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		maxOut = *req.MaxTokens
+	}
+
 	// C5: concurrency-safe budget reservation against the primary route's price,
 	// closing the check-then-act race in BudgetCheck's GET-based check. Aborts
 	// with budget_exceeded before any upstream call if a level would be exceeded.
 	if len(routes) > 0 {
-		maxOut := 0
-		if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
-			maxOut = *req.MaxCompletionTokens
-		} else if req.MaxTokens != nil && *req.MaxTokens > 0 {
-			maxOut = *req.MaxTokens
-		}
+		maxCtx = routes[0].MaxContext
 		if !reserveBudgetForRequest(c, h.budgetSvc, estimateOpenAIInputTokens(&req), maxOut, routes[0].InputPrice, routes[0].OutputPrice) {
 			return
 		}
 	}
 
 	sessionID := c.GetHeader("X-Session-ID")
-	
+
 	if req.Stream {
-		h.handleStream(c, routes, &req, start, sessionID)
+		h.handleStream(c, routes, &req, maxCtx, maxOut, start, sessionID)
 		return
 	}
 
-	h.handleNonStream(c, routes, &req, start, sessionID)
+	h.handleNonStream(c, routes, &req, maxCtx, maxOut, start, sessionID)
 }
 
 // setFallbackHeaders exposes which model served the request and how many fallbacks
@@ -241,7 +251,7 @@ func writeStreamInterruptedAnthropic(w io.Writer) {
 	fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
-func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
+func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, maxCtx *int, maxOut int, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
 	priceMult := readPriceMultiplier(c)
@@ -474,11 +484,24 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				entry.ModelResponse = truncateContent(domain.ContentText(resp.Choices[0].Message.Content))
 			}
 		}
+		// Non-stream: PromptTokens is real upstream usage when > 0.
+		// route is result.Route (the winning post-fallback route), so
+		// route.ProviderModel is the actually-served model, same source as
+		// ChatResult.ModelUsed on the Anthropic path.
+		BuildContextAnalysisResult(contextAnalysisInput{
+			openaiReq:      req,
+			maxContext:     maxCtx,
+			maxTokens:      maxOut,
+			modelUsed:      route.ProviderModel,
+			observeFn:      calibrationObserveOf(h.calibration),
+			inputFromUpstr: inputTokens > 0,
+			inputTokens:    inputTokens,
+		}).apply(entry)
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 
-func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, start time.Time, sessionID string) {
+func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResult, req *domain.OpenAIRequest, maxCtx *int, maxOut int, start time.Time, sessionID string) {
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
 	priceMult := readPriceMultiplier(c)
@@ -773,6 +796,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		outputTokens = outputEstimate
 	}
 	// Fallback input token estimation when provider didn't send usage in stream
+	inputFromEstimate := false
 	if inputTokens == 0 && req.Messages != nil {
 		for _, msg := range req.Messages {
 			inputTokens += token.Estimate(domain.ContentText(msg.Content))
@@ -780,6 +804,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 				inputTokens += token.Estimate(tc.Function.Arguments)
 			}
 		}
+		inputFromEstimate = true
 	}
 
 	c.Set("input_tokens", inputTokens)
@@ -848,6 +873,20 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			entry.UserMessage = truncateContent(extractLastOpenAIUserMessage(req.Messages))
 			entry.ModelResponse = truncateContent(modelRespBuf.String())
 		}
+		// Stream: inputTokens may have been replaced by an estimate above when the
+		// provider sent no usage — only calibrate on the real upstream value.
+		// route is result.Route (the winning post-fallback route), so
+		// route.ProviderModel is the actually-served model, same source as
+		// StreamResult.ModelUsed on the Anthropic path.
+		BuildContextAnalysisResult(contextAnalysisInput{
+			openaiReq:      req,
+			maxContext:     maxCtx,
+			maxTokens:      maxOut,
+			modelUsed:      route.ProviderModel,
+			observeFn:      calibrationObserveOf(h.calibration),
+			inputFromUpstr: inputTokens > 0 && !inputFromEstimate,
+			inputTokens:    inputTokens,
+		}).apply(entry)
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }

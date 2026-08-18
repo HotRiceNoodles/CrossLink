@@ -42,6 +42,7 @@ type AnthropicHandler struct {
 	idemCache    *service.IdempotencyCache
 	guardrailSvc *guardrail.GuardrailService
 	budgetSvc    *service.BudgetService // pre-request budget reservation (C5); nil = disabled
+	calibration  *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
 }
 
 func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver, usageSvc *service.UsageService, idemCache *service.IdempotencyCache, guardrailSvc *guardrail.GuardrailService) *AnthropicHandler {
@@ -51,6 +52,10 @@ func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver,
 // SetBudgetSvc injects the budget service used for pre-request budget
 // reservation (concurrency-safe enforcement, C5). Optional; nil disables it.
 func (h *AnthropicHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b }
+
+// SetCalibration injects the token-estimation calibration service
+// (context analysis). Optional; nil disables calibration.
+func (h *AnthropicHandler) SetCalibration(c *service.CalibrationService) { h.calibration = c }
 
 // estimateAnthropicInputTokens rough-estimates the input token count of an
 // Anthropic /v1/messages request, for pre-request budget reservation (C5).
@@ -169,7 +174,9 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	// closing the check-then-act race in BudgetCheck's GET-based check. The
 	// Anthropic path delegates routing to GatewayService, so resolve the primary
 	// route here solely for the price estimate (resolver is cache-backed, cheap).
+	var maxCtx *int // primary route's context window, captured synchronously (analysis input)
 	if routes, rerr := h.resolver.Resolve(c.Request.Context(), req.Model, orgID); rerr == nil && len(routes) > 0 {
+		maxCtx = routes[0].MaxContext
 		if !reserveBudgetForRequest(c, h.budgetSvc, estimateAnthropicInputTokens(&req), req.MaxTokens, routes[0].InputPrice, routes[0].OutputPrice) {
 			return
 		}
@@ -196,7 +203,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	}
 
 	if req.Stream {
-		h.handleStream(c, &req, start, sessionID)
+		h.handleStream(c, &req, maxCtx, start, sessionID)
 		return
 	}
 
@@ -350,11 +357,20 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				entry.ModelResponse = truncateContent(strings.Join(texts, "\n"))
 			}
 		}
+		BuildContextAnalysisResult(contextAnalysisInput{
+			anthropicReq:   &req,
+			maxContext:     maxCtx,
+			maxTokens:      req.MaxTokens,
+			modelUsed:      result.ModelUsed,
+			observeFn:      calibrationObserveOf(h.calibration),
+			inputFromUpstr: result.InputTokens > 0,
+			inputTokens:    result.InputTokens,
+		}).apply(entry)
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 
-func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicRequest, start time.Time, sessionID string) {
+func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicRequest, maxCtx *int, start time.Time, sessionID string) {
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		slog.Error("response writer does not support flushing")
@@ -597,6 +613,17 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			entry.UserMessage = truncateContent(extractLastUserMessage(req.Messages))
 			entry.ModelResponse = truncateContent(modelRespBuf.String())
 		}
+		// Stream: UsageFromUpstr marks real upstream usage — the translator seeds
+		// InputTokens with an estimate that must not feed calibration.
+		BuildContextAnalysisResult(contextAnalysisInput{
+			anthropicReq:   req,
+			maxContext:     maxCtx,
+			maxTokens:      req.MaxTokens,
+			modelUsed:      result.ModelUsed,
+			observeFn:      calibrationObserveOf(h.calibration),
+			inputFromUpstr: result.UsageFromUpstr,
+			inputTokens:    result.InputTokens,
+		}).apply(entry)
 		h.usageSvc.Log(context.Background(), entry)
 	})
 }

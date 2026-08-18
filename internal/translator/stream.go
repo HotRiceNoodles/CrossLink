@@ -22,6 +22,7 @@ type StreamTranslator struct {
 	requestedModel string
 	inputTokens    int
 	outputTokens   int
+	usageSeen      bool // upstream sent a real input usage number (not the seed estimate)
 	reasoningTokens int
 	cacheReadTokens int
 	blockIndex     int
@@ -45,6 +46,7 @@ func NewStreamTranslator(messageID, requestedModel string, inputTokens int) *Str
 }
 
 func (t *StreamTranslator) InputTokens() int     { return t.inputTokens }
+func (t *StreamTranslator) UsageSeen() bool     { return t.usageSeen }
 func (t *StreamTranslator) OutputTokens() int    { return t.outputTokens }
 func (t *StreamTranslator) ReasoningTokens() int { return t.reasoningTokens }
 func (t *StreamTranslator) CacheReadTokens() int { return t.cacheReadTokens }
@@ -66,6 +68,7 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 	if t.state == stateInit {
 		if chunk.Usage != nil && chunk.Usage.PromptTokens > 0 {
 			t.inputTokens = chunk.Usage.PromptTokens
+			t.usageSeen = true
 		}
 		events = append(events, buildMessageStart(t.messageID, t.requestedModel, t.inputTokens))
 		t.state = stateStarted
@@ -74,6 +77,7 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 	if len(chunk.Choices) == 0 {
 		if chunk.Usage != nil {
 			t.inputTokens = chunk.Usage.PromptTokens
+			t.usageSeen = true
 			t.outputTokens = chunk.Usage.CompletionTokens
 			if chunk.Usage.CompletionTokensDetails != nil {
 				t.reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
@@ -138,6 +142,7 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 		if chunk.Usage != nil {
 			if chunk.Usage.PromptTokens > 0 {
 				t.inputTokens = chunk.Usage.PromptTokens
+				t.usageSeen = true
 			}
 			if chunk.Usage.CompletionTokens > 0 {
 				t.outputTokens = chunk.Usage.CompletionTokens

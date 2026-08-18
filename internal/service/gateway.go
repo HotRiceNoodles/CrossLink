@@ -319,6 +319,7 @@ loop:
 	return &StreamResult{
 		InputTokens:     st.InputTokens(),
 		OutputTokens:    st.OutputTokens(),
+		UsageFromUpstr:  st.UsageSeen(),
 		LatencyMs:       latency,
 		ProviderName:    providerName,
 		ProviderID:      route.ProviderRow.ID,
@@ -353,6 +354,7 @@ func estimateInputTokens(req *domain.OpenAIRequest) int {
 type StreamResult struct {
 	InputTokens     int
 	OutputTokens    int
+	UsageFromUpstr  bool // InputTokens is real upstream usage, not the seed estimate
 	LatencyMs       int64
 	ProviderName    string
 	ProviderID      int64
