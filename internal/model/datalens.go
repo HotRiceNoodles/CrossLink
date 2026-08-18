@@ -38,14 +38,27 @@ type DataLensHourlyMetric struct {
 	CacheHits         int       `gorm:"not null;default:0" json:"cache_hits"`
 	DistinctSessions  int       `gorm:"not null;default:0" json:"distinct_sessions"`
 	DistinctKeys      int       `gorm:"not null;default:0" json:"distinct_keys"`
-	LatencyBucket50   int       `gorm:"not null;default:0" json:"latency_bucket_50"`
-	LatencyBucket100  int       `gorm:"not null;default:0" json:"latency_bucket_100"`
-	LatencyBucket200  int       `gorm:"not null;default:0" json:"latency_bucket_200"`
-	LatencyBucket500  int       `gorm:"not null;default:0" json:"latency_bucket_500"`
-	LatencyBucket1000 int       `gorm:"not null;default:0" json:"latency_bucket_1000"`
-	LatencyBucket2000 int       `gorm:"not null;default:0" json:"latency_bucket_2000"`
-	LatencyBucket5000 int       `gorm:"not null;default:0" json:"latency_bucket_5000"`
+	LatencyBucket50   int       `gorm:"column:latency_bucket_50;not null;default:0" json:"latency_bucket_50"`
+	LatencyBucket100  int       `gorm:"column:latency_bucket_100;not null;default:0" json:"latency_bucket_100"`
+	LatencyBucket200  int       `gorm:"column:latency_bucket_200;not null;default:0" json:"latency_bucket_200"`
+	LatencyBucket500  int       `gorm:"column:latency_bucket_500;not null;default:0" json:"latency_bucket_500"`
+	LatencyBucket1000 int       `gorm:"column:latency_bucket_1000;not null;default:0" json:"latency_bucket_1000"`
+	LatencyBucket2000 int       `gorm:"column:latency_bucket_2000;not null;default:0" json:"latency_bucket_2000"`
+	LatencyBucket5000 int       `gorm:"column:latency_bucket_5000;not null;default:0" json:"latency_bucket_5000"`
 	LatencyBucketSlow int       `gorm:"not null;default:0" json:"latency_bucket_slow"`
+	CtxSystemTokens       int64 `gorm:"not null;default:0" json:"ctx_system_tokens"`
+	CtxHistoryTokens      int64 `gorm:"not null;default:0" json:"ctx_history_tokens"`
+	CtxQuestionTokens     int64 `gorm:"not null;default:0" json:"ctx_question_tokens"`
+	CtxToolTokens         int64 `gorm:"not null;default:0" json:"ctx_tool_tokens"`
+	CtxToolOutputTokens   int64 `gorm:"not null;default:0" json:"ctx_tool_output_tokens"`
+	CtxTotalWindow        int64 `gorm:"not null;default:0" json:"ctx_total_window"`
+	CtxAnalyzedCount      int   `gorm:"not null;default:0" json:"ctx_analyzed_count"`
+	CtxOverflowCount      int   `gorm:"not null;default:0" json:"ctx_overflow_count"`
+	CtxWindowUnknownCount int   `gorm:"not null;default:0" json:"ctx_window_unknown_count"`
+	CtxUtilBucketLt50     int   `gorm:"not null;default:0" json:"ctx_util_bucket_lt50"`
+	CtxUtilBucket5080     int   `gorm:"column:ctx_util_bucket_50_80;not null;default:0" json:"ctx_util_bucket_50_80"`
+	CtxUtilBucket8095     int   `gorm:"column:ctx_util_bucket_80_95;not null;default:0" json:"ctx_util_bucket_80_95"`
+	CtxUtilBucketGt95     int   `gorm:"not null;default:0" json:"ctx_util_bucket_gt95"`
 	CreatedAt         time.Time `gorm:"not null;default:now()" json:"created_at"`
 }
 
@@ -83,14 +96,27 @@ type DataLensDailyMetric struct {
 	CacheHits         int       `gorm:"not null;default:0" json:"cache_hits"`
 	DistinctSessions  int       `gorm:"not null;default:0" json:"distinct_sessions"`
 	DistinctKeys      int       `gorm:"not null;default:0" json:"distinct_keys"`
-	LatencyBucket50   int       `gorm:"not null;default:0" json:"latency_bucket_50"`
-	LatencyBucket100  int       `gorm:"not null;default:0" json:"latency_bucket_100"`
-	LatencyBucket200  int       `gorm:"not null;default:0" json:"latency_bucket_200"`
-	LatencyBucket500  int       `gorm:"not null;default:0" json:"latency_bucket_500"`
-	LatencyBucket1000 int       `gorm:"not null;default:0" json:"latency_bucket_1000"`
-	LatencyBucket2000 int       `gorm:"not null;default:0" json:"latency_bucket_2000"`
-	LatencyBucket5000 int       `gorm:"not null;default:0" json:"latency_bucket_5000"`
+	LatencyBucket50   int       `gorm:"column:latency_bucket_50;not null;default:0" json:"latency_bucket_50"`
+	LatencyBucket100  int       `gorm:"column:latency_bucket_100;not null;default:0" json:"latency_bucket_100"`
+	LatencyBucket200  int       `gorm:"column:latency_bucket_200;not null;default:0" json:"latency_bucket_200"`
+	LatencyBucket500  int       `gorm:"column:latency_bucket_500;not null;default:0" json:"latency_bucket_500"`
+	LatencyBucket1000 int       `gorm:"column:latency_bucket_1000;not null;default:0" json:"latency_bucket_1000"`
+	LatencyBucket2000 int       `gorm:"column:latency_bucket_2000;not null;default:0" json:"latency_bucket_2000"`
+	LatencyBucket5000 int       `gorm:"column:latency_bucket_5000;not null;default:0" json:"latency_bucket_5000"`
 	LatencyBucketSlow int       `gorm:"not null;default:0" json:"latency_bucket_slow"`
+	CtxSystemTokens       int64 `gorm:"not null;default:0" json:"ctx_system_tokens"`
+	CtxHistoryTokens      int64 `gorm:"not null;default:0" json:"ctx_history_tokens"`
+	CtxQuestionTokens     int64 `gorm:"not null;default:0" json:"ctx_question_tokens"`
+	CtxToolTokens         int64 `gorm:"not null;default:0" json:"ctx_tool_tokens"`
+	CtxToolOutputTokens   int64 `gorm:"not null;default:0" json:"ctx_tool_output_tokens"`
+	CtxTotalWindow        int64 `gorm:"not null;default:0" json:"ctx_total_window"`
+	CtxAnalyzedCount      int   `gorm:"not null;default:0" json:"ctx_analyzed_count"`
+	CtxOverflowCount      int   `gorm:"not null;default:0" json:"ctx_overflow_count"`
+	CtxWindowUnknownCount int   `gorm:"not null;default:0" json:"ctx_window_unknown_count"`
+	CtxUtilBucketLt50     int   `gorm:"not null;default:0" json:"ctx_util_bucket_lt50"`
+	CtxUtilBucket5080     int   `gorm:"column:ctx_util_bucket_50_80;not null;default:0" json:"ctx_util_bucket_50_80"`
+	CtxUtilBucket8095     int   `gorm:"column:ctx_util_bucket_80_95;not null;default:0" json:"ctx_util_bucket_80_95"`
+	CtxUtilBucketGt95     int   `gorm:"not null;default:0" json:"ctx_util_bucket_gt95"`
 	CreatedAt         time.Time `gorm:"not null;default:now()" json:"created_at"`
 }
 

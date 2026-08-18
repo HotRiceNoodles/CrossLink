@@ -53,6 +53,13 @@ func testDB(t *testing.T) (*gorm.DB, dialect.Dialect, func()) {
 	t.Chdir(projectRoot)
 	require.NoError(t, d.RunMigrations(context.Background()), "migrations failed")
 
+	// usage_logs.org_id has an FK to organizations — seed the sentinel test org
+	// used by all DataLens integration tests.
+	require.NoError(t, db.Exec(
+		"INSERT INTO organizations (id, name, display_name, status, created_at, updated_at) VALUES (?, 'test-org', 'test-org', 1, now(), now())",
+		testOrgID,
+	).Error, "failed to seed test organization")
+
 	cleanup := func() { d.Shutdown(db) }
 	return db, d, cleanup
 }

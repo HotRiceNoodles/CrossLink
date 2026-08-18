@@ -1,0 +1,29 @@
+ALTER TABLE datalens_daily_metrics
+    DROP COLUMN ctx_system_tokens,
+    DROP COLUMN ctx_history_tokens,
+    DROP COLUMN ctx_question_tokens,
+    DROP COLUMN ctx_tool_tokens,
+    DROP COLUMN ctx_tool_output_tokens,
+    DROP COLUMN ctx_total_window,
+    DROP COLUMN ctx_analyzed_count,
+    DROP COLUMN ctx_overflow_count,
+    DROP COLUMN ctx_window_unknown_count,
+    DROP COLUMN ctx_util_bucket_lt50,
+    DROP COLUMN ctx_util_bucket_50_80,
+    DROP COLUMN ctx_util_bucket_80_95,
+    DROP COLUMN ctx_util_bucket_gt95;
+
+ALTER TABLE datalens_hourly_metrics
+    DROP COLUMN ctx_system_tokens,
+    DROP COLUMN ctx_history_tokens,
+    DROP COLUMN ctx_question_tokens,
+    DROP COLUMN ctx_tool_tokens,
+    DROP COLUMN ctx_tool_output_tokens,
+    DROP COLUMN ctx_total_window,
+    DROP COLUMN ctx_analyzed_count,
+    DROP COLUMN ctx_overflow_count,
+    DROP COLUMN ctx_window_unknown_count,
+    DROP COLUMN ctx_util_bucket_lt50,
+    DROP COLUMN ctx_util_bucket_50_80,
+    DROP COLUMN ctx_util_bucket_80_95,
+    DROP COLUMN ctx_util_bucket_gt95;

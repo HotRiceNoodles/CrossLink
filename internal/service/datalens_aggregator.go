@@ -173,6 +173,10 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
 		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
 		"latency_bucket_5000", "latency_bucket_slow",
+		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
+		"ctx_tool_output_tokens", "ctx_total_window",
+		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
+		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
 	)
 
 	// SELECT expressions
@@ -212,6 +216,19 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		s.d.ConditionalSum("latency_ms BETWEEN 1000 AND 1999") + " AS latency_bucket_2000",
 		s.d.ConditionalSum("latency_ms BETWEEN 2000 AND 4999") + " AS latency_bucket_5000",
 		s.d.ConditionalSum("latency_ms >= 5000") + " AS latency_bucket_slow",
+		s.d.ConditionalSumCol("system_tokens", ctxAnalyzedCond)+" AS ctx_system_tokens",
+		s.d.ConditionalSumCol("history_tokens", ctxAnalyzedCond)+" AS ctx_history_tokens",
+		s.d.ConditionalSumCol("question_tokens", ctxAnalyzedCond)+" AS ctx_question_tokens",
+		s.d.ConditionalSumCol("tool_tokens", ctxAnalyzedCond)+" AS ctx_tool_tokens",
+		s.d.ConditionalSumCol("tool_output_tokens", ctxAnalyzedCond)+" AS ctx_tool_output_tokens",
+		s.d.ConditionalSumCol("context_window", ctxAnalyzedCond)+" AS ctx_total_window",
+		s.d.ConditionalCountWhere(ctxAnalyzedCond)+" AS ctx_analyzed_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 1 != 0") + " AS ctx_overflow_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 8 != 0") + " AS ctx_window_unknown_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 0 AND context_utilization_bp < 5000") + " AS ctx_util_bucket_lt50",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 5000 AND context_utilization_bp < 8000") + " AS ctx_util_bucket_50_80",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 8000 AND context_utilization_bp < 9500") + " AS ctx_util_bucket_80_95",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 9500") + " AS ctx_util_bucket_gt95",
 	)
 
 	// GROUP BY columns
@@ -237,6 +254,10 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
 		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
 		"latency_bucket_5000", "latency_bucket_slow",
+		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
+		"ctx_tool_output_tokens", "ctx_total_window",
+		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
+		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
 	}
 	var setParts []string
 	for _, col := range updateCols {
@@ -285,6 +306,10 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
 		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
 		"latency_bucket_5000", "latency_bucket_slow",
+		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
+		"ctx_tool_output_tokens", "ctx_total_window",
+		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
+		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
 	}
 
 	// Build SELECT: SUM for most, MIN for min_latency, MAX for max_latency, 0 for distinct.
@@ -338,6 +363,10 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
 		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
 		"latency_bucket_5000", "latency_bucket_slow",
+		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
+		"ctx_tool_output_tokens", "ctx_total_window",
+		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
+		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
 	}
 	var setParts []string
 	for _, col := range updateCols {
@@ -609,3 +638,7 @@ func (s *DataLensAggregatorService) updateAggStatus(ctx context.Context, level, 
 func statusGroupCASE() string {
 	return `CASE WHEN status_code >= 200 AND status_code < 300 THEN 200 WHEN status_code = 429 THEN 429 WHEN status_code >= 400 AND status_code < 500 THEN 400 WHEN status_code >= 500 THEN 500 ELSE 0 END`
 }
+
+// ctxAnalyzedCond is the shared WHERE condition for context-analysis aggregation:
+// exclude cache hits and rows that were never analyzed (analysis_flags IS NULL).
+const ctxAnalyzedCond = "NOT cache_hit AND analysis_flags IS NOT NULL"

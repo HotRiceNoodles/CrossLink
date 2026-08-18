@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,8 +27,9 @@ func TestAggregatorHourlyUpsert(t *testing.T) {
 	// Clean up any stale test data.
 	cleanupData(t, db, testOrgID)
 
-	// Insert 100 usage_logs for a known hour.
-	hourStart := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.UTC)
+	// Insert 100 usage_logs spread across the hour ending now (so all rows
+	// fall inside the aggregator's 3h lookback window).
+	hourStart := now.Add(-time.Hour)
 	insertTestLogs(t, db, testOrgID, hourStart, 100)
 
 	// Verify raw data landed.
@@ -53,9 +55,10 @@ func TestAggregatorHourlyUpsert(t *testing.T) {
 	// Run one aggregation cycle.
 	require.NoError(t, svc.AggregateOnce(ctx))
 
-	// Query hourly metrics for our test org.
+	// Query hourly metrics for our test org (global level only — other levels
+	// re-aggregate the same rows across different dimensions).
 	var metrics []model.DataLensHourlyMetric
-	require.NoError(t, db.Where("org_id = ?", testOrgID).Find(&metrics).Error)
+	require.NoError(t, db.Where("org_id = ? AND agg_level = 'global'", testOrgID).Find(&metrics).Error)
 	require.NotEmpty(t, metrics, "expected at least one hourly metric row")
 
 	// Assert: SUM(total_cost) across all hourly rows ≈ SUM(cost) from raw usage_logs.
@@ -73,7 +76,7 @@ func TestAggregatorHourlyUpsert(t *testing.T) {
 	require.NoError(t, svc.AggregateOnce(ctx))
 
 	var metricsAfter []model.DataLensHourlyMetric
-	require.NoError(t, db.Where("org_id = ?", testOrgID).Find(&metricsAfter).Error)
+	require.NoError(t, db.Where("org_id = ? AND agg_level = 'global'", testOrgID).Find(&metricsAfter).Error)
 	assert.Equal(t, rowCountBefore, len(metricsAfter), "re-running aggregation should not create extra rows")
 
 	// Cleanup.
@@ -173,6 +176,108 @@ func TestAggregatorDailyRollup(t *testing.T) {
 	assert.Equal(t, sumRequests, dailySumRequests, "daily SUM(request_count) should match hourly sum")
 	assert.Equal(t, minLatency, dailyMinLatency, "daily MIN(min_latency_ms) should equal min of hourly mins")
 	assert.Equal(t, maxLatency, dailyMaxLatency, "daily MAX(max_latency_ms) should equal max of hourly maxes")
+
+	cleanupData(t, db, testOrgID)
+}
+
+// TestAggregatorHourlyContextColumns verifies that context-analysis columns
+// aggregate correctly: cache_hit rows and unanalyzed rows (analysis_flags IS NULL)
+// are excluded; utilization buckets place rows at the correct boundaries.
+func TestAggregatorHourlyContextColumns(t *testing.T) {
+	db, d, cleanup := testDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	cleanupData(t, db, testOrgID)
+
+	now := time.Now().UTC()
+	hourStart := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.UTC)
+
+	mk := func(cacheHit bool, bp *int) model.UsageLog {
+		org := int64(testOrgID)
+		sys, hist, q, tool, toolOut := 100, 200, 300, 400, 500
+		win := 100000
+		flags := 1 | 8 // overflow + window_unknown both set
+		l := model.UsageLog{
+			RequestID:      fmt.Sprintf("req-ctx-%v-%d", cacheHit, bp),
+			OrgID:          &org,
+			ModelRequested: "gpt-4o",
+			ModelUsed:      "gpt-4o",
+			InputTokens:    1000,
+			OutputTokens:   100,
+			Cost:           0.01,
+			LatencyMs:      200,
+			StatusCode:     200,
+			Currency:       "CNY",
+			RouteType:      "weighted",
+			CreatedAt:      hourStart,
+		}
+		if cacheHit {
+			l.CacheHit = true
+		}
+		l.SystemTokens = &sys
+		l.HistoryTokens = &hist
+		l.QuestionTokens = &q
+		l.ToolTokens = &tool
+		l.ToolOutputTokens = &toolOut
+		l.ContextWindow = &win
+		l.AnalysisFlags = &flags
+		l.ContextUtilizationBp = bp
+		return l
+	}
+
+	// Row 1: fully analyzed, bp=9600 (gt95 bucket), non-cache-hit.
+	// Row 2: cache_hit=true with analysis fields — must be excluded from all ctx cols.
+	// Row 3: bp=9499 (80_95 bucket), non-cache-hit.
+	// Row 4: analyzed but context_utilization_bp IS NULL — counted in ctx_analyzed_count,
+	// but must fall into no utilization bucket.
+	bp9600, bp9499 := 9600, 9499
+	rows := []model.UsageLog{mk(false, &bp9600), mk(true, &bp9600), mk(false, &bp9499), mk(false, nil)}
+	require.NoError(t, db.CreateInBatches(rows, 4).Error)
+
+	cfg := config.DataLensConfig{
+		Enabled: true,
+		Agg: config.DataLensAggConfig{
+			Interval:  "1h",
+			Lookback:  "3h",
+		},
+	}
+	svc := NewDataLensAggregatorService(db, d, cfg)
+	require.NoError(t, svc.AggregateOnce(ctx))
+
+	var metrics []model.DataLensHourlyMetric
+	require.NoError(t, db.Where("org_id = ? AND agg_level = 'global'", testOrgID).Find(&metrics).Error)
+	require.NotEmpty(t, metrics)
+
+	// Find the row covering our test hour (status_group=200, CNY).
+	var m *model.DataLensHourlyMetric
+	for i := range metrics {
+		if metrics[i].StatusGroup == 200 && metrics[i].HourBucket.Equal(hourStart) {
+			m = &metrics[i]
+		}
+	}
+	require.NotNil(t, m, "hourly metric row for test hour not found")
+
+	// Rows 1, 3, 4 analyzed (cache_hit row excluded); row 4 has NULL bp.
+	assert.Equal(t, 3, m.CtxAnalyzedCount, "ctx_analyzed_count should exclude cache_hit rows")
+	assert.Equal(t, int64(3*100), m.CtxSystemTokens)
+	assert.Equal(t, int64(3*200), m.CtxHistoryTokens)
+	assert.Equal(t, int64(3*300), m.CtxQuestionTokens)
+	assert.Equal(t, int64(3*400), m.CtxToolTokens)
+	assert.Equal(t, int64(3*500), m.CtxToolOutputTokens)
+	assert.Equal(t, int64(3*100000), m.CtxTotalWindow)
+	// flags = 1|8 on all three analyzed rows.
+	assert.Equal(t, 3, m.CtxOverflowCount)
+	assert.Equal(t, 3, m.CtxWindowUnknownCount)
+	// Bucket placement: bp=9600 → gt95, bp=9499 → 80_95, bp=NULL → no bucket.
+	assert.Equal(t, 0, m.CtxUtilBucketLt50)
+	assert.Equal(t, 0, m.CtxUtilBucket5080)
+	assert.Equal(t, 1, m.CtxUtilBucket8095)
+	assert.Equal(t, 1, m.CtxUtilBucketGt95)
+	// Explicit: the NULL-bp analyzed row falls into no utilization bucket.
+	assert.Equal(t, 2, m.CtxUtilBucketLt50+m.CtxUtilBucket5080+m.CtxUtilBucket8095+m.CtxUtilBucketGt95,
+		"NULL bp analyzed rows must not land in any utilization bucket")
+	// Unanalyzed rows (analysis_flags NULL) also excluded — verified by total sums above.
 
 	cleanupData(t, db, testOrgID)
 }
