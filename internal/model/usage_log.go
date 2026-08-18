@@ -41,7 +41,18 @@ type UsageLog struct {
 	ImageCount         *int64     `gorm:"default:null" json:"image_count,omitempty"`  // image requests: number of images (NULL = non-image)
 	ImageSize          *string    `gorm:"size:16" json:"image_size,omitempty"`        // image requests: e.g. "1024x1024"
 	ImageQuality       *string    `gorm:"size:16" json:"image_quality,omitempty"`     // image requests: e.g. "hd"
-	CreatedAt          time.Time  `gorm:"not null;index" json:"created_at"`
+	// Context quality analysis (docs/plans/2026-08-18-context-analysis-design.md §4.1).
+	// NULL = unanalyzed (cache-hit or analysis failure), never 0.
+	SystemTokens         *int           `gorm:"default:null" json:"system_tokens,omitempty"`
+	HistoryTokens        *int           `gorm:"default:null" json:"history_tokens,omitempty"`
+	QuestionTokens       *int           `gorm:"default:null" json:"question_tokens,omitempty"`
+	ToolTokens           *int           `gorm:"default:null" json:"tool_tokens,omitempty"`
+	ToolOutputTokens     *int           `gorm:"default:null" json:"tool_output_tokens,omitempty"`
+	ContextWindow        *int           `gorm:"default:null" json:"context_window,omitempty"`
+	ContextUtilizationBp *int           `gorm:"default:null" json:"context_utilization_bp,omitempty"`
+	AnalysisFlags        *int           `gorm:"default:null" json:"analysis_flags,omitempty"`
+	ContextSnapshot      datatypes.JSON `gorm:"default:null" json:"context_snapshot,omitempty"`
+	CreatedAt            time.Time      `gorm:"not null;index" json:"created_at"`
 }
 
 func (UsageLog) TableName() string { return "usage_logs" }

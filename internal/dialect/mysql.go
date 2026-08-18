@@ -178,6 +178,16 @@ func (m *MySQLDialect) ConditionalSum(condition string) string {
 	return fmt.Sprintf("SUM(CASE WHEN %s THEN 1 ELSE 0 END)", condition)
 }
 
+// ConditionalSumCol returns a SUM(CASE WHEN ... COALESCE(col,0)) expression.
+func (m *MySQLDialect) ConditionalSumCol(column string, condition string) string {
+	return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s THEN COALESCE(%s, 0) ELSE 0 END), 0)", condition, column)
+}
+
+// ConditionalCountWhere returns a SUM(CASE WHEN cond THEN 1 ELSE 0 END) expression.
+func (m *MySQLDialect) ConditionalCountWhere(condition string) string {
+	return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s THEN 1 ELSE 0 END), 0)", condition)
+}
+
 // CastFloat returns a MySQL float cast expression.
 func (m *MySQLDialect) CastFloat(expr string) string {
 	return "CAST(" + expr + " AS DOUBLE)"

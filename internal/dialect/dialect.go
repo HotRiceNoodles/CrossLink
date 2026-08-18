@@ -30,6 +30,8 @@ type Dialect interface {
 	JSONMergePatch(column string, jsonExpr string) string // JSON merge/patch
 	ConditionalCount(column string, value string) string // PG: FILTER(WHERE), others: SUM(CASE)
 	ConditionalSum(condition string) string              // PG: SUM(1) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
+	ConditionalSumCol(column string, condition string) string // SUM(COALESCE(col,0)) under cond — PG: FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN COALESCE(col,0) ELSE 0 END)
+	ConditionalCountWhere(condition string) string       // COUNT of rows matching cond — PG: COUNT(*) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
 	CastFloat(expr string) string                       // PG: ::float, others: CAST(AS DOUBLE)
 
 	// Lifecycle

@@ -116,6 +116,16 @@ type UsageEntry struct {
 	ImageQuality    string
 	PrecomputedCost float64
 	PriceMultiplier float64 // key's price multiplier (1.0 = no markup)
+	// Context quality analysis fields — nil = unanalyzed (cache-hit or analysis failure).
+	SystemTokens         *int
+	HistoryTokens        *int
+	QuestionTokens       *int
+	ToolTokens           *int
+	ToolOutputTokens     *int
+	ContextWindow        *int
+	ContextUtilizationBp *int
+	AnalysisFlags        *int
+	ContextSnapshot      datatypes.JSON
 }
 
 func (e *UsageEntry) cost() float64 {
@@ -190,6 +200,15 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 	if entry.ImageQuality != "" {
 		log.ImageQuality = &entry.ImageQuality
 	}
+	log.SystemTokens = entry.SystemTokens
+	log.HistoryTokens = entry.HistoryTokens
+	log.QuestionTokens = entry.QuestionTokens
+	log.ToolTokens = entry.ToolTokens
+	log.ToolOutputTokens = entry.ToolOutputTokens
+	log.ContextWindow = entry.ContextWindow
+	log.ContextUtilizationBp = entry.ContextUtilizationBp
+	log.AnalysisFlags = entry.AnalysisFlags
+	log.ContextSnapshot = entry.ContextSnapshot
 	return log
 }
 

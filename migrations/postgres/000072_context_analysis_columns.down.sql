@@ -1,0 +1,10 @@
+ALTER TABLE usage_logs
+    DROP COLUMN system_tokens,
+    DROP COLUMN history_tokens,
+    DROP COLUMN question_tokens,
+    DROP COLUMN tool_tokens,
+    DROP COLUMN tool_output_tokens,
+    DROP COLUMN context_window,
+    DROP COLUMN context_utilization_bp,
+    DROP COLUMN analysis_flags,
+    DROP COLUMN context_snapshot;

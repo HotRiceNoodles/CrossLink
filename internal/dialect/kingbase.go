@@ -139,6 +139,14 @@ func (k *KingbaseDialect) ConditionalSum(condition string) string {
 	return k.pg.ConditionalSum(condition)
 }
 
+func (k *KingbaseDialect) ConditionalSumCol(column string, condition string) string {
+	return k.pg.ConditionalSumCol(column, condition)
+}
+
+func (k *KingbaseDialect) ConditionalCountWhere(condition string) string {
+	return k.pg.ConditionalCountWhere(condition)
+}
+
 func (k *KingbaseDialect) CastFloat(expr string) string {
 	return k.pg.CastFloat(expr)
 }

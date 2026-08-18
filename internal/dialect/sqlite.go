@@ -212,6 +212,16 @@ func (s *SQLiteDialect) ConditionalSum(condition string) string {
 	return fmt.Sprintf("SUM(CASE WHEN %s THEN 1 ELSE 0 END)", condition)
 }
 
+// ConditionalSumCol returns a SUM(CASE WHEN ... COALESCE(col,0)) expression.
+func (s *SQLiteDialect) ConditionalSumCol(column string, condition string) string {
+	return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s THEN COALESCE(%s, 0) ELSE 0 END), 0)", condition, column)
+}
+
+// ConditionalCountWhere returns a SUM(CASE WHEN cond THEN 1 ELSE 0 END) expression.
+func (s *SQLiteDialect) ConditionalCountWhere(condition string) string {
+	return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s THEN 1 ELSE 0 END), 0)", condition)
+}
+
 // CastFloat returns a SQLite float cast expression.
 func (s *SQLiteDialect) CastFloat(expr string) string {
 	return "CAST(" + expr + " AS DOUBLE)"
