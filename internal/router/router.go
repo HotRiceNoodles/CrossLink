@@ -77,6 +77,8 @@ type RouteResult struct {
 	// re-derive effective-weight ordering without re-querying the DB.
 	Weight   int
 	Priority int
+	// context window of the provider model, nil = unknown
+	MaxContext *int
 }
 
 func NewResolver(
@@ -241,6 +243,7 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 			Currency:       m.Currency,
 			Weight:         m.Weight,
 			Priority:       m.Priority,
+			MaxContext:     m.MaxContext,
 			ModelID:        m.ID,
 			ModelName:      m.ModelName,
 			AvgLatencyMs:   meta[i].latency,

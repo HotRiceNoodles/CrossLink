@@ -73,6 +73,7 @@ type RouteCandidate struct {
 	FallbackModels []string
 	FallbackCfg    FallbackConfig
 	ExtraConfig    json.RawMessage
+	MaxContext     *int
 }
 
 type RoutingStrategy interface {
@@ -105,6 +106,7 @@ func candidateToRouteResult(c RouteCandidate) *RouteResult {
 		ExtraConfig:    c.ExtraConfig,
 		Weight:         c.Weight,
 		Priority:       c.Priority,
+		MaxContext:     c.MaxContext,
 	}
 }
 

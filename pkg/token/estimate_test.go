@@ -2,6 +2,16 @@ package token
 
 import "testing"
 
+func TestEstimateZeroAlloc(t *testing.T) {
+	// Must agree with the original Estimate on pure ASCII, pure CJK and mixed.
+	cases := []string{"hello world", "你好世界", "混合mixed文本text123", "", "    "}
+	for _, s := range cases {
+		if got, want := EstimateZeroAlloc(s), Estimate(s); got != want {
+			t.Errorf("EstimateZeroAlloc(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
 func TestEstimate_ASCII(t *testing.T) {
 	// 20 ASCII chars -> ~5 tokens
 	got := Estimate("Hello world, test!")

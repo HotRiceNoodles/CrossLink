@@ -174,3 +174,18 @@ func TestParseExtraConfig(t *testing.T) {
 		})
 	}
 }
+
+func intPtrRouter(v int) *int { return &v }
+
+func TestRouteResultCarriesMaxContext(t *testing.T) {
+	c := RouteCandidate{ProviderModel: "gpt-4o", MaxContext: intPtrRouter(128000)}
+	rr := candidateToRouteResult(c)
+	if rr.MaxContext == nil || *rr.MaxContext != 128000 {
+		t.Fatalf("MaxContext not carried: %+v", rr.MaxContext)
+	}
+	c2 := RouteCandidate{ProviderModel: "m"}
+	rr2 := candidateToRouteResult(c2)
+	if rr2.MaxContext != nil {
+		t.Fatalf("nil MaxContext must stay nil, got %v", *rr2.MaxContext)
+	}
+}
