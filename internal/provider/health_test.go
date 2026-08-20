@@ -120,3 +120,58 @@ func TestRecordTransientFailure_RetryAfterClamp(t *testing.T) {
 		t.Fatalf("unexpectedly short cooldown: %v", got)
 	}
 }
+
+func TestSnapshot_Empty(t *testing.T) {
+	ht := NewHealthTracker()
+	if got := ht.Snapshot(); len(got) != 0 {
+		t.Fatalf("empty tracker snapshot = %v, want empty", got)
+	}
+}
+
+func TestSnapshot_States(t *testing.T) {
+	ht := NewHealthTrackerWithConfig(1, time.Minute)
+	ht.RecordTransientFailure("acct", "", 0) // threshold=1 → open
+	ht.RecordPersistentFailure("acct", "m1", "model", time.Hour)
+	ht.RecordTransientFailure("expired", "", 0)
+
+	snaps := ht.Snapshot()
+	if len(snaps) != 3 {
+		t.Fatalf("snapshot length = %d, want 3: %+v", len(snaps), snaps)
+	}
+	byKey := map[string]ProviderHealthSnapshot{}
+	for _, s := range snaps {
+		k := s.Provider
+		if s.Model != "" {
+			k += "|" + s.Model
+		}
+		byKey[k] = s
+	}
+	if s := byKey["acct"]; s.State != "open" || s.Until.IsZero() {
+		t.Errorf("acct = %+v, want open with Until", s)
+	}
+	if s := byKey["acct|m1"]; s.State != "open" || s.Model != "m1" {
+		t.Errorf("acct|m1 = %+v, want open model m1", s)
+	}
+	if s := byKey["expired"]; s.State != "open" {
+		t.Errorf("expired = %+v, want open", s)
+	}
+}
+
+func TestSnapshot_ConcurrentReadWrite(t *testing.T) {
+	ht := NewHealthTrackerWithConfig(1, time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			ht.RecordTransientFailure("p", "", 0)
+			ht.RecordSuccess("p")
+			ht.RecordPersistentFailure("p", "m", "model", time.Second)
+		}
+	}()
+	for i := 0; i < 2000; i++ {
+		for _, s := range ht.Snapshot() {
+			_ = s.State
+		}
+	}
+	<-done
+}

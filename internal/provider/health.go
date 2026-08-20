@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,55 @@ const (
 	CircuitHalfOpen                     // openUntil expired, awaiting probe outcome
 	CircuitOpen                         // blocking (time.Now().Before(openUntil))
 )
+
+// String returns the lowercase state name used by the health snapshot API.
+func (s CircuitState) String() string {
+	switch s {
+	case CircuitOpen:
+		return "open"
+	case CircuitHalfOpen:
+		return "half_open"
+	default:
+		return "closed"
+	}
+}
+
+// ProviderHealthSnapshot is a copy of one circuit's state — never a reference
+// to internal tracker state.
+type ProviderHealthSnapshot struct {
+	Provider string
+	Model    string
+	State    string    // "closed" / "half_open" / "open"
+	Until    time.Time // cooldown deadline; zero value = none
+}
+
+// Snapshot returns a copy of every tracked circuit keyed by provider (account
+// scope) or provider|model (model scope). Safe for concurrent use.
+func (h *HealthTracker) Snapshot() []ProviderHealthSnapshot {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	out := make([]ProviderHealthSnapshot, 0, len(h.states))
+	for k, s := range h.states {
+		name, model := k, ""
+		if i := strings.LastIndex(k, "|"); i >= 0 {
+			name, model = k[:i], k[i+1:]
+		}
+		snap := ProviderHealthSnapshot{Provider: name, Model: model}
+		if s.openUntil.IsZero() {
+			snap.State = CircuitClosed.String()
+		} else {
+			snap.Until = s.openUntil
+			if now.Before(s.openUntil) {
+				snap.State = CircuitOpen.String()
+			} else {
+				snap.State = CircuitHalfOpen.String()
+			}
+		}
+		out = append(out, snap)
+	}
+	return out
+}
 
 type circuitState struct {
 	kind             circuitKind
