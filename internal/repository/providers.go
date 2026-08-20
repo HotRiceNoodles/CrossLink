@@ -18,6 +18,7 @@ type Repos struct {
 	BudgetAlertRepo       *BudgetAlertRepo
 	OrgRepo               *OrgRepo
 	ErrorRuleRepo         *ErrorRuleRepo
+	PatTokenRepo          *PatTokenRepo
 	DataLensStore         MetricsStore // interface — set in FullSetup where dialect is available
 	DataLensRepo          *DataLensRepository
 }
@@ -37,6 +38,7 @@ func ProvideRepos(db *gorm.DB) *Repos {
 		BudgetAlertRepo:       NewBudgetAlertRepo(db),
 		OrgRepo:               NewOrgRepo(db),
 		ErrorRuleRepo:         NewErrorRuleRepo(db),
+		PatTokenRepo:          NewPatTokenRepo(db),
 		DataLensRepo:          NewDataLensRepository(db),
 	}
 }
