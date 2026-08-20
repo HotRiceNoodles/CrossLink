@@ -49,6 +49,9 @@ var ValidActions = map[string]bool{
 	"debug:list":                  true,
 	"debug:clear":                 true,
 	"budget:manage":               true,
+	"budget:read":                 true,
+	"health:read":                 true,
+	"pat:manage":                  true,
 	"guardrail:list":              true,
 	"guardrail:create":            true,
 	"guardrail:update":            true,
@@ -141,6 +144,7 @@ var AdminExclusiveActions = map[string]bool{
 	"template:create":   true,
 	"template:update":   true,
 	"template:delete":   true,
+	"pat:manage":        true,
 }
 
 func IsValidAction(action string) bool {

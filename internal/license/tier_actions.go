@@ -49,6 +49,10 @@ var communityActions = map[string]bool{
 	"guardrail:update": true,
 	"guardrail:delete": true,
 	"guardrail:test":   true,
+	// Scoped PAT support — community-core.
+	"budget:read": true,
+	"health:read": true,
+	"pat:manage":  true,
 }
 
 // proExtraActions defines additional actions available to the Pro tier (on top of Community).
