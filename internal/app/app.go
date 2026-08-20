@@ -439,6 +439,49 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.POST("/debug/entries/:seq/replay", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Replay)
 		adminGroup.DELETE("/debug/entries", middleware.RequireAction(permCache, "debug:clear"), handlers.Debug.Clear)
 
+		// PAT management (self-service scoped tokens)
+		patSvc := service.NewPatService(repos.PatTokenRepo)
+		patHandler := admin.NewPATAdminHandler(patSvc, repos.PatTokenRepo, repos.RoleRepo, ext.Deps.AuditSvc)
+		adminGroup.GET("/pats", middleware.RequireAction(permCache, "pat:manage"), patHandler.List)
+		adminGroup.POST("/pats", middleware.RequireAction(permCache, "pat:manage"), patHandler.Create)
+		adminGroup.DELETE("/pats/:id", middleware.RequireAction(permCache, "pat:manage"), patHandler.Revoke)
+
+		// PAT read-only routes — explicit allowlist group (design: default-deny).
+		// No JWT/CSRF/OrgResolve: PATAuthMiddleware resolves identity from the
+		// token itself (org_id=0 for Phase 1 admin-only); header-only auth
+		// blocks CSRF.
+		//
+		// Rate-limit ordering note: the group-level limiter runs before the
+		// route-level PATAuthMiddleware, so no user_id is in the context and
+		// the limit key falls back to ClientIP. This is accepted: per-IP
+		// limiting suits single-IP agents and avoids coupling the limiter to
+		// auth middleware order.
+		patReadHandler := admin.NewPATReadHandler(admin.PATReadDeps{
+			KeyLister:   svcs.KeySvc,
+			UsageSummer: &admin.GormUsageSummer{DB: db},
+			UsageAgg:    &admin.GormUsageAggregator{DB: db},
+			BudgetSpent: svcs.BudgetSvc,
+			Health:      infra.Health,
+			Version:     version.Version,
+		})
+		patGroup := r.Group("/admin/api/pat")
+		patGroup.Use(middleware.AdminRateLimit(rdb, 60, time.Minute, "pat:"))
+		// Audit runs after PATAuthMiddleware (route-level) in the chain, so
+		// pat_id is already in the context when its c.Next() returns.
+		// Pass a bare nil when AuditSvc is absent (Community): a nil
+		// *service.AuditService inside the AuditLogger interface is not == nil.
+		var patAuditSvc middleware.AuditLogger
+		if ext.Deps.AuditSvc != nil {
+			patAuditSvc = ext.Deps.AuditSvc
+		}
+		patGroup.Use(middleware.PATAudit(patAuditSvc))
+		{
+			patGroup.GET("/keys", middleware.PATAuthMiddleware(patSvc, repos.UserRepo, "key:list"), middleware.RequireAction(permCache, "key:list"), patReadHandler.Keys)
+			patGroup.GET("/usage/summary", middleware.PATAuthMiddleware(patSvc, repos.UserRepo, "usage:list"), middleware.RequireAction(permCache, "usage:list"), patReadHandler.Usage)
+			patGroup.GET("/budgets/status", middleware.PATAuthMiddleware(patSvc, repos.UserRepo, "budget:read"), middleware.RequireAction(permCache, "budget:read"), patReadHandler.Budgets)
+			patGroup.GET("/health", middleware.PATAuthMiddleware(patSvc, repos.UserRepo, "health:read"), middleware.RequireAction(permCache, "health:read"), patReadHandler.Health)
+		}
+
 		// Commercial route extension point
 		if ext.ExtraRoutes != nil {
 			slog.Info("registering extra admin routes via extension point")
