@@ -426,6 +426,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// System info (self-service, no RequireAction)
 		adminGroup.GET("/system/info", handlers.System.Info)
 		adminGroup.POST("/system/password", middleware.RequireAction(permCache, "system:password"), handlers.System.ChangePassword)
+		// Content-log toggle — community-core setting; the aggregate
+		// /system/settings endpoint stays in the Pro overlay.
+		adminGroup.GET("/system/content-log", middleware.RequireAction(permCache, "system:view"), handlers.System.GetContentLog)
+		adminGroup.PUT("/system/content-log", middleware.RequireAction(permCache, "system:update"), handlers.System.UpdateContentLog)
 
 		// License
 		adminGroup.GET("/license/status", middleware.RequireAction(permCache, "license:view"), handlers.License.Status)

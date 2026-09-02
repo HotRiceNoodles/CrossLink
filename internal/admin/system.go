@@ -98,6 +98,49 @@ func RunResilienceRefreshLoop(ctx context.Context, db *gorm.DB, health *provider
 	}
 }
 
+// GetContentLog returns the content-log toggle state. Runtime state
+// (UsageService) is authoritative — it reflects the startup DB load and any
+// hot updates from this endpoint or the Pro overlay's /system/settings.
+func (h *SystemHandler) GetContentLog(c *gin.Context) {
+	enabled := false
+	var s model.SystemSetting
+	if h.db.Where("key = ?", "log_content").First(&s).Error == nil {
+		enabled = s.Value == "true"
+	}
+	if h.usageSvc != nil {
+		enabled = h.usageSvc.IsContentLogEnabled()
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"enabled": enabled}})
+}
+
+// UpdateContentLog persists the content-log toggle and applies it immediately
+// (hot update, no restart). Both this endpoint and the Pro overlay's
+// /system/settings write the same "log_content" DB key, so the two stay in sync.
+func (h *SystemHandler) UpdateContentLog(c *gin.Context) {
+	var req struct {
+		Enabled *bool `json:"enabled" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "enabled must be a boolean")
+		return
+	}
+	val := "false"
+	if *req.Enabled {
+		val = "true"
+	}
+	if err := h.db.Save(&model.SystemSetting{Key: "log_content", Value: val}).Error; err != nil {
+		internalErr(c, err, "save content log setting failed")
+		return
+	}
+	if h.usageSvc != nil {
+		h.usageSvc.SetContentLogEnabled(*req.Enabled)
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "system:update_settings", "setting", "log_content", val, nil)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "content log setting updated"})
+}
+
 // LoadAdminPassword loads the persisted password hash from DB,
 // falling back to the config value if none is stored.
 func LoadAdminPassword(db *gorm.DB, cfg *config.AdminConfig) {
