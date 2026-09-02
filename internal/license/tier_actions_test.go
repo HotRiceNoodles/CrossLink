@@ -46,3 +46,30 @@ func TestScopedPATActionsRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestSystemSettingsActionsCommunity: system:view/system:update power the
+// Settings page (sidebar + route guard) and the dedicated /system/content-log
+// endpoint. They must be in communityActions, else Community tier 403s and the
+// settings menu is hidden entirely.
+func TestSystemSettingsActionsCommunity(t *testing.T) {
+	for _, a := range []string{"system:view", "system:update"} {
+		if !model.ValidActions[a] {
+			t.Errorf("model.ValidActions must include %s", a)
+		}
+		if !model.AdminExclusiveActions[a] {
+			t.Errorf("AdminExclusiveActions must include %s", a)
+		}
+		if !model.AdminRequiredActions[a] {
+			t.Errorf("AdminRequiredActions must include %s", a)
+		}
+		if !communityActions[a] {
+			t.Errorf("communityActions must include %s (otherwise Community tier 403s)", a)
+		}
+		if !TierActionSet[TierCommunity][a] {
+			t.Errorf("community tier must allow %s", a)
+		}
+		if !TierActionSet[TierPro][a] {
+			t.Errorf("pro tier must allow %s", a)
+		}
+	}
+}

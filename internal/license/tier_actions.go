@@ -36,6 +36,12 @@ var communityActions = map[string]bool{
 	"error_rule:create": true,
 	"error_rule:update": true,
 	"error_rule:delete": true,
+	// System settings — community-core. Powers the Settings page (sidebar +
+	// route guard use system:view) and the dedicated /system/content-log
+	// endpoint. The aggregate /system/settings endpoint itself stays Pro
+	// (commercial overlay).
+	"system:view":   true,
+	"system:update": true,
 	// Prompt templates (context engineering) — community-core feature.
 	"template:list":     true,
 	"template:create":   true,
@@ -62,8 +68,6 @@ var proExtraActions = map[string]bool{
 	"key:rotate":                  true,
 	"key:hashes":                  true,
 	"usage:export":                true,
-	"system:view":                 true,
-	"system:update":               true,
 	// Capability alias admin CRUD is Pro-gated end-to-end: the resolver, repo,
 	// and admin handler all live in the commercial overlay, which is only built
 	// into Pro/Enterprise. Runtime usage is additionally gated via the alias
