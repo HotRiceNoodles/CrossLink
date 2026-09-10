@@ -415,6 +415,21 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/guardrails/config", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.GetConfig)
 		adminGroup.PUT("/guardrails/config", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.UpdateConfig)
 
+		// Playground (community-core) — interactive testing for all modes
+		// (chat/stream/image/tts/stt/video/responses). Multimodal modes
+		// capability-probe providers via type assertion.
+		playgroundHandler := admin.NewPlaygroundHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, svcs.ActiveTracker, infra.RetryBudget, guardrailSvc, videoTaskSvc)
+		pg := adminGroup.Group("/playground")
+		pg.POST("/chat", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.Chat)
+		pg.POST("/stream", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.StreamChat)
+		pg.POST("/image", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.ImageGenerate)
+		pg.POST("/tts", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.TextToSpeech)
+		pg.POST("/transcribe", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.Transcribe)
+		pg.POST("/translate", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.Translate)
+		pg.POST("/video", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.VideoGenerate)
+		pg.GET("/video/:taskId", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.GetVideoStatus)
+		pg.POST("/responses", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.Responses)
+
 		// Prompt templates (context engineering). Super-admin only (AdminExclusiveActions).
 		adminGroup.GET("/templates", middleware.RequireAction(permCache, "template:list"), handlers.Templates.List)
 		adminGroup.POST("/templates", middleware.RequireAction(permCache, "template:create"), handlers.Templates.Create)
