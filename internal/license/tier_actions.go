@@ -59,6 +59,8 @@ var communityActions = map[string]bool{
 	"budget:read": true,
 	"health:read": true,
 	"pat:manage":  true,
+	// Playground (interactive testing, all modes) — community-core.
+	"playground:use": true,
 }
 
 // proExtraActions defines additional actions available to the Pro tier (on top of Community).
@@ -81,7 +83,6 @@ var proExtraActions = map[string]bool{
 	"guardrail_alert:update":      true,
 	"guardrail_alert:delete":      true,
 	"guardrail_alert:logs":        true,
-	"playground:use":              true,
 	"secret:test":                 true,
 	"secret:manage":               true,
 	"agent_shield:view":           true,

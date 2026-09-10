@@ -47,6 +47,24 @@ func TestScopedPATActionsRegistered(t *testing.T) {
 	}
 }
 
+// TestPlaygroundActionCommunity: playground:use powers the Playground page
+// (sidebar + route guard + /admin/api/playground/* routes). It must be in
+// communityActions, else Community tier 403s and the playground menu is hidden.
+func TestPlaygroundActionCommunity(t *testing.T) {
+	if !model.ValidActions["playground:use"] {
+		t.Error("model.ValidActions must include playground:use")
+	}
+	if !communityActions["playground:use"] {
+		t.Error("communityActions must include playground:use (otherwise Community tier 403s)")
+	}
+	if !TierActionSet[TierCommunity]["playground:use"] {
+		t.Error("community tier must allow playground:use")
+	}
+	if !TierActionSet[TierPro]["playground:use"] {
+		t.Error("pro tier must allow playground:use")
+	}
+}
+
 // TestSystemSettingsActionsCommunity: system:view/system:update power the
 // Settings page (sidebar + route guard) and the dedicated /system/content-log
 // endpoint. They must be in communityActions, else Community tier 403s and the
