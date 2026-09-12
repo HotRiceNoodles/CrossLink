@@ -82,9 +82,11 @@ What makes CrossLink different — each backed by code, not marketing.
 - 🇨🇳 **GM national crypto + air-gapped ready** — SM2/SM3/SM4 mode (including HMAC-SM3 JWT
   signing) and a self-hosted slider CAPTCHA. No reCAPTCHA/hCaptcha dependency — deploys
   fully offline for 信创 compliance. → [Deployment](docs/deployment.md)
-- 🎁 **Generous open core** — The Community edition (Apache 2.0) ships 39 actions including
-  MCP, RBAC, routing stats, and error rules. Pro adds guardrails/playground/secrets;
-  Enterprise adds multi-org, audit, and budgets.
+- 🎁 **Generous open core** — The Community edition (Apache 2.0) ships 47 actions including
+  MCP, RBAC, routing stats, error rules, guardrail CRUD (keyword / length / credential
+  detection), the interactive playground, prompt templates, and scoped PATs. Pro adds
+  secrets, guardrail alerts, debug replay, DataLens, and agent shielding; Enterprise adds
+  multi-org, audit, and budget management.
 
 ---
 
@@ -102,22 +104,35 @@ What makes CrossLink different — each backed by code, not marketing.
   retry policies (exponential/fixed/linear backoff), and error classification
 - **Response Caching** — Redis-based caching with per-model TTL, gzip compression, and
   cache key isolation per user
+- **Video Generation** — `POST /v1/videos` with status polling and content download,
+  routed through the same fallback chain as chat
+- **Prompt Templates** — Curated template catalog managed at `/admin/api/templates`;
+  key holders discover them via `GET /v1/templates` (metadata + ready-to-use curl examples)
 
 ### Security & Control
 
 - **Rate Limiting** — Per-key RPM/TPM limits with global concurrency control (2000)
 - **RBAC** — Role-based access control for providers, models, API keys, and MCP
-- **Budget Management** — Per-key and per-team budget limits with automatic circuit breaking
-- **Guardrails** — Pluggable content-safety engine framework with configurable rules and actions
+- **Budget Enforcement** — Per-key and per-team budget limits enforced at the gateway with
+  automatic circuit breaking (budget management console: Enterprise)
+- **Guardrails** — Built-in engines (keyword filter, content length, credential-leak
+  detection with an auto-seeded default rule) plus a pluggable `RegisterEngine` registry;
+  block / log / mask actions, admin CRUD, per-model config
+- **Scoped PATs** — Personal access tokens for CI / machine access with read-only usage,
+  budget, and health APIs
+- **SSRF Protection** — Dialer- and redirect-level guards on outbound provider calls
 - **Crypto Flexibility** — Standard (SHA-256/RSA/AES) or Chinese national cryptography (SM3/SM2/SM4)
 
 ### Observability
 
-- **Usage Analytics** — Token usage, cost tracking, latency metrics, cache hit rates, and
-  fallback/retry counts per request
+- **Usage Analytics** — Token usage, cost tracking (including tiered image pricing and
+  per-key price multipliers), latency metrics, cache hit rates, and fallback/retry counts
+  per request
 - **Prometheus Metrics** — Built-in metrics endpoint for monitoring
 - **OpenTelemetry** — Distributed tracing support
 - **Structured Logging** — JSON logging with request context
+- **Bundled OpenAPI Spec** — `/openapi.json` served out of the box for Postman import and
+  SDK codegen
 
 ### MCP Gateway
 
@@ -129,6 +144,10 @@ What makes CrossLink different — each backed by code, not marketing.
 
 - **Vue 3 Admin Dashboard** — Built-in web UI for providers, models, keys, usage, and MCP
   management ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard))
+- **Admin Playground** — Test chat, streaming, image generation, TTS / transcription,
+  video, and the Responses API from the dashboard, through the real fallback chain
+- **Zero-Cost Demo Mode** — Optional mock provider + embedded demo key power a public
+  `/demo` try page with no upstream spend
 - **Multi-Instance** — Redis Pub/Sub for provider registry sync and distributed round-robin
 - **Graceful Shutdown** — 5-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
   background goroutine cancellation → DB cleanup
@@ -212,6 +231,10 @@ curl http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
+
+> **No provider key yet?** Enable zero-cost demo mode (`demo.enabled: true` in
+> `config.yaml`) — a mock provider plus an embedded demo key power a public `/demo` try
+> page, so you can exercise the gateway without any upstream account.
 
 **OpenAI SDK (Python)**
 
@@ -319,6 +342,10 @@ providers:
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat (stream & non-stream) |
 | `POST` | `/v1/messages` | Anthropic-compatible messages (stream & non-stream) |
 | `GET` | `/v1/models` | List available models |
+| `POST` | `/v1/videos` | Video generation (poll via `GET /v1/videos/:id`, fetch via `/:id/content`) |
+| `GET` | `/v1/usage` | Self-service quota & usage for key holders |
+| `GET` | `/v1/templates` | Prompt-template catalog (metadata + curl examples) |
+| `GET` | `/openapi.json` | Bundled OpenAPI spec — import into Postman or generate an SDK |
 
 ### MCP Gateway
 
@@ -336,12 +363,21 @@ providers:
 | `CRUD` | `/admin/api/models` | Model mapping management |
 | `CRUD` | `/admin/api/keys` | API key management (regenerate via `POST /:id/regenerate`) |
 | `GET` | `/admin/api/usage` | Usage logs with multi-dimensional filtering |
+| `GET` | `/admin/api/usage/stats` | Usage stats (incl. image metrics) + reconciliation export |
 | `GET` | `/admin/api/routing/stats` | Routing distribution: configured vs. actual per provider |
+| `CRUD` | `/admin/api/error-rules` | Error-classification rules for failover |
+| `CRUD` | `/admin/api/guardrails` | Guardrail rules (test via `POST /:id/test`, plus `/stats`, `/config`) |
+| `CRUD` | `/admin/api/templates` | Prompt templates (preview via `POST /:id/preview`) |
+| `CRUD` | `/admin/api/pats` | Personal access tokens |
+| `POST` | `/admin/api/playground/*` | Playground: chat, stream, image, tts, transcribe, translate, video, responses |
+| `GET/PUT` | `/admin/api/system/content-log` | Hot-toggle request/response body logging |
 | `CRUD` | `/admin/api/mcp/servers` | MCP server management |
 | `GET` | `/admin/api/mcp/servers/:id/tools` | List tools on MCP server |
 
-The full API reference — including request/response shapes, error codes, and the
-`x-crosslink-fallback-*` response headers — is in [docs/api-reference.md](docs/api-reference.md).
+Tables list the highlights, not everything. The gateway serves a bundled, importable
+OpenAPI spec at [`/openapi.json`](#api-endpoints), and the full API reference — including
+request/response shapes, error codes, and the `x-crosslink-fallback-*` response headers —
+is in [docs/api-reference.md](docs/api-reference.md).
 
 ---
 
@@ -388,8 +424,13 @@ CrossLink is under active development. Current focus:
 - [x] Provider guardrails with health-aware routing
 - [x] Routing-distribution observability (`/admin/api/routing/stats`)
 - [x] Self-healing concurrency counters (TTL heartbeat)
-- [x] OpenAI Responses API translation (stream + non-stream)
+- [x] OpenAI Responses API translation (stream + non-stream) — engine + playground in
+  Community; the public `/v1/responses` route ships with commercial editions
 - [x] Self-hosted slider CAPTCHA (air-gapped ready)
+- [x] Community guardrail engines (keyword / length / credential detection) with admin CRUD
+- [x] Built-in admin playground (chat, image, audio, video, Responses)
+- [x] Zero-cost demo mode (mock provider + public `/demo` page)
+- [x] Bundled OpenAPI spec at `/openapi.json`
 - [ ] Provider guard alert rules (Enterprise) — in progress
 - [ ] Expanded guardrail engine ecosystem (ML-based classifiers)
 - [ ] Multi-team budgets and audit (Enterprise)

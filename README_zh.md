@@ -77,9 +77,10 @@ CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
 - 🇨🇳 **国密 + 可离线部署** — SM2/SM3/SM4 模式（含 HMAC-SM3 JWT 签名）与自托管滑块
   验证码。无 reCAPTCHA/hCaptcha 依赖——可完全离线部署，满足信创合规。
   → [部署](docs/deployment.md)
-- 🎁 **慷慨的开源核心** — Community 版（Apache 2.0）含 39 项动作，覆盖 MCP、RBAC、
-  路由统计、错误规则。Pro 增加护栏/Playground/密钥管理；Enterprise 增加多组织、
-  审计、预算。
+- 🎁 **慷慨的开源核心** — Community 版（Apache 2.0）含 47 项动作，覆盖 MCP、RBAC、
+  路由统计、错误规则、护栏 CRUD（关键词 / 长度 / 凭据检测）、交互式 Playground、
+  Prompt 模板与作用域 PAT。Pro 增加密钥管理、护栏告警、调试回放、DataLens 与
+  Agent 防护；Enterprise 增加多组织、审计与预算管理。
 
 ---
 
@@ -95,21 +96,27 @@ CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
 - **自动容灾** — 多供应商故障转移链，配合熔断器、可配置重试策略（指数/固定/线性退避）
   和错误分类
 - **响应缓存** — 基于 Redis 的缓存，按模型设置 TTL、gzip 压缩、按用户隔离缓存键
+- **视频生成** — `POST /v1/videos` 提交任务、轮询状态、下载结果，与对话共用同一条容灾链
+- **Prompt 模板** — 在 `/admin/api/templates` 维护模板目录；Key 持有者可通过
+  `GET /v1/templates` 获取（含元数据与可直接复制的 curl 示例）
 
 ### 安全与管控
 
 - **限流** — 按 API Key 设置 RPM/TPM 限制，全局并发控制（2000）
 - **RBAC 权限** — 基于角色的访问控制，覆盖供应商、模型、API Key 和 MCP
-- **预算管理** — 按 Key 和按团队的预算上限，超支自动熔断
-- **内容防护** — 可插拔的内容安全引擎框架，支持自定义规则和动作
+- **预算执行** — 按 Key 和按团队的预算上限在网关侧强制执行，超支自动熔断（预算管理控制台为 Enterprise 功能）
+- **内容防护** — 内置引擎（关键词过滤、长度限制、凭据泄露检测——启动时自动种子默认规则），配合可插拔的 `RegisterEngine` 注册表；支持 block / log / mask 动作、管理端 CRUD 与按模型配置
+- **作用域 PAT** — 面向 CI / 机器接入的个人访问令牌，附带只读的用量、预算与健康 API
+- **SSRF 防护** — 出站供应商请求在拨号与重定向两层做防护
 - **国密支持** — 支持国际标准（SHA-256/RSA/AES）和国密算法（SM3/SM2/SM4）
 
 ### 可观测性
 
-- **用量分析** — 每次请求自动记录 Token 用量、成本、延迟、缓存命中率和故障转移/重试次数
+- **用量分析** — 每次请求自动记录 Token 用量、成本（含图像分层计价与按 Key 价格系数）、延迟、缓存命中率和故障转移/重试次数
 - **Prometheus 指标** — 内置 metrics 端点
 - **OpenTelemetry** — 分布式链路追踪
 - **结构化日志** — 带请求上下文的 JSON 日志
+- **内置 OpenAPI 文档** — 开箱即用提供 `/openapi.json`，可直接导入 Postman 或生成 SDK
 
 ### MCP 网关
 
@@ -121,6 +128,10 @@ CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
 
 - **Vue 3 管理后台** — 内置 Web 管理界面，供应商、模型、Key、用量、MCP 一站式管理
   （[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）
+- **管理端 Playground** — 在后台直接测试对话、流式、图像生成、TTS / 转写、视频与
+  Responses API，走的正是真实的容灾链路
+- **零成本 Demo 模式** — 可选的 mock 供应商 + 内置 Demo Key，驱动公开的 `/demo`
+  体验页，不产生任何上游开销
 - **多实例部署** — Redis Pub/Sub 供应商注册同步、分布式轮询
 - **优雅关闭** — 5 阶段排空：SSE 流排空 → HTTP 关闭 → Worker 刷盘 → 后台协程取消 →
   DB 清理
@@ -204,6 +215,9 @@ curl http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "你好！"}]
   }'
 ```
+
+> **还没有供应商 Key？** 开启零成本 Demo 模式（`config.yaml` 中 `demo.enabled: true`）——
+> mock 供应商 + 内置 Demo Key 会驱动公开的 `/demo` 体验页，无需任何上游账号即可体验网关。
 
 **OpenAI SDK（Python）**
 
@@ -310,6 +324,10 @@ providers:
 | `POST` | `/v1/chat/completions` | OpenAI 兼容对话（流式 & 非流式） |
 | `POST` | `/v1/messages` | Anthropic 兼容消息（流式 & 非流式） |
 | `GET` | `/v1/models` | 获取可用模型列表 |
+| `POST` | `/v1/videos` | 视频生成（`GET /v1/videos/:id` 轮询，`/:id/content` 下载） |
+| `GET` | `/v1/usage` | Key 持有者自查配额与用量 |
+| `GET` | `/v1/templates` | Prompt 模板目录（元数据 + curl 示例） |
+| `GET` | `/openapi.json` | 内置 OpenAPI 文档 — 导入 Postman 或生成 SDK |
 
 ### MCP 网关
 
@@ -327,10 +345,18 @@ providers:
 | `CRUD` | `/admin/api/models` | 模型映射管理 |
 | `CRUD` | `/admin/api/keys` | API Key 管理（通过 `POST /:id/regenerate` 重新生成） |
 | `GET` | `/admin/api/usage` | 用量日志，支持多维度筛选 |
+| `GET` | `/admin/api/usage/stats` | 用量统计（含图像指标）与对账导出 |
 | `GET` | `/admin/api/routing/stats` | 路由分布：按供应商对比配置与实际权重 |
+| `CRUD` | `/admin/api/error-rules` | 容灾错误分类规则 |
+| `CRUD` | `/admin/api/guardrails` | 护栏规则（`POST /:id/test` 测试，另有 `/stats`、`/config`） |
+| `CRUD` | `/admin/api/templates` | Prompt 模板（`POST /:id/preview` 预览） |
+| `CRUD` | `/admin/api/pats` | 个人访问令牌 |
+| `POST` | `/admin/api/playground/*` | Playground：chat、stream、image、tts、transcribe、translate、video、responses |
+| `GET/PUT` | `/admin/api/system/content-log` | 热切换请求/响应体日志开关 |
 | `CRUD` | `/admin/api/mcp/servers` | MCP 服务管理 |
 | `GET` | `/admin/api/mcp/servers/:id/tools` | MCP 服务工具列表 |
 
+表格只列重点，并非全部。网关开箱即用提供可导入的 OpenAPI 文档（`/openapi.json`）；
 完整 API 文档——含请求/响应结构、错误码与 `x-crosslink-fallback-*` 响应头——见
 [docs/api-reference.md](docs/api-reference.md)。
 
@@ -379,8 +405,12 @@ CrossLink 正在快速迭代，当前重点：
 - [x] Provider guardrails 与健康感知路由
 - [x] 路由分布可观测（`/admin/api/routing/stats`）
 - [x] 自愈并发计数器（TTL 心跳）
-- [x] OpenAI Responses API 翻译（流式 + 非流式）
+- [x] OpenAI Responses API 翻译（流式 + 非流式）— 引擎与 Playground 入口在 Community；公开 `/v1/responses` 路由随商业版发布
 - [x] 自托管滑块验证码（可离线部署）
+- [x] 社区版护栏引擎（关键词 / 长度 / 凭据检测）+ 管理端 CRUD
+- [x] 内置管理端 Playground（对话、图像、音频、视频、Responses）
+- [x] 零成本 Demo 模式（mock 供应商 + 公开 `/demo` 页）
+- [x] 内置 OpenAPI 文档（`/openapi.json`）
 - [ ] Provider guard 告警规则（Enterprise）— 进行中
 - [ ] 扩展护栏引擎生态（ML 分类器）
 - [ ] 多团队预算与审计（Enterprise）
