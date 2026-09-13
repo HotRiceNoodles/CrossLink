@@ -164,12 +164,13 @@ func (h *PlaygroundHandler) responsesNonStream(c *gin.Context, rawBody []byte, r
 	route := result.Route
 	latency := time.Since(start).Milliseconds()
 
+	orgID := c.GetInt64("org_id")
 	switch r := result.Response.(type) {
 	case *pgResponsesRaw:
-		h.logResponsesUsage(req, route, route.Provider.Name(), latency, result.FallbackCount, 0, r.raw)
+		h.logResponsesUsage(orgID, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, r.raw)
 		c.Data(r.status, "application/json", r.raw)
 	case *domain.ResponsesResponse:
-		h.logResponsesUsage(req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
+		h.logResponsesUsage(orgID, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
 		c.JSON(http.StatusOK, r)
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": "unexpected response type"})
@@ -200,7 +201,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		h.writeStreamHeader(c)
 		pgCopySSE(c, rc)
 		rc.Close()
-		h.logResponsesUsage(req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+		h.logResponsesUsage(c.GetInt64("org_id"), req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
 		return
 	}
 
@@ -250,7 +251,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 	pgWriteEvents(c, builder.Finish(lastUsage, finishReason, req.Model))
 	c.Writer.Write([]byte("data: [DONE]\n\n"))
 	c.Writer.Flush()
-	h.logResponsesUsage(req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+	h.logResponsesUsage(c.GetInt64("org_id"), req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
 }
 
 func (h *PlaygroundHandler) writeStreamHeader(c *gin.Context) {
@@ -302,7 +303,7 @@ func pgPeekResponseID(raw []byte) string {
 	return ""
 }
 
-func (h *PlaygroundHandler) logResponsesUsage(req *PlaygroundResponsesRequest, route *router.RouteResult, providerName string, latencyMs int64, fallbackCount, retryCount int, rawResp []byte) {
+func (h *PlaygroundHandler) logResponsesUsage(orgID int64, req *PlaygroundResponsesRequest, route *router.RouteResult, providerName string, latencyMs int64, fallbackCount, retryCount int, rawResp []byte) {
 	// Translate to OpenAI request shape for content logging consistency.
 	oaiReq, _ := translator.ResponsesToOpenAI(&domain.ResponsesRequest{
 		Model: req.Model, Input: req.Input, Instructions: req.Instructions,
@@ -311,5 +312,5 @@ func (h *PlaygroundHandler) logResponsesUsage(req *PlaygroundResponsesRequest, r
 	if len(rawResp) > 0 {
 		respSummary = string(rawResp)
 	}
-	h.logUsage("", oaiReq, 0, 0, route, providerName, latencyMs, fallbackCount, retryCount, false, "", respSummary)
+	h.logUsage("", orgID, oaiReq, 0, 0, route, providerName, latencyMs, fallbackCount, retryCount, false, "", respSummary)
 }

@@ -219,6 +219,11 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 				slog.Warn("playground: guardrail response check failed", "error", grErr)
 			} else if grResult != nil && grResult.Blocked {
 				if grResult.Action == "block" {
+					// Upstream tokens were already consumed — record usage before returning.
+					go h.logUsage(c.GetHeader("X-Session-ID"), orgID, openaiReq,
+						resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
+						result.Route, pn, latencyMs, result.FallbackCount, totalRetries,
+						true, grResult.RuleName, "")
 					reason := "blocked by guardrail"
 					if grResult.Reason != "" {
 						reason = grResult.Reason
@@ -255,7 +260,7 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 
 	sessionID := c.GetHeader("X-Session-ID")
 	grTriggered, grRule := guardrailContext(c)
-	go h.logUsage(sessionID, openaiReq, resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
+	go h.logUsage(sessionID, orgID, openaiReq, resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
 		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, respText)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -370,11 +375,12 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		wrapper := guardrail.NewStreamGuardrailWrapper(result.StreamCh, h.guardrailSvc, req.Model, 0, 0, 0)
+	guardLoop:
 		for {
 			select {
 			case <-ctxDone:
 				slog.Info("playground: client disconnected during stream", "model", req.Model)
-				return
+				break guardLoop
 			default:
 			}
 			sr := wrapper.Next(c.Request.Context())
@@ -404,6 +410,14 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 				fmt.Fprintln(c.Writer, "data: [DONE]")
 				fmt.Fprintln(c.Writer)
 				flusher.Flush()
+				// Upstream tokens were already consumed — record usage before returning.
+				outTok := outputTokens
+				if outTok == 0 {
+					outTok = outputEstimate
+				}
+				go h.logUsage(c.GetHeader("X-Session-ID"), orgID, openaiReq, inputTokens, outTok,
+					result.Route, pn, time.Since(start).Milliseconds(), result.FallbackCount, totalRetries,
+					true, sr.Blocked.RuleName, modelRespBuf.String())
 				return
 			}
 			chunk := sr.Chunk
@@ -433,11 +447,12 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 			}
 		}
 	} else {
+	plainLoop:
 		for chunk := range result.StreamCh {
 			select {
 			case <-ctxDone:
 				slog.Info("playground: client disconnected during stream", "model", req.Model)
-				return
+				break plainLoop
 			default:
 			}
 			if chunk.Done {
@@ -503,12 +518,12 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 
 	sessionID := c.GetHeader("X-Session-ID")
 	grTriggered, grRule := guardrailContext(c)
-	go h.logUsage(sessionID, openaiReq, inputTokens, outputTokens,
+	go h.logUsage(sessionID, orgID, openaiReq, inputTokens, outputTokens,
 		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, modelRespBuf.String())
 }
 
 func (h *PlaygroundHandler) logUsage(
-	sessionID string, req *domain.OpenAIRequest,
+	sessionID string, orgID int64, req *domain.OpenAIRequest,
 	inputTokens, outputTokens int,
 	route *router.RouteResult, providerName string,
 	latencyMs int64, fallbackCount, retryCount int,
@@ -522,6 +537,7 @@ func (h *PlaygroundHandler) logUsage(
 		ModelRequested: req.Model,
 		ModelUsed:      route.ProviderModel,
 		ProviderID:     route.ProviderRow.ID,
+		OrgID:          orgID,
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
 		InputPrice:     route.InputPrice,
@@ -540,10 +556,12 @@ func (h *PlaygroundHandler) logUsage(
 		entry.UserMessage = truncateMessages(req.Messages)
 		entry.ModelResponse = truncateContent(modelResponse)
 	}
-	h.usageSvc.Log(context.Background(), entry)
+	logCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	h.usageSvc.Log(logCtx, entry)
 
 	if h.latencySvc != nil {
-		h.latencySvc.RecordLatency(context.Background(), providerName, latencyMs)
+		h.latencySvc.RecordLatency(logCtx, providerName, latencyMs)
 	}
 }
 
@@ -773,6 +791,7 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 			ModelRequested:  req.Model,
 			ModelUsed:       route.ProviderModel,
 			ProviderID:      route.ProviderRow.ID,
+			OrgID:           orgID,
 			Currency:        route.Currency,
 			StatusCode:      http.StatusOK,
 			LatencyMs:       latencyMs,
@@ -928,6 +947,7 @@ func (h *PlaygroundHandler) TextToSpeech(c *gin.Context) {
 			ModelRequested:  req.Model,
 			ModelUsed:       successRoute.ProviderModel,
 			ProviderID:      successRoute.ProviderRow.ID,
+			OrgID:           orgID,
 			Currency:        successRoute.Currency,
 			StatusCode:      http.StatusOK,
 			LatencyMs:       latencyMs,
@@ -1290,6 +1310,7 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 			ModelRequested:  req.Model,
 			ModelUsed:       route.ProviderModel,
 			ProviderID:      route.ProviderRow.ID,
+			OrgID:           orgID,
 			Currency:        route.Currency,
 			StatusCode:      http.StatusOK,
 			LatencyMs:       latencyMs,
