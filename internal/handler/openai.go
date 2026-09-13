@@ -587,6 +587,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	var outputEstimate int
 	var modelRespBuf strings.Builder
 	var gotDone bool
+	var guardrailBlocked bool
 	var firstTokenAt time.Time
 
 	// C6-closure: every exit path must publish token usage so ReportTokens can
@@ -628,6 +629,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
+	gwLoop:
 		for {
 			sr := wrapper.Next(c.Request.Context())
 			if sr.Done {
@@ -643,7 +645,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 						}},
 					})
 					if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", maskData); err != nil {
-						return
+						break gwLoop
 					}
 					flusher.Flush()
 					continue
@@ -652,12 +654,15 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 					"error": map[string]string{"type": "guardrail_blocked", "message": "blocked by guardrail"},
 				})
 				if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errData); err != nil {
-					return
+					break gwLoop
 				}
 				fmt.Fprintln(c.Writer, "data: [DONE]")
 				fmt.Fprintln(c.Writer)
 				flusher.Flush()
-				return
+				// Upstream tokens were already consumed — fall through to the
+				// post-loop submitUsage so the request is recorded.
+				guardrailBlocked = true
+				break gwLoop
 			}
 			chunk := sr.Chunk
 			if chunk.Done {
@@ -676,7 +681,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 				continue
 			}
 			if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
-				return
+				break gwLoop
 			}
 			flusher.Flush()
 			if chunk.Chunk.Usage != nil {
@@ -749,7 +754,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 				continue
 			}
 			if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
-				return
+				break streamLoop
 			}
 			flusher.Flush()
 
@@ -780,8 +785,8 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 
 	// Graceful degradation: if provider disconnected mid-stream, emit a structured
 	// stream_interrupted event so clients can tell a truncation from a clean finish,
-	// then terminate with [DONE].
-	if !gotDone {
+	// then terminate with [DONE]. (guardrailBlocked already sent its own [DONE].)
+	if !gotDone && !guardrailBlocked {
 		slog.Warn("stream disconnected mid-stream, sending graceful end",
 			"provider", route.Provider.Name(),
 			"output_tokens", outputTokens)

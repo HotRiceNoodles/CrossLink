@@ -513,19 +513,24 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 				}
 				flusher.Flush()
-				return
+				// Upstream tokens were already consumed — fall through to
+				// submitUsage so the request is recorded.
+				messageStopSent = true
+			} else {
+				reason := "blocked by guardrail"
+				errData, _ := json.Marshal(map[string]any{
+					"type":  "error",
+					"error": map[string]any{"type": "guardrail_blocked", "message": reason},
+				})
+				fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+				if !messageStopSent {
+					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+				}
+				flusher.Flush()
+				// Upstream tokens were already consumed — fall through to
+				// submitUsage so the request is recorded.
+				messageStopSent = true
 			}
-			reason := "blocked by guardrail"
-			errData, _ := json.Marshal(map[string]any{
-				"type":  "error",
-				"error": map[string]any{"type": "guardrail_blocked", "message": reason},
-			})
-			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
-			if !messageStopSent {
-				fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
-			}
-			flusher.Flush()
-			return
 		}
 		}
 

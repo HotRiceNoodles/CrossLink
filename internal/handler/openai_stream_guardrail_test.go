@@ -12,6 +12,7 @@ import (
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	sqlite "github.com/glebarez/sqlite"
@@ -53,18 +54,24 @@ var _ provider.Provider = (*fakeStreamProvider)(nil)
 //     LoadRules errors cleanly (no table);
 //   - the stream wrapper calls Check on the terminal Done chunk, Check errors,
 //     and (failOpen=false) the wrapper returns Blocked (action="");
-//   - handleStream takes the pure-block branch and returns early.
+//   - handleStream takes the pure-block branch and falls through to the
+//     post-loop reconciliation.
 //
 // It then asserts the defer populated input_tokens/output_tokens so ReportTokens
-// can reconcile. On the pre-fix code this assertion fails (tokens never set).
+// can reconcile, and that the request was still recorded in usage_logs.
+// On the pre-fix code these assertions fail (tokens never set, no usage row).
 func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Real sqlite, but do NOT migrate — so Find on guardrail_rules / system_settings
-	// errors (table missing) instead of panicking on a nil *gorm.DB.
+	// Real sqlite, but do NOT migrate the guardrail tables — so Find on
+	// guardrail_rules / system_settings errors (table missing) instead of
+	// panicking on a nil *gorm.DB.
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&model.UsageLog{}); err != nil {
+		t.Fatalf("migrate usage_logs: %v", err)
 	}
 	gs := guardrail.NewGuardrailService(db, nil)
 	gs.SetEnabled(true)
@@ -72,7 +79,7 @@ func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T
 
 	h := &OpenAIHandler{
 		guardrailSvc: gs,
-		usageSvc:     service.NewUsageService(nil),
+		usageSvc:     service.NewUsageService(repository.NewUsageLogRepo(db)),
 		// resolver/health/classifier/budget intentionally nil:
 		//   - ExpandFallbackRoutes returns early when resolver == nil
 		//   - NewFallbackEngine/SetClassifier tolerate nil
@@ -119,5 +126,23 @@ func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T
 	}
 	if _, ok := c.Get("guardrail_triggered"); !ok {
 		t.Error("expected guardrail_triggered to be set (confirms the pure-block path was taken)")
+	}
+
+	// P1 regression: guardrail block must still record the consumed tokens in
+	// usage_logs (the block path falls through to submitUsage; it used to return
+	// early and skip it). submitUsage is async — poll briefly.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int64
+		db.Model(&model.UsageLog{}).
+			Where("route_type = ? AND guardrail_triggered = ?", "openai", true).
+			Count(&count)
+		if count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("guardrail-blocked stream was not recorded in usage_logs")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
