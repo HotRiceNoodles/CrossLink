@@ -541,7 +541,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.TPMLimit(rdb, cfg.RateLimit.TPM, teamCache, orgCache, cfg.RateLimit.Reservation, cfg.RateLimit.FailClosed))
 	gwGroup.Use(middleware.ReportTokens(rdb, orgCache))
 	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
-	gwGroup.Use(middleware.RoutingStats(rdb))
+	// RoutingStats (per-minute Redis hashes) removed: it was write-only —
+	// /admin/routing/stats reads usage_logs directly. Reintroduce with a reader
+	// if minute-level routing telemetry is needed.
 	// Commercial middleware extension point
 	for _, mw := range ext.ExtraMiddlewares {
 		mw(gwGroup, ext)
