@@ -180,7 +180,7 @@ func (h *RoutingHandler) Stats(c *gin.Context) {
 		Table("usage_logs").
 		Select(`provider_id,
 			COUNT(*) AS requests,
-			SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) AS errors,
+			SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors,
 			AVG(latency_ms)::float8 AS avg_latency_ms,
 			SUM(input_tokens + output_tokens) AS tokens,
 			SUM(cost) AS cost`).
