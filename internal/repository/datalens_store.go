@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -452,8 +453,11 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		var whereConds []string
 		var whereArgs []any
 
-		whereConds = append(whereConds, "org_id = ?")
-		whereArgs = append(whereArgs, params.OrgID)
+		// OrgID == 0 (super admin, no org context) = unscoped global view.
+		if params.OrgID > 0 {
+			whereConds = append(whereConds, "org_id = ?")
+			whereArgs = append(whereArgs, params.OrgID)
+		}
 
 		// Filter by agg_level to avoid summing across all 7 aggregation levels.
 		whereConds = append(whereConds, "agg_level = ?")
@@ -578,12 +582,16 @@ func (s *PgMetricsStore) QueryDrillDown(ctx context.Context, params DrillDownPar
 }
 
 // GetTimeRange returns the earliest and latest data timestamps for an org.
+// orgID == 0 (super admin) scans all orgs.
 func (s *PgMetricsStore) GetTimeRange(ctx context.Context, orgID int64) (start, end time.Time, err error) {
 	var minVal, maxVal time.Time
-	row := s.db.WithContext(ctx).Raw(
-		"SELECT MIN(hour_bucket), MAX(hour_bucket) FROM datalens_hourly_metrics WHERE org_id = ?",
-		orgID,
-	).Row()
+	query := "SELECT MIN(hour_bucket), MAX(hour_bucket) FROM datalens_hourly_metrics"
+	var row *sql.Row
+	if orgID > 0 {
+		row = s.db.WithContext(ctx).Raw(query+" WHERE org_id = ?", orgID).Row()
+	} else {
+		row = s.db.WithContext(ctx).Raw(query).Row()
+	}
 	if err := row.Scan(&minVal, &maxVal); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("scan time range: %w", err)
 	}
@@ -624,12 +632,19 @@ func (s *PgMetricsStore) primaryCurrency(ctx context.Context, orgID int64, table
 	var result struct {
 		Currency string
 	}
+	// orgID == 0 (super admin) picks the primary currency across all orgs.
+	orgCond := ""
+	var orgArgs []any
+	if orgID > 0 {
+		orgCond = "org_id = ? AND "
+		orgArgs = append(orgArgs, orgID)
+	}
 	err := s.db.WithContext(ctx).Raw(
 		fmt.Sprintf(
-			"SELECT currency FROM %s WHERE org_id = ? AND agg_level = ? AND %s >= ? AND %s < ? GROUP BY currency ORDER BY SUM(total_cost) DESC LIMIT 1",
+			"SELECT currency FROM %s WHERE "+orgCond+"agg_level = ? AND %s >= ? AND %s < ? GROUP BY currency ORDER BY SUM(total_cost) DESC LIMIT 1",
 			table, bucketCol, bucketCol,
 		),
-		orgID, aggLevel, start, end,
+		append(orgArgs, aggLevel, start, end)...,
 	).Scan(&result).Error
 	if err != nil {
 		return "", err
@@ -845,8 +860,10 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 		// Build WHERE for previous period — clone conditions, replace time bounds.
 		var prevWhereConds []string
 		var prevWhereArgs []any
-		prevWhereConds = append(prevWhereConds, "org_id = ?")
-		prevWhereArgs = append(prevWhereArgs, params.OrgID)
+		if params.OrgID > 0 {
+			prevWhereConds = append(prevWhereConds, "org_id = ?")
+			prevWhereArgs = append(prevWhereArgs, params.OrgID)
+		}
 		prevWhereConds = append(prevWhereConds, "agg_level = ?")
 		prevWhereArgs = append(prevWhereArgs, aggLevel)
 		prevWhereConds = append(prevWhereConds, bucketCol+" >= ?")
