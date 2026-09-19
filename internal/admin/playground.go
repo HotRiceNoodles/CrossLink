@@ -769,18 +769,23 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 	latencyMs := time.Since(start).Milliseconds()
 
 	pricing := service.ResolvePricing(route.ExtraConfig)
-	if pricing.Price <= 0 {
+	// Same size/quality tier pricing as the commercial /v1/images route.
+	unitPrice := service.ResolveImagePrice(&pricing, req.Size, req.Quality)
+	if unitPrice <= 0 {
 		slog.Warn("playground: image model has no pricing configured (extra_config.pricing) — recorded as free", "model", req.Model)
 	}
+	// Bill what was actually delivered (post fill-in), not what was asked:
+	// providers may return fewer images than requested and fill-in may add extras.
+	imageCount := len(resp.Data)
 	var cost float64
-	if pricing.Price > 0 {
-		cost = pricing.Price * float64(req.N)
+	if unitPrice > 0 {
+		cost = unitPrice * float64(imageCount)
 	}
 
 	c.Set("provider", pn)
 	c.Set("input_tokens", 0)
 	c.Set("output_tokens", 0)
-	c.Set("input_price", pricing.Price)
+	c.Set("input_price", unitPrice)
 	c.Set("output_price", 0)
 	c.Set("cost", cost)
 
@@ -801,6 +806,9 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 			FallbackCount:   result.FallbackCount,
 			RetryCount:      totalRetries,
 			PrecomputedCost: cost,
+			ImageCount:      imageCount,
+			ImageSize:       req.Size,
+			ImageQuality:    req.Quality,
 		}
 		if grTriggered {
 			entry.GuardrailTriggered = true
