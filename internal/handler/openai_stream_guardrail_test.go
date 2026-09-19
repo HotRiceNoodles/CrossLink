@@ -73,6 +73,11 @@ func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T
 	if err := db.AutoMigrate(&model.UsageLog{}); err != nil {
 		t.Fatalf("migrate usage_logs: %v", err)
 	}
+	// :memory: gives every pooled connection its own database — pin one
+	// connection or the async submitUsage INSERT lands in a different (empty) DB.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 	gs := guardrail.NewGuardrailService(db, nil)
 	gs.SetEnabled(true)
 	gs.SetFailOpen(false) // Check error ⇒ wrapper returns Blocked
