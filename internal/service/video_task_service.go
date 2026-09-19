@@ -46,6 +46,10 @@ type VideoSubmitParams struct {
 	PriceMultiplier float64
 	InputPrice     float64
 	Prompt         string
+	// BudgetScopes: limits collected by BudgetCheck at submission; ensureBilled
+	// reports the final cost to each so budgets update at completion (within the
+	// poll interval) instead of waiting for the hourly calibration.
+	BudgetScopes []BudgetScope
 }
 
 // VideoTaskState holds the stored task state retrieved from Redis/memory.
@@ -60,6 +64,7 @@ type VideoTaskState struct {
 	Currency       string
 	PriceMultiplier float64
 	InputPrice     float64
+	BudgetScopes   []BudgetScope
 	CreatedAt      int64
 }
 
@@ -70,11 +75,15 @@ type VideoTaskService struct {
 	registry *provider.Registry
 	fallback sync.Map // used when rdb == nil
 
-	usageSvc *UsageService
+	usageSvc  *UsageService
+	budgetSvc BudgetServiceInterface // optional: report completion cost to budgets
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
 }
+
+// SetBudgetSvc injects the budget service for completion-time cost reporting.
+func (s *VideoTaskService) SetBudgetSvc(bsvc BudgetServiceInterface) { s.budgetSvc = bsvc }
 
 func NewVideoTaskService(rdb *redis.Client, encStore *secret.EncryptedDBStore, registry *provider.Registry, usageSvc *UsageService) *VideoTaskService {
 	s := &VideoTaskService{
@@ -118,6 +127,7 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 		}
 
 		key := videoTaskKeyPrefix + gwTaskID
+		budgetScopesJSON, _ := json.Marshal(params.BudgetScopes)
 		fields := map[string]interface{}{
 			"upstream_task_id": params.UpstreamTaskID,
 			"provider_name":    params.ProviderName,
@@ -131,6 +141,7 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 			"model":            params.Model,
 			"created_at":       strconv.FormatInt(createdAt, 10),
 			"request_prompt":   truncateString(params.Prompt, 200),
+			"budget_scopes":    string(budgetScopesJSON),
 		}
 		if err := s.rdb.HSet(ctx, key, fields).Err(); err != nil {
 			return "", fmt.Errorf("redis hset: %w", err)
@@ -152,6 +163,7 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 				Currency:       params.Currency,
 				PriceMultiplier: params.PriceMultiplier,
 				InputPrice:     params.InputPrice,
+				BudgetScopes:   params.BudgetScopes,
 				CreatedAt:      createdAt,
 			},
 			expiresAt: time.Now().Add(videoTaskTTL),
@@ -271,6 +283,10 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 		priceMultiplier, _ := strconv.ParseFloat(m["price_multiplier"], 64)
 		inputPrice, _ := strconv.ParseFloat(m["input_price"], 64)
 		createdAt, _ := strconv.ParseInt(m["created_at"], 10, 64)
+		var budgetScopes []BudgetScope
+		if bs := m["budget_scopes"]; bs != "" {
+			_ = json.Unmarshal([]byte(bs), &budgetScopes)
+		}
 
 		return &VideoTaskState{
 			UpstreamTaskID: m["upstream_task_id"],
@@ -283,6 +299,7 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 			Currency:       m["currency"],
 			PriceMultiplier: priceMultiplier,
 			InputPrice:     inputPrice,
+			BudgetScopes:   budgetScopes,
 			CreatedAt:      createdAt,
 		}, nil
 	}
@@ -358,6 +375,19 @@ func (s *VideoTaskService) ensureBilled(ctx context.Context, gwTaskID string, st
 		StatusCode:      200,
 		PrecomputedCost: cost,
 	})
+
+	// Report the cost to each limited scope so budgets reflect video spend at
+	// completion instead of waiting for the hourly calibration.
+	if s.budgetSvc != nil {
+		for _, sc := range state.BudgetScopes {
+			if sc.Limit <= 0 {
+				continue
+			}
+			reportCtx, reportCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			s.budgetSvc.ReportUsage(reportCtx, sc.Scope, sc.ID, sc.Period, cost)
+			reportCancel()
+		}
+	}
 }
 
 // cacheStatus writes the task status to Redis with a short TTL.

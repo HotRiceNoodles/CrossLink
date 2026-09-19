@@ -216,6 +216,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Video gateway
 	videoTaskSvc := service.NewVideoTaskService(rdb, secrets.EncStore, infra.Registry, svcs.UsageSvc)
+	videoTaskSvc.SetBudgetSvc(svcs.BudgetSvc) // completion-time budget reporting
 	ext.Deps.VideoTaskSvc = videoTaskSvc // expose to commercial overlay
 	videoHandler := handler.NewVideoHandler(
 		videoTaskSvc, infra.Resolver, infra.Health,

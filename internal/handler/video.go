@@ -119,6 +119,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	// Idempotency check
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		if cached, ok := h.idemCache.Get(c.Request.Context(), apiKeyID, idemKey); ok {
+			c.Set("skip_call_count", true) // idempotent replay: no new upstream work
 			c.Data(cached.StatusCode, "application/json", cached.Body)
 			return
 		}
@@ -226,6 +227,12 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	inputPrice := winningRoute.InputPrice
 
 	// Store task mapping via VideoTaskService
+	var budgetScopes []service.BudgetScope
+	if v, ok := c.Get("budget_scopes"); ok {
+		if scopes, ok := v.([]service.BudgetScope); ok {
+			budgetScopes = scopes
+		}
+	}
 	gwTaskID, err := h.taskSvc.SubmitTask(c.Request.Context(), service.VideoSubmitParams{
 		UpstreamTaskID: task.TaskID,
 		ProviderName:   winningRoute.Provider.Name(),
@@ -238,6 +245,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		PriceMultiplier: readPriceMultiplier(c),
 		InputPrice:     inputPrice,
 		Prompt:         truncateStr(req.Prompt, 200),
+		BudgetScopes:   budgetScopes,
 	})
 	if err != nil {
 		slog.Error("failed to store video task", "error", err)
@@ -275,6 +283,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 func (h *VideoHandler) GetVideo(c *gin.Context) {
 	taskID := c.Param("id")
 	orgID := c.GetInt64("org_id")
+	c.Set("skip_call_count", true) // polling read: must not consume the call limit
 
 	task, state, err := h.taskSvc.GetTask(c.Request.Context(), taskID, orgID)
 	if err != nil {
@@ -289,6 +298,7 @@ func (h *VideoHandler) GetVideo(c *gin.Context) {
 func (h *VideoHandler) GetVideoContent(c *gin.Context) {
 	taskID := c.Param("id")
 	orgID := c.GetInt64("org_id")
+	c.Set("skip_call_count", true) // content read: must not consume the call limit
 
 	upstreamURL, err := h.taskSvc.GetContentURL(c.Request.Context(), taskID, orgID)
 	if err != nil {
