@@ -342,6 +342,10 @@ func (r *Resolver) cachedHealthScore(providerName, model string) float64 {
 	return score
 }
 
+// Registry exposes the provider registry (used by background services that
+// need to look providers up by name, e.g. batch completion billing).
+func (r *Resolver) Registry() *provider.Registry { return r.registry }
+
 func (r *Resolver) Health() *provider.HealthTracker {
 	if r == nil {
 		return nil

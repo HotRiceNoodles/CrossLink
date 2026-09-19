@@ -472,6 +472,26 @@ func (p *OpenAICompatibleProvider) ListBatches(ctx context.Context, params url.V
 	return &result, nil
 }
 
+// GetFileContent downloads a Files API file (e.g. a batch output/error file)
+// so callers can extract per-request usage. The caller must Close the stream.
+func (p *OpenAICompatibleProvider) GetFileContent(ctx context.Context, fileID, apiKey string) (io.ReadCloser, error) {
+	u := p.baseURL + "/files/" + fileID + "/content"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, parseProviderError(resp)
+	}
+	return resp.Body, nil
+}
+
 func (p *OpenAICompatibleProvider) CancelBatch(ctx context.Context, batchID string, apiKey string) (*domain.BatchResponse, error) {
 	u := p.baseURL + "/batch/" + batchID + "/cancel"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
