@@ -108,9 +108,12 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 
 	// Extract auth context
 	orgID := c.GetInt64("org_id")
-	var apiKeyID int64
+	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		apiKeyID = key.ID
+		if key.TeamID != nil {
+			teamID = *key.TeamID
+		}
 	}
 
 	// Idempotency check
@@ -230,6 +233,9 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		Model:          task.Model,
 		OrgID:          orgID,
 		APIKeyID:       apiKeyID,
+		TeamID:         teamID,
+		Currency:       winningRoute.Currency,
+		PriceMultiplier: readPriceMultiplier(c),
 		InputPrice:     inputPrice,
 		Prompt:         truncateStr(req.Prompt, 200),
 	})

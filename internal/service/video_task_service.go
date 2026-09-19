@@ -41,6 +41,9 @@ type VideoSubmitParams struct {
 	Model          string
 	OrgID          int64
 	APIKeyID       int64
+	TeamID         int64
+	Currency       string
+	PriceMultiplier float64
 	InputPrice     float64
 	Prompt         string
 }
@@ -53,6 +56,9 @@ type VideoTaskState struct {
 	Model          string
 	OrgID          int64
 	APIKeyID       int64
+	TeamID         int64
+	Currency       string
+	PriceMultiplier float64
 	InputPrice     float64
 	CreatedAt      int64
 }
@@ -118,6 +124,9 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 			"api_key_enc":      encKey,
 			"org_id":           strconv.FormatInt(params.OrgID, 10),
 			"api_key_id":       strconv.FormatInt(params.APIKeyID, 10),
+			"team_id":          strconv.FormatInt(params.TeamID, 10),
+			"currency":         params.Currency,
+			"price_multiplier": strconv.FormatFloat(params.PriceMultiplier, 'f', -1, 64),
 			"input_price":      strconv.FormatFloat(params.InputPrice, 'f', -1, 64),
 			"model":            params.Model,
 			"created_at":       strconv.FormatInt(createdAt, 10),
@@ -139,6 +148,9 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 				Model:          params.Model,
 				OrgID:          params.OrgID,
 				APIKeyID:       params.APIKeyID,
+				TeamID:         params.TeamID,
+				Currency:       params.Currency,
+				PriceMultiplier: params.PriceMultiplier,
 				InputPrice:     params.InputPrice,
 				CreatedAt:      createdAt,
 			},
@@ -255,6 +267,8 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 
 		orgID, _ := strconv.ParseInt(m["org_id"], 10, 64)
 		apiKeyID, _ := strconv.ParseInt(m["api_key_id"], 10, 64)
+		teamID, _ := strconv.ParseInt(m["team_id"], 10, 64)
+		priceMultiplier, _ := strconv.ParseFloat(m["price_multiplier"], 64)
 		inputPrice, _ := strconv.ParseFloat(m["input_price"], 64)
 		createdAt, _ := strconv.ParseInt(m["created_at"], 10, 64)
 
@@ -265,6 +279,9 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 			Model:          m["model"],
 			OrgID:          orgID,
 			APIKeyID:       apiKeyID,
+			TeamID:         teamID,
+			Currency:       m["currency"],
+			PriceMultiplier: priceMultiplier,
 			InputPrice:     inputPrice,
 			CreatedAt:      createdAt,
 		}, nil
@@ -335,6 +352,9 @@ func (s *VideoTaskService) ensureBilled(ctx context.Context, gwTaskID string, st
 		ModelUsed:       state.Model,
 		OrgID:           state.OrgID,
 		APIKeyID:        state.APIKeyID,
+		TeamID:          state.TeamID,
+		Currency:        state.Currency,
+		PriceMultiplier: state.PriceMultiplier,
 		StatusCode:      200,
 		PrecomputedCost: cost,
 	})
