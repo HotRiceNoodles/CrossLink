@@ -25,6 +25,7 @@ type MiddlewareLogConfig struct {
 	BudgetExceeded     bool `json:"budget_exceeded"`
 	NotFound           bool `json:"not_found"`
 	ServiceUnavailable bool `json:"service_unavailable"`
+	ServerError        bool `json:"server_error"`
 }
 
 func (s *UsageService) SetMiddlewareLogConfig(cfg *MiddlewareLogConfig) {
@@ -37,7 +38,7 @@ func (s *UsageService) GetMiddlewareLogConfig() MiddlewareLogConfig {
 		return MiddlewareLogConfig{
 			AuthFailure: true, Forbidden: true, RateLimit: true,
 			BadRequest: true, BudgetExceeded: true, NotFound: true,
-			ServiceUnavailable: true,
+			ServiceUnavailable: true, ServerError: true,
 		}
 	}
 	return *v.(*MiddlewareLogConfig)

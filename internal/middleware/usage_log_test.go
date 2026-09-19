@@ -45,7 +45,8 @@ func TestMapStatusToErrorType(t *testing.T) {
 		{"403", 403, nil, "forbidden"},
 		{"404", 404, nil, "not_found"},
 		{"503", 503, nil, "service_unavailable"},
-		{"500", 500, nil, "other"},
+		{"500", 500, nil, "server_error"},
+		{"502", 502, nil, "server_error"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

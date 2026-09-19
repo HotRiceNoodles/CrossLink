@@ -17,9 +17,6 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 		if status < 400 {
 			return
 		}
-		if status >= 500 && status != 503 {
-			return
-		}
 
 		if _, logged := c.Get("usage_logged"); logged {
 			return
@@ -68,6 +65,16 @@ func logRouteTypeFromPath(pattern string) string {
 		return "openai"
 	case "/v1/responses":
 		return "responses"
+	case "/v1/images/generations":
+		return "images"
+	case "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations":
+		return "audio"
+	case "/v1/embeddings":
+		return "embeddings"
+	case "/v1/batch", "/v1/batches", "/v1/batch/:id":
+		return "batch"
+	case "/v1/videos", "/v1/videos/:id", "/v1/videos/:id/content":
+		return "video"
 	default:
 		return "unknown"
 	}
@@ -94,6 +101,10 @@ func mapStatusToErrorType(c *gin.Context, status int) string {
 		return "not_found"
 	case status == 503:
 		return "service_unavailable"
+	case status >= 500:
+		// Upstream may already have consumed tokens before a 500/502 (marshal
+		// failure, unexpected response type) — record it instead of dropping.
+		return "server_error"
 	default:
 		return "other"
 	}
