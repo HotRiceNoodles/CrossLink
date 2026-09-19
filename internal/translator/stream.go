@@ -25,6 +25,7 @@ type StreamTranslator struct {
 	usageSeen      bool // upstream sent a real input usage number (not the seed estimate)
 	reasoningTokens int
 	cacheReadTokens int
+	cacheCreationTokens int
 	blockIndex     int
 
 	// Block type tracking: "text", "thinking", or "" (no active block)
@@ -50,6 +51,7 @@ func (t *StreamTranslator) UsageSeen() bool     { return t.usageSeen }
 func (t *StreamTranslator) OutputTokens() int    { return t.outputTokens }
 func (t *StreamTranslator) ReasoningTokens() int { return t.reasoningTokens }
 func (t *StreamTranslator) CacheReadTokens() int { return t.cacheReadTokens }
+func (t *StreamTranslator) CacheCreationTokens() int { return t.cacheCreationTokens }
 
 func GenerateMessageID() string { return generateMessageID() }
 
@@ -85,6 +87,7 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 			if chunk.Usage.PromptTokensDetails != nil {
 				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
+			t.cacheCreationTokens = chunk.Usage.CacheCreationTokens
 		}
 		return events
 	}
@@ -153,6 +156,7 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 			if chunk.Usage.PromptTokensDetails != nil {
 				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
+			t.cacheCreationTokens = chunk.Usage.CacheCreationTokens
 		}
 
 		stopReason := finishReasonToStopReason(*delta.FinishReason)

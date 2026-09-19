@@ -107,6 +107,9 @@ type OpenAIUsage struct {
 	TotalTokens             int                       `json:"total_tokens"`
 	CompletionTokensDetails *CompletionTokensDetails  `json:"completion_tokens_details,omitempty"`
 	PromptTokensDetails     *PromptTokensDetails      `json:"prompt_tokens_details,omitempty"`
+	// CacheCreationTokens carries Anthropic cache_creation_input_tokens through
+	// the internal pipeline (billing); never serialized to clients (json:"-").
+	CacheCreationTokens int `json:"-"`
 }
 
 type CompletionTokensDetails struct {
@@ -159,6 +162,9 @@ type OpenAIChunkUsage struct {
 	TotalTokens             int                      `json:"total_tokens"`
 	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	// CacheCreationTokens carries Anthropic cache_creation_input_tokens through
+	// the internal pipeline (billing); never serialized to clients (json:"-").
+	CacheCreationTokens int `json:"-"`
 }
 
 // SSEChunk wraps a parsed OpenAIChunk or a [DONE] signal.

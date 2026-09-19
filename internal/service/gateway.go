@@ -61,6 +61,9 @@ type ChatResult struct {
 	RetryCount      int
 	ReasoningTokens int
 	CacheReadTokens int
+	// CacheCreationTokens: Anthropic prompt-cache write tokens (billed at 1.25×
+	// the input price by the handler); included in InputTokens.
+	CacheCreationTokens int
 }
 
 func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest, sessionID string, orgID int64) (*ChatResult, error) {
@@ -174,6 +177,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		RetryCount:      totalRetries,
 		ReasoningTokens: extractReasoningTokens(openaiResp.Usage.CompletionTokensDetails),
 		CacheReadTokens: extractCacheReadTokens(openaiResp.Usage.PromptTokensDetails),
+		CacheCreationTokens: openaiResp.Usage.CacheCreationTokens,
 	}, nil
 }
 
@@ -331,6 +335,7 @@ loop:
 		RetryCount:      totalRetries,
 		ReasoningTokens: st.ReasoningTokens(),
 		CacheReadTokens: st.CacheReadTokens(),
+		CacheCreationTokens: st.CacheCreationTokens(),
 	}, nil
 }
 
@@ -366,6 +371,9 @@ type StreamResult struct {
 	RetryCount      int
 	ReasoningTokens int
 	CacheReadTokens int
+	// CacheCreationTokens: Anthropic prompt-cache write tokens (billed at 1.25×
+	// the input price by the handler); included in InputTokens.
+	CacheCreationTokens int
 }
 
 type RouteError struct {

@@ -296,6 +296,12 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("output_price", result.OutputPrice)
 	c.Set("usage_logged", true)
 
+	// Cache-aware cost so the usage row and ReportBudgetUsage agree (the budget
+	// middleware prefers the precomputed "cost" context value).
+	cost := anthropicCacheAdjustedCost(result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens, result.InputPrice, result.OutputPrice)
+	c.Set("cost", cost)
+
 	submitUsage(func() {
 		entry := &service.UsageEntry{
 			RouteType:      "anthropic",
@@ -319,6 +325,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			SessionID:       sessionID,
 			TemplateID:      templateID,
 				PriceMultiplier: priceMult,
+			PrecomputedCost: cost,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -564,6 +571,12 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Set("output_price", result.OutputPrice)
 	c.Set("usage_logged", true)
 
+	// Cache-aware cost (see the non-stream path): keeps the usage row and
+	// ReportBudgetUsage on the same number.
+	cost := anthropicCacheAdjustedCost(result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens, result.InputPrice, result.OutputPrice)
+	c.Set("cost", cost)
+
 	submitUsage(func() {
 		entry := &service.UsageEntry{
 			RouteType:      "anthropic",
@@ -588,6 +601,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			SessionID:       sessionID,
 			TemplateID:      templateID,
 				PriceMultiplier: priceMult,
+			PrecomputedCost: cost,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -631,6 +645,24 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		}).apply(entry)
 		h.usageSvc.Log(context.Background(), entry)
 	})
+}
+
+// anthropicCacheAdjustedCost applies Anthropic prompt-cache pricing on top of
+// the plain token cost. Cache-read tokens are included in inputTokens (OpenAI
+// semantics) but Anthropic bills them at 0.1× the input price, so discount the
+// 0.9×; cache-creation (write) tokens are billed at 1.25×, so add the 0.25×.
+func anthropicCacheAdjustedCost(inputTokens, outputTokens, cacheRead, cacheCreation int, inputPrice, outputPrice float64) float64 {
+	cost := inputPrice*float64(inputTokens)/1000 + outputPrice*float64(outputTokens)/1000
+	if cacheRead > 0 {
+		cost -= inputPrice * float64(cacheRead) * 0.9 / 1000
+	}
+	if cacheCreation > 0 {
+		cost += inputPrice * float64(cacheCreation) * 0.25 / 1000
+	}
+	if cost < 0 {
+		cost = 0
+	}
+	return cost
 }
 
 func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {

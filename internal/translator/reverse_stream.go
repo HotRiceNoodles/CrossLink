@@ -8,12 +8,13 @@ import (
 
 // ReverseStreamTranslator converts Anthropic SSE events into OpenAI SSE chunks.
 type ReverseStreamTranslator struct {
-	messageID       string
-	model           string
-	inputTokens     int
-	outputTokens    int
-	cacheReadTokens int
-	activeToolID    string
+	messageID            string
+	model                string
+	inputTokens          int
+	outputTokens         int
+	cacheReadTokens      int
+	cacheCreationTokens  int
+	activeToolID         string
 }
 
 func NewReverseStreamTranslator() *ReverseStreamTranslator {
@@ -42,8 +43,9 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage struct {
-				InputTokens          int `json:"input_tokens"`
-				CacheReadInputTokens int `json:"cache_read_input_tokens"`
+				InputTokens                int `json:"input_tokens"`
+				CacheReadInputTokens       int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens   int `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -55,7 +57,12 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 	t.model = evt.Message.Model
 	t.inputTokens = evt.Message.Usage.InputTokens
 	t.cacheReadTokens = evt.Message.Usage.CacheReadInputTokens
+	t.cacheCreationTokens = evt.Message.Usage.CacheCreationInputTokens
 
+	// OpenAI semantics: prompt_tokens includes cached tokens (Anthropic's
+	// input_tokens excludes them) — fold cache reads/writes into the total so
+	// billing sees one consistent number.
+	promptTotal := t.inputTokens + t.cacheReadTokens + t.cacheCreationTokens
 	chunk := &domain.OpenAIChunk{
 		ID:     t.messageID,
 		Object: "chat.completion.chunk",
@@ -64,8 +71,8 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 			{Index: 0, Delta: domain.OpenAIChunkDelta{Role: "assistant"}},
 		},
 		Usage: &domain.OpenAIChunkUsage{
-			PromptTokens: t.inputTokens,
-			TotalTokens:  t.inputTokens,
+			PromptTokens: promptTotal,
+			TotalTokens:  promptTotal,
 		},
 	}
 	return []domain.SSEChunk{{Chunk: chunk}}
@@ -195,6 +202,8 @@ func (t *ReverseStreamTranslator) handleMessageDelta(data []byte) []domain.SSECh
 	t.outputTokens = evt.Usage.OutputTokens
 	finishReason := stopReasonToFinishReason(evt.Delta.StopReason)
 
+	// OpenAI semantics: prompt_tokens includes cached tokens (see handleMessageStart).
+	promptTotal := t.inputTokens + t.cacheReadTokens + t.cacheCreationTokens
 	chunk := &domain.OpenAIChunk{
 		ID:      t.messageID,
 		Object:  "chat.completion.chunk",
@@ -203,15 +212,16 @@ func (t *ReverseStreamTranslator) handleMessageDelta(data []byte) []domain.SSECh
 			{Index: 0, FinishReason: &finishReason},
 		},
 		Usage: &domain.OpenAIChunkUsage{
-			PromptTokens:     t.inputTokens,
+			PromptTokens:     promptTotal,
 			CompletionTokens: t.outputTokens,
-			TotalTokens:      t.inputTokens + t.outputTokens,
+			TotalTokens:      promptTotal + t.outputTokens,
 			PromptTokensDetails: func() *domain.PromptTokensDetails {
 				if t.cacheReadTokens > 0 {
 					return &domain.PromptTokensDetails{CachedTokens: t.cacheReadTokens}
 				}
 				return nil
 			}(),
+			CacheCreationTokens: t.cacheCreationTokens,
 		},
 	}
 	return []domain.SSEChunk{{Chunk: chunk}}

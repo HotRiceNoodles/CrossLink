@@ -45,15 +45,20 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 			},
 		},
 		Usage: domain.OpenAIUsage{
-			PromptTokens:     resp.Usage.InputTokens,
+			// OpenAI semantics: prompt_tokens includes cached tokens. Anthropic's
+			// input_tokens excludes cache reads/writes, so fold them in here —
+			// billing (and the client-facing forward translation) then sees one
+			// consistent total.
+			PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.OutputTokens,
 			PromptTokensDetails: func() *domain.PromptTokensDetails {
 				if resp.Usage.CacheReadInputTokens > 0 {
 					return &domain.PromptTokensDetails{CachedTokens: resp.Usage.CacheReadInputTokens}
 				}
 				return nil
 			}(),
+			CacheCreationTokens: resp.Usage.CacheCreationInputTokens,
 		},
 	}, nil
 }
