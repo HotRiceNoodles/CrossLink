@@ -120,7 +120,7 @@ func (s *GormUsageSummer) TodayByKey(ctx context.Context, keyIDs []int64) (map[i
 	if len(keyIDs) == 0 {
 		return result, nil
 	}
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	today := localMidnight(time.Now())
 	var rows []struct {
 		APIKeyID int64
 		Req      int64
@@ -206,7 +206,7 @@ func (h *PATReadHandler) Usage(c *gin.Context) {
 	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 && d <= 90 {
 		days = d
 	}
-	since := time.Now().UTC().AddDate(0, 0, -days).Truncate(24 * time.Hour)
+	since := localMidnight(time.Now().AddDate(0, 0, -days))
 
 	rows, err := h.agg.DailySummary(c.Request.Context(), GetOrgID(c), since)
 	if err != nil {

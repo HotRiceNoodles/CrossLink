@@ -299,7 +299,7 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("DATE(created_at) as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COALESCE(SUM(cost), 0) as cost").
-		Where("created_at >= ? AND currency = ?", time.Now().AddDate(0, 0, -days).Truncate(24*time.Hour), primaryCurrency).
+		Where("created_at >= ? AND currency = ?", localMidnight(time.Now().AddDate(0, 0, -days)), primaryCurrency).
 		Group("DATE(created_at)").
 		Order("date ASC")
 	rows, err := dataQuery.Rows()
@@ -339,6 +339,26 @@ type TemplateStat struct {
 	TotalCost     float64 `json:"total_cost"`
 }
 
+// localMidnight truncates to midnight in the server's local timezone.
+// time.Truncate(24h) aligns to UTC midnight and skews day buckets on non-UTC
+// servers.
+func localMidnight(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+}
+
+// detectPrimaryCurrency returns the currency with the highest total cost in
+// the given query, so mixed-currency sums don't add CNY to USD verbatim
+// (same convention as Stats/DailyTrend/TeamStats).
+func detectPrimaryCurrency(query *gorm.DB) string {
+	var topCur struct{ Currency string }
+	query.Group("currency").Order("SUM(cost) DESC").Limit(1).Scan(&topCur)
+	if topCur.Currency != "" {
+		return topCur.Currency
+	}
+	return "CNY"
+}
+
 // TemplateStats aggregates usage by prompt template (template_id), joining
 // prompt_templates for display names. Only requests that used a template
 // (template_id IS NOT NULL) are counted. Returns [] when no template usage.
@@ -349,11 +369,16 @@ func (h *UsageHandler) TemplateStats(c *gin.Context) {
 	}
 	var results []TemplateStat
 
+	primaryCurrency := detectPrimaryCurrency(applyOrgScope(applyTeamScope(applyUsageFilters(
+		h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Select("currency"), c), c), c).
+		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)))
+
 	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("usage_logs.template_id as template_id, prompt_templates.name as template_name, COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(cost), 0) as total_cost").
 		Joins("LEFT JOIN prompt_templates ON prompt_templates.id = usage_logs.template_id").
 		Where("usage_logs.template_id IS NOT NULL AND usage_logs.created_at >= ?", time.Now().AddDate(0, 0, -days)).
+		Where("usage_logs.currency = ?", primaryCurrency).
 		Group("usage_logs.template_id, prompt_templates.name").
 		Order("total_requests DESC").
 		Limit(20).
@@ -372,10 +397,15 @@ func (h *UsageHandler) ModelDistribution(c *gin.Context) {
 	}
 	var results []ModelDist
 
+	primaryCurrency := detectPrimaryCurrency(applyOrgScope(applyTeamScope(applyUsageFilters(
+		h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Select("currency"), c), c), c).
+		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)))
+
 	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("model_requested as model, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost, COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as image_count").
 		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)).
+		Where("currency = ?", primaryCurrency).
 		Group("model_requested").
 		Order("count DESC").
 		Limit(10).
@@ -396,7 +426,7 @@ type TeamStat struct {
 }
 
 func (h *UsageHandler) TeamStats(c *gin.Context) {
-	days := 0
+	days := 7 // same default window as the other usage endpoints
 	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 {
 		days = d
 	}
