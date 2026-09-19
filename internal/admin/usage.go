@@ -271,6 +271,7 @@ type DailyStat struct {
 	FallbackCountDaily  int64   `json:"fallback_count_daily"`
 	RetryCountDaily     int64   `json:"retry_count_daily"`
 	GuardrailCountDaily int64   `json:"guardrail_count_daily"`
+	ErrorCountDaily     int64   `json:"error_count_daily"`
 	Cost                float64 `json:"cost"`
 }
 
@@ -298,7 +299,7 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 
 	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
-		Select("DATE(created_at) as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COALESCE(SUM(cost), 0) as cost").
+		Select("DATE(created_at) as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ? AND currency = ?", localMidnight(time.Now().AddDate(0, 0, -days)), primaryCurrency).
 		Group("DATE(created_at)").
 		Order("date ASC")
