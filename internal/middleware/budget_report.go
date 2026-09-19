@@ -160,10 +160,7 @@ func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc s
 		}
 
 		teamIDVal, _ := c.Get("team_id")
-		tid, ok := teamIDVal.(int64)
-		if !ok || tid <= 0 {
-			return
-		}
+		tid, _ := teamIDVal.(int64)
 
 		inTok, _ := c.Get("input_tokens")
 		outTok, _ := c.Get("output_tokens")
@@ -188,30 +185,34 @@ func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc s
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer bgCancel()
 
-		team := teamCache.Get(bgCtx, tid)
-		if team != nil && team.BudgetLimit > 0 {
-			teamPeriod, _ := c.Get("team_budget_period")
-			p, _ := teamPeriod.(string)
-			if p == "" {
-				p = team.BudgetPeriod
-			}
+		// Team reporting is independent of org reporting: a teamless org member
+		// must still consume the org budget.
+		if tid > 0 {
+			team := teamCache.Get(bgCtx, tid)
+			if team != nil && team.BudgetLimit > 0 {
+				teamPeriod, _ := c.Get("team_budget_period")
+				p, _ := teamPeriod.(string)
+				if p == "" {
+					p = team.BudgetPeriod
+				}
 
-			budgetSvc.ReportUsage(bgCtx, "team",
-				fmt.Sprintf("%d", team.ID), p, cost)
+				budgetSvc.ReportUsage(bgCtx, "team",
+					fmt.Sprintf("%d", team.ID), p, cost)
 
-			spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "team",
-				fmt.Sprintf("%d", team.ID), team.BudgetPeriod, team.BudgetLimit)
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Warn("admin budget alert goroutine panic", "error", r)
-					}
+				spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "team",
+					fmt.Sprintf("%d", team.ID), team.BudgetPeriod, team.BudgetLimit)
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Warn("admin budget alert goroutine panic", "error", r)
+						}
+					}()
+					alertCtx, alertCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer alertCancel()
+					alertSvc.CheckAndAlert(alertCtx, "team",
+						fmt.Sprintf("%d", team.ID), team.BudgetPeriod, spent, limit)
 				}()
-				alertCtx, alertCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer alertCancel()
-				alertSvc.CheckAndAlert(alertCtx, "team",
-					fmt.Sprintf("%d", team.ID), team.BudgetPeriod, spent, limit)
-			}()
+			}
 		}
 
 		// Org-level reporting

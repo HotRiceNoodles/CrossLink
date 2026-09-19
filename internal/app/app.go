@@ -420,6 +420,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// capability-probe providers via type assertion.
 		playgroundHandler := admin.NewPlaygroundHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, svcs.ActiveTracker, infra.RetryBudget, guardrailSvc, videoTaskSvc)
 		pg := adminGroup.Group("/playground")
+		// Playground traffic consumes team/org budgets (identity from JWT
+		// context: team_id/org_id). Key-level budget/calls don't apply — no API key.
+		pg.Use(middleware.AdminBudgetCheck(svcs.BudgetSvc, teamCache, orgCache))
+		pg.Use(middleware.AdminReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
 		pg.POST("/chat", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.Chat)
 		pg.POST("/stream", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.StreamChat)
 		pg.POST("/image", middleware.RequireAction(permCache, "playground:use"), playgroundHandler.ImageGenerate)

@@ -769,6 +769,9 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 	latencyMs := time.Since(start).Milliseconds()
 
 	pricing := service.ResolvePricing(route.ExtraConfig)
+	if pricing.Price <= 0 {
+		slog.Warn("playground: image model has no pricing configured (extra_config.pricing) — recorded as free", "model", req.Model)
+	}
 	var cost float64
 	if pricing.Price > 0 {
 		cost = pricing.Price * float64(req.N)
@@ -923,6 +926,9 @@ func (h *PlaygroundHandler) TextToSpeech(c *gin.Context) {
 	pn := successRoute.ProviderRow.Name
 
 	pricing := service.ResolvePricing(successRoute.ExtraConfig)
+	if pricing.Price <= 0 {
+		slog.Warn("playground: TTS model has no pricing configured (extra_config.pricing) — recorded as free", "model", req.Model)
+	}
 	var cost float64
 	if pricing.Price > 0 {
 		cost = pricing.Price * float64(utf8.RuneCountInString(req.Input))
@@ -1074,6 +1080,7 @@ func (h *PlaygroundHandler) VideoGenerate(c *gin.Context) {
 		Model:          task.Model,
 		OrgID:          orgID,
 		APIKeyID:       0, // Playground: no API key
+		Currency:       route.Currency,
 		InputPrice:     route.InputPrice,
 		Prompt:         truncateStr(req.Prompt, 200),
 	})
@@ -1199,6 +1206,12 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 			ap := route.Provider.(provider.AudioProvider)
 			reqCopy := req
 			reqCopy.Model = route.ProviderModel
+			// Billing needs the audio duration, which providers only return in
+			// verbose_json. The playground builds its own response envelope, so
+			// switching the internal format is invisible to the client.
+			if reqCopy.ResponseFormat == "" || reqCopy.ResponseFormat == "json" {
+				reqCopy.ResponseFormat = "verbose_json"
+			}
 			pn := route.Provider.Name()
 			if h.activeTracker != nil {
 				h.activeTracker.Incr(ctx, pn)
@@ -1252,9 +1265,16 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 	pn := route.ProviderRow.Name
 
 	pricing := service.ResolvePricing(route.ExtraConfig)
+	if pricing.Price <= 0 {
+		slog.Warn("playground: transcription model has no pricing configured (extra_config.pricing) — recorded as free", "model", req.Model)
+	}
 	var cost float64
 	if pricing.Price > 0 {
-		cost = pricing.Price * resp.Duration
+		if resp.Duration > 0 {
+			cost = pricing.Price * resp.Duration
+		} else {
+			slog.Warn("playground: transcription returned no duration — cost recorded as 0 (pricing is per second)", "model", req.Model)
+		}
 	}
 
 	c.Set("provider", pn)
