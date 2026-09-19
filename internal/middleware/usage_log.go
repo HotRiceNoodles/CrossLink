@@ -45,7 +45,7 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 				RouteType:      routeType,
 				ModelRequested: "-",
 				ModelUsed:      "-",
-				Currency:       "CNY",
+				Currency:       "CNY", // label only: 0-cost rows don't affect any currency-summed metric
 				StatusCode:     status,
 				ErrorType:      errorType,
 				LatencyMs:      time.Since(start).Milliseconds(),
