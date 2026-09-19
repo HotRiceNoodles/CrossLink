@@ -280,7 +280,12 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 func (s *DataLensAggregatorService) aggregateDaily(ctx context.Context) error {
 	now := time.Now().UTC()
 	dayEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	dayStart := dayEnd.Add(-24 * time.Hour)
+	// Re-aggregate the last few complete days each cycle — aggregation is a
+	// per-day UPSERT (idempotent), so a wider window self-heals a missed run
+	// (process down across midnight, transient failure) instead of leaving a
+	// permanent gap. Steady-state used to touch only yesterday.
+	const dailyLookbackDays = 3
+	dayStart := dayEnd.Add(-dailyLookbackDays * 24 * time.Hour)
 
 	// Step 1: Aggregate from hourly_metrics to daily_metrics (SUM/MIN/MAX).
 	if err := s.aggregateDailyFromHourly(ctx, dayStart, dayEnd); err != nil {
