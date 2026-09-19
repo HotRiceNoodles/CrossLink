@@ -318,6 +318,31 @@ func TestReportTokens_NoTokens_NoIncrement(t *testing.T) {
 	assert.False(t, mr.Exists("tpm:key:1"))
 }
 
+// TestReportTokens_NoTokens_RefundsReservation: failed/rejected/idempotent-
+// replay requests never publish tokens — the reservation must be refunded
+// (delta = 0 - reserved) instead of leaking until the window TTL expires.
+func TestReportTokens_NoTokens_RefundsReservation(t *testing.T) {
+	rdb, mr := setupTestRedis(t)
+	// Simulate the reservation made by TPMLimit
+	rdb.Set(context.Background(), "tpm:key:1", "2000", time.Minute).Err()
+	rdb.Set(context.Background(), "tpm:team:10", "2000", time.Minute).Err()
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodPost, "/test", nil)
+	c.Set("tpm_key", "tpm:key:1")
+	c.Set("tpm_reservations", &tpmReservations{Key: 2000, Team: 2000})
+	c.Set("team_id", int64(10))
+	// no input_tokens / output_tokens — request failed before accounting
+
+	handler := ReportTokens(rdb, nil)
+	handler(c)
+
+	mr.CheckGet(t, "tpm:key:1", "0")
+	mr.CheckGet(t, "tpm:team:10", "0")
+}
+
 func TestReportTokens_ZeroReservation_ReportsFullTotal(t *testing.T) {
 	rdb, mr := setupTestRedis(t)
 

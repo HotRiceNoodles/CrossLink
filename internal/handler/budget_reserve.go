@@ -47,6 +47,7 @@ func reserveBudgetForRequest(c *gin.Context, budgetSvc *service.BudgetService, i
 		// ReserveForRequest. Do NOT stash reservations — the request is aborted
 		// before the upstream call, so ReportBudgetUsage must not reconcile again.
 		c.Set("budget_exceeded", true)
+		c.Set("skip_call_count", true) // rejected before any upstream work — same rule as the middleware-level check
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "budget_exceeded", "message": fmt.Sprintf("%s budget would be exceeded by this request", exceededScope)},

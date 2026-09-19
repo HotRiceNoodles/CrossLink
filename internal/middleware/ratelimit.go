@@ -388,70 +388,79 @@ func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCac
 
 func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Next()
-
-		tpmKey, exists := c.Get("tpm_key")
-		if !exists {
-			return
-		}
-		key := tpmKey.(string)
-
-		inputTokens, _ := c.Get("input_tokens")
-		outputTokens, _ := c.Get("output_tokens")
-		total := 0
-		if v, ok := inputTokens.(int); ok {
-			total += v
-		}
-		if v, ok := outputTokens.(int); ok {
-			total += v
-		}
-		if total <= 0 {
-			return
-		}
-
-		// Extract per-level reservations for delta adjustment
-		var keyRes, teamRes, orgRes int
-		if resVal, ok := c.Get("tpm_reservations"); ok {
-			if res, ok := resVal.(*tpmReservations); ok {
-				keyRes = res.Key
-				teamRes = res.Team
-				orgRes = res.Org
+		// Deferred so the reconciliation also runs when a handler panics —
+		// otherwise the TPM reservation leaks until its TTL expires.
+		defer func() {
+			tpmKey, exists := c.Get("tpm_key")
+			if !exists {
+				return
 			}
-		}
+			key := tpmKey.(string)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Key level: adjust from reservation to actual usage
-		if delta := total - keyRes; delta != 0 {
-			if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, delta, int(time.Minute.Seconds())).Result(); err != nil {
-				slog.Warn("report tokens redis atomic incrby failed", "key", key, "error", err)
+			inputTokens, _ := c.Get("input_tokens")
+			outputTokens, _ := c.Get("output_tokens")
+			total := 0
+			if v, ok := inputTokens.(int); ok {
+				total += v
 			}
-		}
+			if v, ok := outputTokens.(int); ok {
+				total += v
+			}
 
-		// Also report to team TPM counter if applicable
-		apiKey := GetAPIKeyFromContext(c)
-		teamID := resolveTeamID(c, apiKey)
-		if teamID > 0 {
-			teamTPMKey := fmt.Sprintf("tpm:team:%d", teamID)
-			if delta := total - teamRes; delta != 0 {
-				if _, err := incrByExpireScript.Run(ctx, rdb, []string{teamTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
-					slog.Warn("report tokens redis team atomic incrby failed", "key", teamTPMKey, "error", err)
+			// Extract per-level reservations for delta adjustment
+			var keyRes, teamRes, orgRes int
+			if resVal, ok := c.Get("tpm_reservations"); ok {
+				if res, ok := resVal.(*tpmReservations); ok {
+					keyRes = res.Key
+					teamRes = res.Team
+					orgRes = res.Org
 				}
 			}
-		}
 
-		// Report to org TPM counter
-		if orgCache != nil {
-			if orgID := c.GetInt64("org_id"); orgID != 0 {
-				orgTPMKey := fmt.Sprintf("tpm:org:%d", orgID)
-				if delta := total - orgRes; delta != 0 {
-					if _, err := incrByExpireScript.Run(ctx, rdb, []string{orgTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
-						slog.Warn("report tokens redis org atomic incrby failed", "key", orgTPMKey, "error", err)
+			// No usage published (failed/rejected/idempotent-replay request):
+			// refund the reservations instead of leaking them until the window
+			// TTL expires — the deltas below become (0 - reserved).
+			if total <= 0 && keyRes == 0 && teamRes == 0 && orgRes == 0 {
+				return
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Key level: adjust from reservation to actual usage
+			if key != "" {
+				if delta := total - keyRes; delta != 0 {
+					if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+						slog.Warn("report tokens redis atomic incrby failed", "key", key, "error", err)
 					}
 				}
 			}
-		}
+
+			// Also report to team TPM counter if applicable
+			apiKey := GetAPIKeyFromContext(c)
+			teamID := resolveTeamID(c, apiKey)
+			if teamID > 0 && (total > 0 || teamRes > 0) {
+				teamTPMKey := fmt.Sprintf("tpm:team:%d", teamID)
+				if delta := total - teamRes; delta != 0 {
+					if _, err := incrByExpireScript.Run(ctx, rdb, []string{teamTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+						slog.Warn("report tokens redis team atomic incrby failed", "key", teamTPMKey, "error", err)
+					}
+				}
+			}
+
+			// Report to org TPM counter
+			if orgCache != nil {
+				if orgID := c.GetInt64("org_id"); orgID != 0 && (total > 0 || orgRes > 0) {
+					orgTPMKey := fmt.Sprintf("tpm:org:%d", orgID)
+					if delta := total - orgRes; delta != 0 {
+						if _, err := incrByExpireScript.Run(ctx, rdb, []string{orgTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+							slog.Warn("report tokens redis org atomic incrby failed", "key", orgTPMKey, "error", err)
+						}
+					}
+				}
+			}
+		}()
+		c.Next()
 	}
 }
 

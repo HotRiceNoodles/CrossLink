@@ -190,6 +190,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				idemKeyID = key.ID
 			}
 			if cached, ok := h.idemCache.Get(c.Request.Context(), idemKeyID, idemKey); ok {
+				c.Set("skip_call_count", true) // idempotent replay: no new upstream work
 				safeHeaders := map[string]bool{"Content-Type": true, "X-Request-Id": true, "X-RateLimit-Limit": true, "X-RateLimit-Remaining": true, "X-RateLimit-Reset": true}
 				for k, v := range cached.Headers {
 					if safeHeaders[k] {
