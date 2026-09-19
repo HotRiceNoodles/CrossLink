@@ -161,7 +161,7 @@ func buildPATRouter(t *testing.T, perms map[string]bool) (*gin.Engine, *mockPatR
 		UsageSummer: patUsageSummerFunc(func(_ context.Context, _ []int64) (map[int64]UsageAgg, error) {
 			return map[int64]UsageAgg{10: {Requests: 3, Tokens: 300, Cost: 0.5}}, nil
 		}),
-		UsageAgg: patUsageAggFunc(func(_ context.Context, _ time.Time) ([]DailyAgg, error) {
+		UsageAgg: patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 			return []DailyAgg{{Date: "2026-08-20", Requests: 3, Tokens: 300, Cost: 0.5}}, nil
 		}),
 		BudgetSpent: patBudgetSpentFunc(func(_ context.Context, _, _, _ string) float64 { return 50 }),

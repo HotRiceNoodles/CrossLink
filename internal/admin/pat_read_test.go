@@ -13,10 +13,10 @@ import (
 	"github.com/crosslink/internal/provider"
 )
 
-type patUsageAggFunc func(ctx context.Context, since time.Time) ([]DailyAgg, error)
+type patUsageAggFunc func(ctx context.Context, orgID int64, since time.Time) ([]DailyAgg, error)
 
-func (f patUsageAggFunc) DailySummary(ctx context.Context, since time.Time) ([]DailyAgg, error) {
-	return f(ctx, since)
+func (f patUsageAggFunc) DailySummary(ctx context.Context, orgID int64, since time.Time) ([]DailyAgg, error) {
+	return f(ctx, orgID, since)
 }
 
 type patKeyListerFunc func(ctx context.Context, orgID int64) ([]model.APIKey, error)
@@ -35,7 +35,7 @@ func newPATKeysHandler(lister PATKeyLister, summer UsageSummer) *PATReadHandler 
 	return NewPATReadHandler(PATReadDeps{
 		KeyLister:   lister,
 		UsageSummer: summer,
-		UsageAgg: patUsageAggFunc(func(_ context.Context, _ time.Time) ([]DailyAgg, error) {
+		UsageAgg: patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 			return nil, nil
 		}),
 	})
@@ -356,7 +356,7 @@ func TestPATReadKeys_ListerError(t *testing.T) {
 }
 
 func TestPATReadUsage_Success(t *testing.T) {
-	agg := patUsageAggFunc(func(_ context.Context, since time.Time) ([]DailyAgg, error) {
+	agg := patUsageAggFunc(func(_ context.Context, _ int64, since time.Time) ([]DailyAgg, error) {
 		if time.Since(since) < 6*24*time.Hour || time.Since(since) > 8*24*time.Hour {
 			t.Errorf("since = %v, want ~now-7d", since)
 		}
@@ -403,7 +403,7 @@ func TestPATReadUsage_Success(t *testing.T) {
 func TestPATReadUsage_DaysParamFallback(t *testing.T) {
 	for _, q := range []string{"?days=-1", "?days=abc", "?days=200"} {
 		var gotSince time.Time
-		agg := patUsageAggFunc(func(_ context.Context, since time.Time) ([]DailyAgg, error) {
+		agg := patUsageAggFunc(func(_ context.Context, _ int64, since time.Time) ([]DailyAgg, error) {
 			gotSince = since
 			return nil, nil
 		})
@@ -419,7 +419,7 @@ func TestPATReadUsage_DaysParamFallback(t *testing.T) {
 }
 
 func TestPATReadUsage_AggregatorError(t *testing.T) {
-	agg := patUsageAggFunc(func(_ context.Context, _ time.Time) ([]DailyAgg, error) {
+	agg := patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 		return nil, errors.New("db down")
 	})
 	w := callUsage(t, "", agg)
@@ -429,7 +429,7 @@ func TestPATReadUsage_AggregatorError(t *testing.T) {
 }
 
 func TestPATReadUsage_EmptyDays(t *testing.T) {
-	agg := patUsageAggFunc(func(_ context.Context, _ time.Time) ([]DailyAgg, error) {
+	agg := patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 		return nil, nil
 	})
 	w := callUsage(t, "", agg)

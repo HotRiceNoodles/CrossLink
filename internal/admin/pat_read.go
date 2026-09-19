@@ -51,7 +51,8 @@ type DailyAgg struct {
 
 // usageAggregator aggregates usage_logs by day (consumer-side interface).
 type usageAggregator interface {
-	DailySummary(ctx context.Context, since time.Time) ([]DailyAgg, error)
+	// orgID scopes the aggregation to one org; 0 = unscoped (admin view).
+	DailySummary(ctx context.Context, orgID int64, since time.Time) ([]DailyAgg, error)
 }
 
 // GormUsageAggregator is the real usageAggregator backed by usage_logs.
@@ -60,13 +61,16 @@ type GormUsageAggregator struct {
 	DB *gorm.DB
 }
 
-func (a *GormUsageAggregator) DailySummary(ctx context.Context, since time.Time) ([]DailyAgg, error) {
+func (a *GormUsageAggregator) DailySummary(ctx context.Context, orgID int64, since time.Time) ([]DailyAgg, error) {
 	var rows []DailyAgg
-	err := a.DB.WithContext(ctx).
+	q := a.DB.WithContext(ctx).
 		Table("usage_logs").
 		Select("DATE(created_at) as date, COUNT(*) as requests, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
-		Where("created_at >= ?", since).
-		Group("DATE(created_at)").
+		Where("created_at >= ?", since)
+	if orgID > 0 {
+		q = q.Where("org_id = ?", orgID)
+	}
+	err := q.Group("DATE(created_at)").
 		Order("date ASC").
 		Scan(&rows).Error
 	if err != nil {
@@ -204,7 +208,7 @@ func (h *PATReadHandler) Usage(c *gin.Context) {
 	}
 	since := time.Now().UTC().AddDate(0, 0, -days).Truncate(24 * time.Hour)
 
-	rows, err := h.agg.DailySummary(c.Request.Context(), since)
+	rows, err := h.agg.DailySummary(c.Request.Context(), GetOrgID(c), since)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to aggregate usage"})
 		return
