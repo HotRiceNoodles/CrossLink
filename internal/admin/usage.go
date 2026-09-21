@@ -34,12 +34,12 @@ func applyUsageFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
 		query = query.Where("api_key_id = ?", apiKeyID)
 	}
 	if start := c.Query("start_date"); start != "" {
-		if t, err := time.ParseInLocation("2006-01-02", start, time.Local); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", start, statsLoc); err == nil {
 			query = query.Where("created_at >= ?", t)
 		}
 	}
 	if end := c.Query("end_date"); end != "" {
-		if t, err := time.ParseInLocation("2006-01-02", end, time.Local); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", end, statsLoc); err == nil {
 			query = query.Where("created_at < ?", t.AddDate(0, 0, 1))
 		}
 	}
@@ -297,11 +297,12 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 		primaryCurrency = topCur.Currency
 	}
 
+	bucketExpr := dayBucketExpr(h.db.Dialector.Name(), "created_at")
 	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
-		Select("DATE(created_at) as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
+		Select(bucketExpr+" as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ? AND currency = ?", localMidnight(time.Now().AddDate(0, 0, -days)), primaryCurrency).
-		Group("DATE(created_at)").
+		Group(bucketExpr).
 		Order("date ASC")
 	rows, err := dataQuery.Rows()
 	if err != nil {
@@ -340,12 +341,13 @@ type TemplateStat struct {
 	TotalCost     float64 `json:"total_cost"`
 }
 
-// localMidnight truncates to midnight in the server's local timezone.
-// time.Truncate(24h) aligns to UTC midnight and skews day buckets on non-UTC
-// servers.
+// localMidnight truncates to midnight in the statistics timezone
+// (see stats_timezone.go). time.Truncate(24h) would align to UTC midnight
+// and skew day buckets on non-UTC servers.
 func localMidnight(t time.Time) time.Time {
+	t = t.In(statsLoc)
 	y, m, d := t.Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+	return time.Date(y, m, d, 0, 0, 0, 0, statsLoc)
 }
 
 // detectPrimaryCurrency returns the currency with the highest total cost in

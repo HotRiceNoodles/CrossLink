@@ -97,6 +97,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		slog.Warn("failed to load permission cache", "error", err)
 	}
 
+	// Pin the statistics timezone so day buckets and query windows agree with
+	// the DB session timezone set in main (CL_DATABASE_TIMEZONE).
+	admin.SetStatsTimezone(cfg.Database.Timezone)
+
 	// Services
 	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)

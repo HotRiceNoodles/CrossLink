@@ -63,14 +63,15 @@ type GormUsageAggregator struct {
 
 func (a *GormUsageAggregator) DailySummary(ctx context.Context, orgID int64, since time.Time) ([]DailyAgg, error) {
 	var rows []DailyAgg
+	bucketExpr := dayBucketExpr(a.DB.Dialector.Name(), "created_at")
 	q := a.DB.WithContext(ctx).
 		Table("usage_logs").
-		Select("DATE(created_at) as date, COUNT(*) as requests, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
+		Select(bucketExpr+" as date, COUNT(*) as requests, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ?", since)
 	if orgID > 0 {
 		q = q.Where("org_id = ?", orgID)
 	}
-	err := q.Group("DATE(created_at)").
+	err := q.Group(bucketExpr).
 		Order("date ASC").
 		Scan(&rows).Error
 	if err != nil {

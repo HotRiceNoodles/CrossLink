@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/app"
@@ -60,6 +61,23 @@ func main() {
 	}
 	defer otelShutdown(context.Background())
 
+	// Effective stats timezone: explicit config, else the process local zone.
+	// Used both for the DB session timezone (SQL date bucketing) and the
+	// admin usage-statistics day boundaries — keeping the two in sync is the
+	// fix for "early-morning requests bucketed into the previous day".
+	//
+	// Only pass a real IANA name to the DSN: time.Local.String() can return
+	// the placeholder "Local" (e.g. Windows without zoneinfo), which the
+	// database rejects as an invalid TimeZone value. An empty value omits the
+	// DSN parameter and the session keeps the server default.
+	effectiveTZ := cfg.Database.Timezone
+	if effectiveTZ == "" || effectiveTZ == "Local" {
+		if name := time.Local.String(); name != "" && name != "Local" {
+			effectiveTZ = name
+		} else {
+			effectiveTZ = ""
+		}
+	}
 	dia, err := dialect.New(dialect.DBConfig{
 		Driver:     cfg.Database.Driver,
 		Host:       cfg.Database.Host,
@@ -69,6 +87,7 @@ func main() {
 		DBName:     cfg.Database.DBName,
 		SSLMode:    cfg.Database.SSLMode,
 		SQLitePath: cfg.Database.SQLitePath,
+		Timezone:   effectiveTZ,
 	})
 	if err != nil {
 		slog.Error("failed to create dialect", "error", err)
