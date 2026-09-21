@@ -312,7 +312,7 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 
 	for rows.Next() {
 		var s DailyStat
-		if err := rows.Scan(&s.Date, &s.Count, &s.Tokens, &s.InputTokens, &s.OutputTokens, &s.ReasoningTokens, &s.CacheReadTokens, &s.FallbackCountDaily, &s.RetryCountDaily, &s.GuardrailCountDaily, &s.Cost); err != nil {
+		if err := rows.Scan(&s.Date, &s.Count, &s.Tokens, &s.InputTokens, &s.OutputTokens, &s.ReasoningTokens, &s.CacheReadTokens, &s.FallbackCountDaily, &s.RetryCountDaily, &s.GuardrailCountDaily, &s.ErrorCountDaily, &s.Cost); err != nil {
 			continue
 		}
 		results = append(results, s)
