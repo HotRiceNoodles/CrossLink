@@ -50,3 +50,70 @@ Every tool call is logged asynchronously via a **channel-based worker** with bat
 - An auto-cleanup job drops partitions older than the retention window.
 
 The async channel means tool-call latency isn't padded by log-write latency — the response returns to the client as soon as the upstream replies, and the log write happens off the hot path.
+
+## Example: registering a remote web-search MCP server
+
+The HTTP transport works with any stateless streamable-HTTP MCP endpoint. As a worked example, here is the You.com MCP server (web search, page-content extraction, cited research) registered through the admin API.
+
+### Keyless (basic web search)
+
+The `?profile=free` endpoint exposes the `you-search` tool without an API key, so `auth_type` stays `none`:
+
+```bash
+curl -X POST http://localhost:8080/admin/api/mcp/servers \
+  -H "Authorization: Bearer <jwt> \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "youcom",
+        "display_name": "You.com Web Search",
+        "description": "Web search and page content extraction via the You.com MCP server",
+        "transport_type": "http",
+        "url": "https://api.you.com/mcp?profile=free",
+        "auth_type": "none"
+      }'
+```
+
+### Authenticated (full tool surface)
+
+With a [You.com API key](https://you.com/platform/api-keys) (exported as `YDC_API_KEY`), use the standard endpoint and bearer auth. The `bearer_token` field is a known-sensitive key, so the value is encrypted at rest before storage (see [Encrypted credentials](#encrypted-credentials)):
+
+```bash
+curl -X POST http://localhost:8080/admin/api/mcp/servers \
+  -H "Authorization: Bearer <jwt> \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "youcom",
+        "display_name": "You.com Web Search",
+        "description": "Web search and page content extraction via the You.com MCP server",
+        "transport_type": "http",
+        "url": "https://api.you.com/mcp",
+        "auth_type": "bearer",
+        "auth_config": { "bearer_token": "'"${YDC_API_KEY}"'" }
+      }'
+```
+
+### Verify and call through the gateway
+
+```bash
+# confirm the server is healthy and see its cached tool list
+curl -X POST http://localhost:8080/admin/api/mcp/servers/1/test \
+  -H "Authorization: Bearer cl-your-api-key
+curl http://localhost:8080/admin/api/mcp/servers/1/tools \
+  -H "Authorization: Bearer cl-your-api-key
+
+# forward a JSON-RPC tool call through the gateway
+curl -X POST http://localhost:8080/mcp/youcom \
+  -H "Authorization: Bearer cl-your-api-key \
+  -H "Content-Type: application/json" \
+  -d '{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "you-search",
+          "arguments": { "query": "streamable http mcp transport" }
+        }
+      }'
+```
+
+The tool call is forwarded with `Accept: application/json, text/event-stream`, and SSE-formatted replies are parsed back into a single JSON-RPC response (`internal/mcp/transport_http.go`), so both response shapes work. Registration is entirely opt-in: nothing is pre-registered, and any other remote MCP server can be added the same way.
