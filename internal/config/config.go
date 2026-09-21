@@ -52,6 +52,10 @@ type DatabaseConfig struct {
 	DBName     string `mapstructure:"dbname"`
 	SSLMode    string `mapstructure:"sslmode"`
 	SQLitePath string `mapstructure:"sqlite_path"`
+	// Timezone pins the session timezone used for SQL date bucketing
+	// (DATE(created_at)) and the day boundaries of usage statistics. Empty =
+	// server process local time. IANA name, e.g. "Asia/Shanghai".
+	Timezone string `mapstructure:"timezone"`
 }
 
 func (d DatabaseConfig) DSN() string {

@@ -12,6 +12,10 @@ database:
   password: postgres
   dbname: crosslink
   sslmode: disable          # PostgreSQL / KingbaseES only
+  timezone: ""              # IANA zone for statistics day boundaries & SQL date
+                            # bucketing (env: CL_DATABASE_TIMEZONE), e.g. Asia/Shanghai.
+                            # Empty = server process local time. Must match your users'
+                            # timezone or early-morning requests bucket into the prior day.
   # --- SQLite ---
   # sqlite_path: ./data/crosslink.db
 
