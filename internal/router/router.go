@@ -119,14 +119,20 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 	if v, ok := r.cache.Load(cacheKey); ok {
 		entry := v.(*cacheEntry)
 		if time.Now().Before(entry.expire) {
-			// Filter out unhealthy providers from cached results.
-			// IsHealthyModel is retained: it drives the half-open probe
-			// single-flight (claims one probe per expired circuit). P4.4b
-			// ADDS health-score reorder ON TOP, not replacing it.
+			// Filter out circuit-open providers from cached results via a
+			// PURE READ (healthAllows → CircuitState). Resolve must NOT use
+			// IsHealthyModel here: it claims the half-open probe lease
+			// (probeInFlight), and the FallbackEngine re-checks
+			// IsHealthyModel before each attempt — it would see the lease
+			// Resolve just claimed, skip the provider, and never run the
+			// attempt whose deferred ClearProbe releases it. The leaked
+			// lease then permanently filters the provider out of Resolve
+			// ("no available route for model" deadlock). P4.4b health-score
+			// reorder stays ON TOP of this filter.
 			if r.health != nil {
 				var healthy []*RouteResult
 				for _, rr := range entry.results {
-					if r.health.IsHealthyModel(rr.Provider.Name(), rr.ProviderModel) {
+					if r.healthAllows(rr.Provider.Name(), rr.ProviderModel) {
 						healthy = append(healthy, rr)
 					}
 				}
@@ -182,7 +188,7 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 		if _, ok := r.registry.Get(m.Provider.Name); !ok {
 			continue
 		}
-		if r.health != nil && !r.health.IsHealthyModel(m.Provider.Name, m.ProviderModel) {
+		if !r.healthAllows(m.Provider.Name, m.ProviderModel) {
 			continue
 		}
 		if meta := provider.GetAdapterMeta(m.Provider.AdapterType); meta != nil && meta.MinimumTier != "" {
@@ -287,6 +293,19 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 	_, ordered := strategy.Select(ctx, routeCandidates)
 
 	return ordered, nil
+}
+
+// healthAllows is Resolve's health filter: a pure CircuitState read that only
+// excludes still-OPEN circuits. Half-open (expired) circuits pass so the
+// FallbackEngine can claim the probe lease (single-flight, C2) and release it
+// via the deferred ClearProbe in attemptNonStream/attemptStream. Resolve never
+// claims the lease itself — a lease claimed here is never released (the engine
+// would see it and skip the provider), deadlocking the model's routes.
+func (r *Resolver) healthAllows(name, model string) bool {
+	if r.health == nil {
+		return true
+	}
+	return r.health.CircuitState(name, model) != provider.CircuitOpen
 }
 
 // Invalidate removes cached entries. Call this when model mappings change.

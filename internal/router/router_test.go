@@ -248,3 +248,63 @@ func TestResolver_Resolve_SkipsModelScopeCircuit(t *testing.T) {
 	assert.Len(t, results, 1)
 	assert.Equal(t, "qwen", results[0].Provider.Name())
 }
+
+// Regression: Resolve must not claim the half-open probe lease. Pre-fix,
+// Resolve's IsHealthyModel filter set probeInFlight on the expired circuit;
+// the FallbackEngine's own IsHealthyModel gate then saw the lease, skipped the
+// provider, and the deferred ClearProbe (inside the never-started attempt)
+// never released it. Every later Resolve filtered the provider out and the
+// model was permanently unroutable ("no available route for model") until
+// process restart — even with the upstream healthy again.
+func TestResolver_Resolve_HalfOpenDoesNotLeakProbeLease(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(3, 5*time.Millisecond)
+	reg := provider.NewRegistry()
+	reg.Register("deepseek", &mockProvider{name: "deepseek"})
+
+	repo := &mockProviderModelRepo{
+		data: map[string][]model.ProviderModel{
+			"test-model": {
+				{
+					ID:            1,
+					ProviderModel: "deepseek-chat",
+					Weight:        3,
+					Status:        1,
+					Provider:      model.Provider{Name: "deepseek", Status: 1},
+				},
+			},
+		},
+	}
+
+	// Open the circuit, then let it expire → half-open.
+	for i := 0; i < 3; i++ {
+		health.RecordFailure("deepseek")
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	r := NewResolver(reg, repo, health, map[StrategyName]RoutingStrategy{
+		StrategyWeightedRandom: &WeightedRandomStrategy{},
+	}, nil, nil, nil, nil)
+
+	// First Resolve: the half-open route is returned (it becomes the probe).
+	results, err := r.Resolve(context.Background(), "test-model", 0)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	// Resolve must NOT have claimed the probe lease: the FallbackEngine's
+	// IsHealthyModel gate (fallback_engine.go) must still pass. Pre-fix this
+	// returned false — the engine skipped the provider and the lease leaked.
+	assert.True(t, health.IsHealthyModel("deepseek", "deepseek-chat"),
+		"Resolve must not claim the half-open probe lease")
+
+	// Subsequent Resolves must still see the route (no permanent deadlock).
+	// Second call exercises the cached path; third exercises uncached after
+	// clearing the lease the way the engine's deferred ClearProbe would.
+	results, err = r.Resolve(context.Background(), "test-model", 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+
+	health.ClearProbe("deepseek", "deepseek-chat") // what attemptNonStream's defer does
+	results, err = r.Resolve(context.Background(), "test-model", 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+}
