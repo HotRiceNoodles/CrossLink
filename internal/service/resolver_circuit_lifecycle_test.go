@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,10 +130,15 @@ func TestCircuitLifecycle_EndToEnd(t *testing.T) {
 	}
 
 	// Phase 2 (open window): Resolve must reject with the production
-	// "no active provider found" error, and the upstream must NOT be called.
+	// "no active provider found" error — now enriched with the circuit cause —
+	// and the upstream must NOT be called.
 	_, err := lifecycleRequest(ctx, resolver, health)
-	if err == nil || err.Error() != "no active provider found for model: MiniMax-M3" {
+	if err == nil || !strings.HasPrefix(err.Error(), "no active provider found for model: MiniMax-M3") {
 		t.Fatalf("expected resolve rejection while open, got %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "minimax circuit open") ||
+		!strings.Contains(err.Error(), "server: boom") {
+		t.Fatalf("rejection must carry the recorded upstream cause, got %v", err)
 	}
 	if n := prov.callCount(); n != 3 {
 		t.Fatalf("open circuit must not reach upstream: got %d calls, want 3", n)

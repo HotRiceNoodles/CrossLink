@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,11 +79,60 @@ func TestRecordTransientFailure_RetryAfterNotEscalated(t *testing.T) {
 		t.Fatalf("second open should be ~20ms, got %v", got)
 	}
 
-	time.Sleep(25 * time.Millisecond)                    // expire the 20ms escalation
-	h.RecordTransientFailure("X", "", 0)                 // half-open failure
+	time.Sleep(25 * time.Millisecond)                       // expire the 20ms escalation
+	h.RecordTransientFailure("X", "", 0)                    // half-open failure
 	h.RecordTransientFailure("X", "", 200*time.Millisecond) // open 3, hinted: clamp → 200ms (not 40s escalated)
 	snap = h.Snapshot()[0]
 	if got := time.Until(snap.Until); got < 150*time.Millisecond || got > 230*time.Millisecond {
 		t.Fatalf("hinted open should be ~200ms (not the 40s escalation cap), got %v", got)
 	}
+}
+
+func TestRecordCause_ExposedViaSnapshotAndDescription(t *testing.T) {
+	h := NewHealthTrackerWithConfig(1, time.Minute)
+	h.RecordTransientFailure("X", "m1", 0)
+	h.RecordCause("X", "m1", "not_found", "provider not found: Model not exists")
+
+	var snap ProviderHealthSnapshot
+	for _, s := range h.Snapshot() {
+		if s.Provider == "X" && s.Model == "m1" {
+			snap = s
+		}
+	}
+	// Transient failures are account-scoped: the cause lands on the account key.
+	for _, s := range h.Snapshot() {
+		if s.Provider == "X" && s.Model == "" {
+			snap = s
+		}
+	}
+	if snap.LastErrorType != "not_found" || !strings.Contains(snap.LastErrorMessage, "Model not exists") {
+		t.Fatalf("snapshot cause = %q / %q", snap.LastErrorType, snap.LastErrorMessage)
+	}
+
+	desc := h.OpenCircuitDescription("X", "m1")
+	if !strings.Contains(desc, "circuit open") || !strings.Contains(desc, "not_found") || !strings.Contains(desc, "Model not exists") {
+		t.Fatalf("description missing cause: %q", desc)
+	}
+
+	// Healthy → empty description.
+	if d := h.OpenCircuitDescription("Y", "m"); d != "" {
+		t.Fatalf("healthy circuit description = %q, want empty", d)
+	}
+}
+
+// RecordCause truncates overly long messages.
+func TestRecordCause_Truncates(t *testing.T) {
+	h := NewHealthTrackerWithConfig(1, time.Minute)
+	h.RecordTransientFailure("X", "", 0)
+	long := strings.Repeat("a", 500)
+	h.RecordCause("X", "", "server", long)
+	for _, s := range h.Snapshot() {
+		if s.Provider == "X" {
+			if len(s.LastErrorMessage) != 200 {
+				t.Fatalf("message len = %d, want 200", len(s.LastErrorMessage))
+			}
+			return
+		}
+	}
+	t.Fatal("no snapshot entry for X")
 }

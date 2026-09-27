@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -181,6 +182,7 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 
 	// Filter active models with registered providers
 	var candidates []model.ProviderModel
+	var openCircuits []string
 	for _, m := range models {
 		if m.Status != 1 || m.Provider.Status != 1 {
 			continue
@@ -189,6 +191,9 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 			continue
 		}
 		if !r.healthAllows(m.Provider.Name, m.ProviderModel) {
+			if d := r.health.OpenCircuitDescription(m.Provider.Name, m.ProviderModel); d != "" {
+				openCircuits = append(openCircuits, d)
+			}
 			continue
 		}
 		if meta := provider.GetAdapterMeta(m.Provider.AdapterType); meta != nil && meta.MinimumTier != "" {
@@ -199,6 +204,11 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 		candidates = append(candidates, m)
 	}
 	if len(candidates) == 0 {
+		if len(openCircuits) > 0 {
+			// Carry the upstream cause (error type + message recorded when the
+			// circuit opened) into logs and the client-facing rejection.
+			return nil, fmt.Errorf("no active provider found for model: %s (%s)", modelName, strings.Join(openCircuits, "; "))
+		}
 		return nil, fmt.Errorf("no active provider found for model: %s", modelName)
 	}
 

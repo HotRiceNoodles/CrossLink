@@ -249,6 +249,53 @@ func TestResolver_Resolve_SkipsModelScopeCircuit(t *testing.T) {
 	assert.Equal(t, "qwen", results[0].Provider.Name())
 }
 
+// When ALL candidates are excluded by open circuits, the resolve error carries
+// the upstream cause (error type + message recorded via RecordCause) so logs
+// and client rejections explain why the model is unroutable.
+func TestResolver_Resolve_NoRouteErrorCarriesCircuitCause(t *testing.T) {
+	health := provider.NewHealthTracker()
+	reg := provider.NewRegistry()
+	reg.Register("deepseek", &mockProvider{name: "deepseek"})
+	strategies := map[StrategyName]RoutingStrategy{
+		StrategyWeightedRandom: &WeightedRandomStrategy{},
+	}
+
+	// Baseline: a disabled mapping produces the plain historical message.
+	disabledRepo := &mockProviderModelRepo{
+		data: map[string][]model.ProviderModel{
+			"test-model": {
+				{ID: 1, ProviderModel: "deepseek-chat", Weight: 1, Status: 0,
+					Provider: model.Provider{Name: "deepseek", Status: 1}},
+			},
+		},
+	}
+	_, err := NewResolver(reg, disabledRepo, health, strategies, nil, nil, nil, nil).
+		Resolve(context.Background(), "test-model", 0)
+	require.Error(t, err)
+	assert.Equal(t, "no active provider found for model: test-model", err.Error())
+
+	// Circuit exclusion: the error now carries the recorded upstream cause.
+	repo := &mockProviderModelRepo{
+		data: map[string][]model.ProviderModel{
+			"test-model": {
+				{ID: 1, ProviderModel: "deepseek-chat", Weight: 1, Status: 1,
+					Provider: model.Provider{Name: "deepseek", Status: 1}},
+			},
+		},
+	}
+	health.RecordPersistentFailure("deepseek", "deepseek-chat", "model", time.Hour)
+	health.RecordCause("deepseek", "deepseek-chat", "not_found", "provider not found: Model not exists")
+
+	_, err = NewResolver(reg, repo, health, strategies, nil, nil, nil, nil).
+		Resolve(context.Background(), "test-model", 0)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "no active provider found for model: test-model")
+	assert.Contains(t, msg, "deepseek circuit open")
+	assert.Contains(t, msg, "not_found")
+	assert.Contains(t, msg, "Model not exists")
+}
+
 // Regression: Resolve must not claim the half-open probe lease. Pre-fix,
 // Resolve's IsHealthyModel filter set probeInFlight on the expired circuit;
 // the FallbackEngine's own IsHealthyModel gate then saw the lease, skipped the

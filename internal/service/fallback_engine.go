@@ -152,9 +152,11 @@ func (e *FallbackEngine) ExecuteNonStream(
 			if classified.Persistent {
 				if e.health != nil {
 					e.health.RecordPersistentFailure(name, model, classified.Scope, 0)
+					e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 				}
 			} else if e.health != nil {
 				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 			}
 
 			if classified.Persistent || shouldRetry(e.config.RetryOn, err) {
@@ -301,9 +303,11 @@ func (e *FallbackEngine) ExecuteStream(
 			if classified.Persistent {
 				if e.health != nil {
 					e.health.RecordPersistentFailure(name, model, classified.Scope, 0)
+					e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 				}
 			} else if e.health != nil {
 				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 			}
 
 			if classified.Persistent || shouldRetry(e.config.RetryOn, err) {

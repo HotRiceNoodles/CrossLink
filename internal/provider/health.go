@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,10 @@ type ProviderHealthSnapshot struct {
 	// OpenCount is how many times this circuit has opened in a row without an
 	// intervening recovery (escalating cooldown factor).
 	OpenCount int
+	// LastErrorType/LastErrorMessage are the classified error type and upstream
+	// message that opened the circuit (set via RecordCause by the fallback engine).
+	LastErrorType    string
+	LastErrorMessage string
 }
 
 // Snapshot returns a copy of every tracked circuit keyed by provider (account
@@ -62,7 +67,9 @@ func (h *HealthTracker) Snapshot() []ProviderHealthSnapshot {
 		snap := ProviderHealthSnapshot{
 			Provider:         name,
 			Model:            model,
-			OpenCount: s.openCount,
+			OpenCount:        s.openCount,
+			LastErrorType:    s.lastErrType,
+			LastErrorMessage: s.lastErrMsg,
 		}
 		if s.openUntil.IsZero() {
 			snap.State = CircuitClosed.String()
@@ -85,6 +92,8 @@ type circuitState struct {
 	openUntil        time.Time
 	probeInFlight    bool // half-open single-flight gate (C2)
 	openCount        int  // consecutive opens without recovery — cooldown escalation factor
+	lastErrType      string
+	lastErrMsg       string // truncated upstream message (RecordCause)
 }
 
 // HealthTracker tracks per-key circuit state. Keys: account scope → provider name;
@@ -335,6 +344,63 @@ func (h *HealthTracker) clampRetryAfter(d time.Duration) time.Duration {
 		return h.retryAfterMax
 	}
 	return d
+}
+
+// RecordCause stores the classified error type and upstream message that
+// opened the circuit, so rejections and the health snapshot can explain WHY
+// the circuit is open. Called by the fallback engine right after the matching
+// Record*Failure. The message is truncated to 200 chars.
+func (h *HealthTracker) RecordCause(name, model, errType, msg string) {
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s := h.states[name]; s != nil {
+		s.lastErrType, s.lastErrMsg = errType, msg
+	}
+	if model != "" {
+		if s := h.states[name+"|"+model]; s != nil {
+			s.lastErrType, s.lastErrMsg = errType, msg
+		}
+	}
+}
+
+// OpenCircuitDescription returns a human-readable description of the currently
+// open circuit for (name, model): "<name> circuit open (last error: <type>:
+// <msg>, open for another <n>s)". Empty string when no open circuit exists.
+// Used to enrich no-route errors so logs carry the upstream cause.
+func (h *HealthTracker) OpenCircuitDescription(name, model string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	keys := []string{name}
+	if model != "" {
+		keys = append(keys, name+"|"+model)
+	}
+	now := time.Now()
+	var best *circuitState
+	for _, k := range keys {
+		s := h.states[k]
+		if s == nil || s.openUntil.IsZero() || !now.Before(s.openUntil) {
+			continue
+		}
+		if best == nil || s.openUntil.After(best.openUntil) {
+			best = s
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	remaining := time.Until(best.openUntil).Round(time.Second)
+	desc := fmt.Sprintf("%s circuit open, reopens in %s", name, remaining)
+	if best.lastErrType != "" || best.lastErrMsg != "" {
+		desc += fmt.Sprintf(" (last error: %s: %s", best.lastErrType, best.lastErrMsg)
+		if best.openCount > 1 {
+			desc += fmt.Sprintf(", open #%d", best.openCount)
+		}
+		desc += ")"
+	}
+	return desc
 }
 
 // SetMaxEscalation sets the cap for the escalating transient cooldown.
