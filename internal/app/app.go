@@ -185,6 +185,19 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Background refresh: keep the error-classification rule table hot-reloaded
 	go infra.Classifier.RunRefreshLoop(appCtx)
 
+	// Circuit prober: while any circuit is open, probe the upstream cheaply
+	// every interval and close it as soon as recovery is verified. Enabled by
+	// default; the interval/enabled settings take effect on restart.
+	if rcProbe := admin.LoadResilienceConfig(db); rcProbe.CircuitProbeEnabled != 0 {
+		prober := service.NewCircuitProber(
+			infra.Health, infra.Registry,
+			repos.ProviderRepo, repos.ProviderModelCRUDRepo,
+			secrets.SecretResolver,
+			time.Duration(rcProbe.CircuitProbeInterval)*time.Second,
+		)
+		go prober.Run(appCtx)
+	}
+
 	// Handlers
 
 	// Populate extension deps for Commercial

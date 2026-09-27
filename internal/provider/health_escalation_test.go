@@ -88,6 +88,20 @@ func TestRecordTransientFailure_RetryAfterNotEscalated(t *testing.T) {
 	}
 }
 
+// ResolveCircuit is the prober's authoritative close: it clears even a live
+// persistent circuit (the documented C1 exception).
+func TestResolveCircuit_ClearsPersistent(t *testing.T) {
+	h := NewHealthTracker()
+	h.RecordPersistentFailure("X", "m1", "model", time.Hour)
+	if h.IsHealthyModel("X", "m1") {
+		t.Fatal("persistent circuit should be open")
+	}
+	h.ResolveCircuit("X", "m1")
+	if !h.IsHealthyModel("X", "m1") {
+		t.Fatal("ResolveCircuit must clear the persistent circuit")
+	}
+}
+
 func TestRecordCause_ExposedViaSnapshotAndDescription(t *testing.T) {
 	h := NewHealthTrackerWithConfig(1, time.Minute)
 	h.RecordTransientFailure("X", "m1", 0)

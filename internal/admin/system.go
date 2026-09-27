@@ -45,6 +45,11 @@ type ResilienceConfig struct {
 	// CircuitBreakerMaxDuration caps the escalating transient cooldown
 	// (base × 2^(consecutive opens - 1)), seconds.
 	CircuitBreakerMaxDuration int `json:"circuit_breaker_max_duration"`
+	// CircuitProbeEnabled turns on the background CircuitProber that closes
+	// open circuits as soon as a cheap upstream probe succeeds. 1 = on.
+	CircuitProbeEnabled int `json:"circuit_probe_enabled"`
+	// CircuitProbeInterval is the probe period in seconds (min 3).
+	CircuitProbeInterval int `json:"circuit_probe_interval"`
 }
 
 // LoadResilienceConfig loads resilience settings from DB, applying defaults for missing keys.
@@ -57,6 +62,8 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 		RetryAfterMin:             5,
 		RetryAfterMax:             300,
 		CircuitBreakerMaxDuration: 300,
+		CircuitProbeEnabled:       1,
+		CircuitProbeInterval:      10,
 	}
 	loadInt := func(key string, target *int) {
 		var s model.SystemSetting
@@ -73,6 +80,8 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 	loadInt("retry_after_min", &rc.RetryAfterMin)
 	loadInt("retry_after_max", &rc.RetryAfterMax)
 	loadInt("circuit_breaker_max_duration", &rc.CircuitBreakerMaxDuration)
+	loadInt("circuit_probe_enabled", &rc.CircuitProbeEnabled)
+	loadInt("circuit_probe_interval", &rc.CircuitProbeInterval)
 	return rc
 }
 

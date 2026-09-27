@@ -346,6 +346,21 @@ func (h *HealthTracker) clampRetryAfter(d time.Duration) time.Duration {
 	return d
 }
 
+// ResolveCircuit unconditionally clears both keys for (name, model). It is
+// called ONLY by the out-of-band CircuitProber, whose dedicated probe is an
+// authoritative recovery signal — unlike real traffic, which keeps the C1
+// guard (a racing success must not clear a live persistent circuit). This is
+// what lets quota/persistent circuits close as soon as the upstream is
+// verified healthy again instead of waiting out the full cooldown.
+func (h *HealthTracker) ResolveCircuit(name, model string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.states, name)
+	if model != "" {
+		delete(h.states, name+"|"+model)
+	}
+}
+
 // RecordCause stores the classified error type and upstream message that
 // opened the circuit, so rejections and the health snapshot can explain WHY
 // the circuit is open. Called by the fallback engine right after the matching

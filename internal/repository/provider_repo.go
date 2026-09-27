@@ -37,6 +37,16 @@ func (r *ProviderRepo) GetByID(ctx context.Context, orgID, id int64) (*model.Pro
 	return &p, nil
 }
 
+// GetByName fetches a provider row by its unique name, ignoring org scoping
+// (used by the CircuitProber, which addresses providers by circuit key).
+func (r *ProviderRepo) GetByName(ctx context.Context, name string) (*model.Provider, error) {
+	var p model.Provider
+	if err := r.db.WithContext(ctx).Where("name = ?", name).First(&p).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (r *ProviderRepo) Create(ctx context.Context, p *model.Provider) error {
 	return r.db.WithContext(ctx).Create(p).Error
 }
