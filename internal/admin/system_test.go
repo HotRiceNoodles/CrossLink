@@ -32,11 +32,18 @@ func TestLoadResilienceConfig_NewKeysDefaultAndOverridden(t *testing.T) {
 	assert.Equal(t, 1800, rc.PersistentCooldown)
 	assert.Equal(t, 5, rc.RetryAfterMin)
 	assert.Equal(t, 300, rc.RetryAfterMax)
+	assert.Equal(t, 15, rc.CircuitBreakerDuration)      // lowered base (fast-recovery plan)
+	assert.Equal(t, 300, rc.CircuitBreakerMaxDuration) // escalation cap
 
 	// Overriding persistent_cooldown is picked up.
 	require.NoError(t, db.Create(&model.SystemSetting{Key: "persistent_cooldown", Value: "600"}).Error)
 	rc = LoadResilienceConfig(db)
 	assert.Equal(t, 600, rc.PersistentCooldown)
+
+	// New keys are overridable too.
+	require.NoError(t, db.Create(&model.SystemSetting{Key: "circuit_breaker_max_duration", Value: "120"}).Error)
+	rc = LoadResilienceConfig(db)
+	assert.Equal(t, 120, rc.CircuitBreakerMaxDuration)
 }
 
 func TestRunResilienceRefreshLoop_RunsAndStops(t *testing.T) {

@@ -42,6 +42,9 @@ type ProviderHealthSnapshot struct {
 	Model    string
 	State    string    // "closed" / "half_open" / "open"
 	Until    time.Time // cooldown deadline; zero value = none
+	// OpenCount is how many times this circuit has opened in a row without an
+	// intervening recovery (escalating cooldown factor).
+	OpenCount int
 }
 
 // Snapshot returns a copy of every tracked circuit keyed by provider (account
@@ -56,7 +59,11 @@ func (h *HealthTracker) Snapshot() []ProviderHealthSnapshot {
 		if i := strings.LastIndex(k, "|"); i >= 0 {
 			name, model = k[:i], k[i+1:]
 		}
-		snap := ProviderHealthSnapshot{Provider: name, Model: model}
+		snap := ProviderHealthSnapshot{
+			Provider:         name,
+			Model:            model,
+			OpenCount: s.openCount,
+		}
 		if s.openUntil.IsZero() {
 			snap.State = CircuitClosed.String()
 		} else {
@@ -77,6 +84,7 @@ type circuitState struct {
 	consecutiveFails int
 	openUntil        time.Time
 	probeInFlight    bool // half-open single-flight gate (C2)
+	openCount        int  // consecutive opens without recovery — cooldown escalation factor
 }
 
 // HealthTracker tracks per-key circuit state. Keys: account scope → provider name;
@@ -88,6 +96,7 @@ type HealthTracker struct {
 	transientThreshold int
 	persistentCooldown time.Duration
 	transientCooldown  time.Duration
+	maxEscalation      time.Duration // cap for the escalating transient cooldown
 	retryAfterMin      time.Duration
 	retryAfterMax      time.Duration
 }
@@ -108,6 +117,7 @@ func NewHealthTrackerWithConfig(failThreshold int, openDuration time.Duration) *
 		transientThreshold: failThreshold,
 		persistentCooldown: 30 * time.Minute,
 		transientCooldown:  openDuration,
+		maxEscalation:      5 * time.Minute,
 		retryAfterMin:      5 * time.Second,
 		retryAfterMax:      5 * time.Minute,
 	}
@@ -246,8 +256,35 @@ func (h *HealthTracker) RecordTransientFailure(name, model string, retryAfter ti
 	s.probeInFlight = false
 	if s.consecutiveFails >= h.transientThreshold {
 		s.kind = kindTransient
-		s.openUntil = now.Add(h.clampRetryAfter(retryAfter))
+		s.openCount++
+		var open time.Duration
+		if retryAfter > 0 {
+			// Upstream sent a Retry-After hint: it knows best, respect it
+			// (clamped) without escalating.
+			open = h.clampRetryAfter(retryAfter)
+		} else {
+			open = h.escalatedCooldown(s.openCount)
+		}
+		s.openUntil = now.Add(open)
 	}
+}
+
+// escalatedCooldown returns the transient cooldown for the n-th consecutive
+// open: base × 2^(n-1), capped at maxEscalation. A flapping upstream is
+// re-probed progressively less often; the base stays short for fast recovery.
+func (h *HealthTracker) escalatedCooldown(openCount int) time.Duration {
+	shift := openCount - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 16 {
+		shift = 16 // overflow guard; maxEscalation bounds the rest
+	}
+	d := h.transientCooldown << uint(shift)
+	if d <= 0 || d > h.maxEscalation {
+		return h.maxEscalation
+	}
+	return d
 }
 
 // RecordPersistentFailure opens the circuit for (name, model, scope) immediately and
@@ -298,6 +335,13 @@ func (h *HealthTracker) clampRetryAfter(d time.Duration) time.Duration {
 		return h.retryAfterMax
 	}
 	return d
+}
+
+// SetMaxEscalation sets the cap for the escalating transient cooldown.
+func (h *HealthTracker) SetMaxEscalation(d time.Duration) {
+	h.mu.Lock()
+	h.maxEscalation = d
+	h.mu.Unlock()
 }
 
 // SetPersistentCooldown sets the cooldown applied to persistent failures.

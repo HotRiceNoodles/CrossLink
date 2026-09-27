@@ -37,22 +37,26 @@ func NewSystemHandler(db *gorm.DB, rdb *redis.Client, cfg config.AdminConfig, us
 // ResilienceConfig holds the resilience settings stored in system_settings.
 type ResilienceConfig struct {
 	CircuitBreakerThreshold int `json:"circuit_breaker_threshold"` // = transient threshold
-	CircuitBreakerDuration  int `json:"circuit_breaker_duration"`  // = transient cooldown (seconds)
+	CircuitBreakerDuration  int `json:"circuit_breaker_duration"`  // = transient cooldown base (seconds)
 	RetryBudgetPerSecond    int `json:"retry_budget_per_second"`
 	PersistentCooldown      int `json:"persistent_cooldown"` // seconds; quota/billing failures
 	RetryAfterMin           int `json:"retry_after_min"`     // seconds; transient Retry-After clamp lower bound
 	RetryAfterMax           int `json:"retry_after_max"`     // seconds; transient Retry-After clamp upper bound
+	// CircuitBreakerMaxDuration caps the escalating transient cooldown
+	// (base × 2^(consecutive opens - 1)), seconds.
+	CircuitBreakerMaxDuration int `json:"circuit_breaker_max_duration"`
 }
 
 // LoadResilienceConfig loads resilience settings from DB, applying defaults for missing keys.
 func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 	rc := ResilienceConfig{
-		CircuitBreakerThreshold: 3,
-		CircuitBreakerDuration:  60,
-		RetryBudgetPerSecond:    100,
-		PersistentCooldown:      1800,
-		RetryAfterMin:           5,
-		RetryAfterMax:           300,
+		CircuitBreakerThreshold:   3,
+		CircuitBreakerDuration:    15,
+		RetryBudgetPerSecond:      100,
+		PersistentCooldown:        1800,
+		RetryAfterMin:             5,
+		RetryAfterMax:             300,
+		CircuitBreakerMaxDuration: 300,
 	}
 	loadInt := func(key string, target *int) {
 		var s model.SystemSetting
@@ -68,6 +72,7 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 	loadInt("persistent_cooldown", &rc.PersistentCooldown)
 	loadInt("retry_after_min", &rc.RetryAfterMin)
 	loadInt("retry_after_max", &rc.RetryAfterMax)
+	loadInt("circuit_breaker_max_duration", &rc.CircuitBreakerMaxDuration)
 	return rc
 }
 
@@ -84,6 +89,7 @@ func RunResilienceRefreshLoop(ctx context.Context, db *gorm.DB, health *provider
 		health.UpdateConfig(rc.CircuitBreakerThreshold, time.Duration(rc.CircuitBreakerDuration)*time.Second)
 		health.SetPersistentCooldown(time.Duration(rc.PersistentCooldown) * time.Second)
 		health.SetRetryAfterBounds(time.Duration(rc.RetryAfterMin)*time.Second, time.Duration(rc.RetryAfterMax)*time.Second)
+		health.SetMaxEscalation(time.Duration(rc.CircuitBreakerMaxDuration) * time.Second)
 	}
 	apply()
 	ticker := time.NewTicker(interval)
