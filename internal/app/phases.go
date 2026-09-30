@@ -103,9 +103,19 @@ func buildSecrets(db *gorm.DB, cfg *config.Config, ext *Extensions, cp crypto.Cr
 	}
 	activeKeyPtr := &activeKey
 
+	// registerEnc wires an encryption store into the resolver and the MCP
+	// encryption hook. Used both at startup and by the watcher's lazy
+	// activation below.
+	registerEnc := func(store *secret.EncryptedDBStore) {
+		secretResolver.Register(store)
+		secretResolver.Register(store.AsV2())
+		if ext.MCPEncSetter != nil {
+			ext.MCPEncSetter(store)
+		}
+	}
+
 	if encStore != nil {
-		secretResolver.Register(encStore)
-		secretResolver.Register(encStore.AsV2())
+		registerEnc(encStore)
 		if result, err := secret.MigratePlaintextSecrets(db, encStore); err != nil {
 			slog.Warn("secret migration encountered errors", "error", err)
 		} else if len(result.Failed) > 0 {
@@ -115,51 +125,81 @@ func buildSecrets(db *gorm.DB, cfg *config.Config, ext *Extensions, cp crypto.Cr
 		slog.Warn("no encryption key configured (CL_ENCRYPTION_KEY), provider secrets stored as plaintext")
 	}
 
-	// Wire MCP encryption store
-	if ext.MCPEncSetter != nil {
-		ext.MCPEncSetter(encStore)
-	}
-
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 
-	// Background key watcher: polls DB every 30s for encryption key changes
-	// so multi-instance deployments stay in sync after key rotation.
-	if encStore != nil {
-		go func() {
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-cleanupCtx.Done():
-					return
-				case <-ticker.C:
-				}
-				var watchKey model.SystemSetting
-				if result := db.Where("key = ?", "encryption_key").First(&watchKey); result.Error == nil && watchKey.Value != "" && watchKey.Value != *activeKeyPtr {
-					if err := encStore.SetMasterKey(watchKey.Value); err == nil {
-						*activeKeyPtr = watchKey.Value
-						secretResolver.InvalidateCache()
-						slog.Info("encryption key reloaded from DB (changed by another instance)")
-					}
-				}
-
-				// Retry failed secret migrations
-				if result, err := secret.MigratePlaintextSecrets(db, encStore); err != nil {
-					slog.Warn("secret migration retry failed", "error", err)
-				} else if len(result.Failed) > 0 {
-					slog.Warn("secret migration retry had failures", "failed", result.Failed)
-				} else if result.Migrated > 0 {
-					slog.Info("secret migration retry succeeded", "migrated", result.Migrated)
-				}
-			}
-		}()
-	}
+	// Background key watcher: polls DB every 30s. Two jobs:
+	//
+	// 1. Hot-reload when another instance rotates the key (multi-instance sync).
+	// 2. Lazy activation: the process booted keyless (fresh install, exactly
+	//    what the setup wizard targets) and the wizard wrote the
+	//    encryption_key row — construct the store, register it, and encrypt
+	//    existing plaintext secrets without a restart.
+	//
+	// The watcher therefore runs unconditionally. Known limitation: handlers
+	// constructed with SecretsBundle.EncStore == nil keep their nil store
+	// until restart, so newly written provider secrets pass through plaintext
+	// briefly before a later tick's MigratePlaintextSecrets encrypts them
+	// (≤ interval). The setup wizard surfaces this as restart_recommended.
+	go runEncryptionWatcher(cleanupCtx, db, secretResolver, encStore, activeKeyPtr, cp, ext, registerEnc, 30*time.Second)
 
 	return &SecretsBundle{
 		SecretResolver: secretResolver,
 		EncStore:       encStore,
 		ActiveKeyPtr:   activeKeyPtr,
 		CleanupCancel:  cleanupCancel,
+	}
+}
+
+// runEncryptionWatcher is the background loop behind buildSecrets. encStore
+// is the startup snapshot; the loop owns a local copy — lazy activation
+// here never updates SecretsBundle.EncStore (handlers built earlier keep
+// their nil store until restart; late plaintext is encrypted by the
+// migration pass within one interval).
+func runEncryptionWatcher(ctx context.Context, db *gorm.DB, secretResolver *secret.SecretResolver, encStore *secret.EncryptedDBStore, activeKeyPtr *string, cp crypto.CryptoProvider, ext *Extensions, registerEnc func(*secret.EncryptedDBStore), interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	warnedInvalidKey := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		var watchKey model.SystemSetting
+		if result := db.Where("key = ?", "encryption_key").First(&watchKey); result.Error == nil && watchKey.Value != "" {
+			switch {
+			case encStore != nil && watchKey.Value != *activeKeyPtr:
+				if err := encStore.SetMasterKey(watchKey.Value); err == nil {
+					*activeKeyPtr = watchKey.Value
+					secretResolver.InvalidateCache()
+					slog.Info("encryption key reloaded from DB (changed by another instance)")
+				}
+			case encStore == nil && watchKey.Value != *activeKeyPtr:
+				store, err := secret.NewEncryptedDBStore(watchKey.Value, cp)
+				if err != nil {
+					if !warnedInvalidKey {
+						slog.Warn("encryption_key row in DB is invalid, keeping plaintext mode", "error", err)
+						warnedInvalidKey = true
+					}
+				} else {
+					encStore = store
+					*activeKeyPtr = watchKey.Value
+					registerEnc(store)
+					slog.Info("encryption key activated from DB (written by setup wizard) — provider secrets now stored encrypted")
+				}
+			}
+		}
+
+		// Retry failed secret migrations / encrypt late-arriving plaintext.
+		if encStore != nil {
+			if result, err := secret.MigratePlaintextSecrets(db, encStore); err != nil {
+				slog.Warn("secret migration retry failed", "error", err)
+			} else if len(result.Failed) > 0 {
+				slog.Warn("secret migration retry had failures", "failed", result.Failed)
+			} else if result.Migrated > 0 {
+				slog.Info("secret migration retry succeeded", "migrated", result.Migrated)
+			}
+		}
 	}
 }
 
