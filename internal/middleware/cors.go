@@ -59,6 +59,43 @@ func CORS(cfg ...CORSConfig) gin.HandlerFunc {
 	}
 }
 
+// OriginsProvider supplies the effective CORS allowlist (runtime settings
+// snapshot — DB row > yaml default).
+type OriginsProvider interface {
+	CORSAllowed() []string
+}
+
+// CORSFromProvider is the hot-reload variant of CORS: the allowlist is read
+// from the provider on every request, so admin edits (PUT /system/config)
+// take effect without a restart. Empty snapshot list falls back to
+// DefaultCORSConfig, mirroring CORS().
+func CORSFromProvider(p OriginsProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origins := p.CORSAllowed()
+		if len(origins) == 0 {
+			origins = DefaultCORSConfig().AllowedOrigins
+		}
+		allowed := make(map[string]bool, len(origins))
+		for _, o := range origins {
+			allowed[strings.ToLower(strings.TrimSpace(o))] = true
+		}
+
+		origin := c.GetHeader("Origin")
+		if origin != "" && allowed[strings.ToLower(origin)] {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, X-Requested-With")
+		c.Header("Vary", "Origin")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
+
 // CSRFGuard rejects state-changing requests (POST, PUT, DELETE, PATCH) to admin API
 // that lack the X-Requested-With header. HTML forms cannot set custom headers,
 // so this prevents cross-origin form-submission CSRF attacks.

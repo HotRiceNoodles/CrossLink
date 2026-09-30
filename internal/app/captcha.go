@@ -12,35 +12,40 @@ import (
 // buildCaptchaGate constructs the login captcha gate from config. Cloud
 // providers (turnstile / tencent / aliyun) live in the commercial overlay; in
 // Community they fall back to the self-hosted slider so the gate always works.
+//
+// The slider provider is constructed even when the gate is disabled — the
+// runtime settings provider can hot-enable the gate later (Gate.ApplyConfig),
+// which requires a live provider. Construction is cheap and the disabled path
+// never touches the store.
 func buildCaptchaGate(cfg config.CaptchaConfig, rdb *redis.Client, jwtSecret []byte) *captcha.Gate {
-	if !cfg.Enabled {
-		return captcha.NewGate(nil, captcha.CaptchaGateConfig{}, jwtSecret)
-	}
-
-	var provider captcha.Provider
-	switch cfg.Provider {
-	case "turnstile", "tencent", "aliyun":
+	if cfg.Provider == "turnstile" || cfg.Provider == "tencent" || cfg.Provider == "aliyun" {
 		slog.Warn("captcha provider not available in Community edition, falling back to slider",
 			"provider", cfg.Provider)
-		fallthrough
-	default:
-		store := captcha.NewRedisStore(rdb, "captcha:")
-		provider = captcha.NewSliderProvider(store, captcha.SliderConfig{
+	}
+
+	gateCfg, sliderCfg := captchaConfigsFrom(cfg)
+	store := captcha.NewRedisStore(rdb, "captcha:")
+	provider := captcha.NewSliderProvider(store, sliderCfg)
+	return captcha.NewGate(provider, gateCfg, jwtSecret)
+}
+
+// captchaConfigsFrom maps a config.CaptchaConfig onto the captcha package's
+// gate + slider config shapes (with yaml defaults applied). Shared by
+// buildCaptchaGate (initial) and the runtime-settings subscriber (hot swap).
+func captchaConfigsFrom(cfg config.CaptchaConfig) (captcha.CaptchaGateConfig, captcha.SliderConfig) {
+	return captcha.CaptchaGateConfig{
+			Enabled:       cfg.Enabled,
+			TrustDays:     cfg.TrustDays,
+			TrustIPMask:   cfg.TrustIPMask,
+			RedisFailOpen: cfg.RedisFailOpen,
+		}, captcha.SliderConfig{
 			BGWidth:     orDefault(cfg.Slider.BGWidth, 300),
 			BGHeight:    orDefault(cfg.Slider.BGHeight, 150),
 			PieceSize:   orDefault(cfg.Slider.PieceSize, 44),
 			TolerancePx: orZeroDefault(cfg.Slider.TolerancePx, 5),
 			MinPoints:   orDefault(cfg.Slider.MinPoints, 5),
 			TTL:         5 * time.Minute,
-		})
-	}
-
-	return captcha.NewGate(provider, captcha.CaptchaGateConfig{
-		Enabled:       cfg.Enabled,
-		TrustDays:     cfg.TrustDays,
-		TrustIPMask:   cfg.TrustIPMask,
-		RedisFailOpen: cfg.RedisFailOpen,
-	}, jwtSecret)
+		}
 }
 
 func orDefault(v, def int) int {

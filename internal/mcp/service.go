@@ -19,6 +19,9 @@ type MCPService struct {
 	repo               *MCPRepo
 	registry           *Registry
 	cfg                config.MCPConfig
+	// settings supplies the hot-reloadable subset of MCPConfig at call time
+	// (max_servers, request_timeout, tool_cache_ttl). nil ⇒ boot cfg.
+	settings           MCPSettingsProvider
 	encStore           Encrypter
 	toolCache          *toolCache
 	permCache          *permCache
@@ -27,6 +30,29 @@ type MCPService struct {
 	transportMu        sync.RWMutex
 	logQueue           chan *MCPToolCallLog
 	toolSF             singleflight.Group
+}
+
+// MCPSettingsProvider supplies effective MCP settings per call (satisfied by
+// *settings.Provider). The remaining fields (enabled, health-check interval,
+// transport pool, rate limits, log retention) are boot-pinned and labeled
+// restart-required in the admin UI.
+type MCPSettingsProvider interface {
+	MCP() config.MCPConfig
+}
+
+// SetSettingsProvider wires the runtime settings source. Optional — without
+// it the service uses its boot-time config copy (tests, legacy callers).
+func (s *MCPService) SetSettingsProvider(p MCPSettingsProvider) {
+	s.settings = p
+}
+
+// effMCP returns the effective settings: runtime provider when wired, else
+// the boot copy.
+func (s *MCPService) effMCP() config.MCPConfig {
+	if s.settings != nil {
+		return s.settings.MCP()
+	}
+	return s.cfg
 }
 
 type permCacheEntry struct {
@@ -108,7 +134,7 @@ func (s *MCPService) CreateServer(ctx context.Context, srv *MCPServer) error {
 		}
 	}
 
-	if err := s.repo.CreateWithLimit(ctx, srv, s.cfg.MaxServers); err != nil {
+	if err := s.repo.CreateWithLimit(ctx, srv, s.effMCP().MaxServers); err != nil {
 		return fmt.Errorf("create server: %w", err)
 	}
 
@@ -156,7 +182,7 @@ func (s *MCPService) ForwardRequest(ctx context.Context, serverName string, req 
 		return nil, fmt.Errorf("MCP server %q has no transport", serverName)
 	}
 
-	timeout := s.cfg.RequestTimeout
+	timeout := s.effMCP().RequestTimeout
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -182,7 +208,7 @@ func (s *MCPService) TestServer(ctx context.Context, orgID int64, id int64) erro
 }
 
 func (s *MCPService) GetServerTools(ctx context.Context, serverName string) ([]interface{}, error) {
-	ttl := s.cfg.ToolCacheTTL
+	ttl := s.effMCP().ToolCacheTTL
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}

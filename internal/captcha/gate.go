@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type CaptchaGateConfig struct {
 // is required for a user, verifies submissions, and issues trust cookies on
 // success.
 type Gate struct {
+	mu       sync.RWMutex
 	provider Provider
 	cfg      CaptchaGateConfig
 	secret   []byte
@@ -44,6 +46,24 @@ func NewGate(provider Provider, cfg CaptchaGateConfig, jwtSecret []byte) *Gate {
 	}
 }
 
+// ApplyConfig hot-swaps the gate configuration (runtime settings) and, when
+// the provider supports it, the slider geometry. The HMAC secret (JWT-derived)
+// is deliberately NOT swappable — trust cookies survive config changes.
+func (g *Gate) ApplyConfig(cfg CaptchaGateConfig, slider SliderConfig) {
+	g.mu.Lock()
+	g.cfg = cfg
+	g.mu.Unlock()
+	if s, ok := g.provider.(interface{ ApplySliderConfig(SliderConfig) }); ok {
+		s.ApplySliderConfig(slider)
+	}
+}
+
+func (g *Gate) config() CaptchaGateConfig {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cfg
+}
+
 // deriveCaptchaKey derives a purpose-bound HMAC key from the JWT signing secret.
 // Previously the trust-cookie HMAC reused the raw JWT secret, coupling two
 // unrelated security contexts: a leak / compromise of one could forge the other.
@@ -56,14 +76,18 @@ func deriveCaptchaKey(jwtSecret []byte) []byte {
 }
 
 // Enabled reports whether the captcha gate is active.
-func (g *Gate) Enabled() bool { return g.cfg.Enabled && g.provider != nil }
+func (g *Gate) Enabled() bool {
+	cfg := g.config()
+	return cfg.Enabled && g.provider != nil
+}
 
 // TrustMaxAgeSeconds returns the device-cookie lifetime in seconds (0 = session cookie).
 func (g *Gate) TrustMaxAgeSeconds() int {
-	if g.cfg.TrustDays <= 0 {
+	cfg := g.config()
+	if cfg.TrustDays <= 0 {
 		return 0
 	}
-	return g.cfg.TrustDays * 24 * 3600
+	return cfg.TrustDays * 24 * 3600
 }
 
 // Issue an unsolved challenge.
@@ -80,7 +104,7 @@ func (g *Gate) Verify(ctx context.Context, captchaID, ip string, answer Answer) 
 	}
 	for _, r := range v.Reasons {
 		if r == "captcha_store_error" {
-			if g.cfg.RedisFailOpen {
+			if g.config().RedisFailOpen {
 				return true, "captcha_waived_fail_open"
 			}
 			return false, r
@@ -92,11 +116,12 @@ func (g *Gate) Verify(ctx context.Context, captchaID, ip string, answer Answer) 
 // IssueTrustCookie signs a device-memory cookie for (userID, ip). Returns ""
 // when TrustDays == 0 (no memory). Format: base64(payload).base64(hmac).
 func (g *Gate) IssueTrustCookie(userID int64, ip string) string {
-	if g.cfg.TrustDays <= 0 {
+	cfg := g.config()
+	if cfg.TrustDays <= 0 {
 		return ""
 	}
-	expires := g.now().Add(time.Duration(g.cfg.TrustDays) * 24 * time.Hour).Unix()
-	payload := fmt.Sprintf("%d|%s|%d", userID, ipPrefix(ip, g.cfg.TrustIPMask), expires)
+	expires := g.now().Add(time.Duration(cfg.TrustDays) * 24 * time.Hour).Unix()
+	payload := fmt.Sprintf("%d|%s|%d", userID, ipPrefix(ip, cfg.TrustIPMask), expires)
 	mac := hmac.New(sha256.New, g.secret)
 	mac.Write([]byte(payload))
 	sig := mac.Sum(nil)
@@ -158,7 +183,7 @@ func (g *Gate) verifyTrustCookie(cookie string, ip string) (int64, bool) {
 	if err != nil || g.now().Unix() > expires {
 		return 0, false
 	}
-	if g.cfg.TrustIPMask > 0 && fields[1] != ipPrefix(ip, g.cfg.TrustIPMask) {
+	if cfg := g.config(); cfg.TrustIPMask > 0 && fields[1] != ipPrefix(ip, cfg.TrustIPMask) {
 		return 0, false
 	}
 	return uid, true

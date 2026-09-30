@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/pkg/token"
@@ -65,8 +66,31 @@ type tpmReservations struct {
 	Org  int // tokens reserved at org level (0 = no reservation)
 }
 
+// RateLimitProvider supplies effective rate-limit defaults at request time
+// (runtime settings snapshot — DB row > yaml). Satisfied by *settings.Provider.
+type RateLimitProvider interface {
+	RateLimit() config.RateLimitConfig
+}
+
+// staticRateLimit adapts boot-time values to the provider interface (legacy
+// constructors).
+type staticRateLimit struct{ cfg config.RateLimitConfig }
+
+func (s staticRateLimit) RateLimit() config.RateLimitConfig { return s.cfg }
+
 func RateLimit(rdb *redis.Client, rpm int, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
+	return rateLimit(rdb, staticRateLimit{config.RateLimitConfig{RPM: rpm}}, teamCache, orgCache)
+}
+
+// RateLimitFromProvider is the hot-reload variant: the RPM default is read
+// per request, so PUT /system/config takes effect without a restart.
+func RateLimitFromProvider(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
+	return rateLimit(rdb, p, teamCache, orgCache)
+}
+
+func rateLimit(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		rpm := p.RateLimit().RPM
 		if rpm <= 0 {
 			c.Next()
 			return
@@ -252,12 +276,28 @@ func isNonTokenEndpoint(path string) bool {
 }
 
 func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCache, reservationAmount int, failClosed bool) gin.HandlerFunc {
-	defaultReservation := reservationAmount
-	if defaultReservation <= 0 {
-		defaultReservation = 2000
-	}
+	return tpmLimit(rdb, staticRateLimit{config.RateLimitConfig{
+		TPM:          tpm,
+		Reservation:  reservationAmount,
+		FailClosed:   failClosed,
+	}}, teamCache, orgCache)
+}
 
+// TPMLimitFromProvider is the hot-reload variant: TPM default, reservation
+// floor, and fail-closed mode are read per request.
+func TPMLimitFromProvider(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
+	return tpmLimit(rdb, p, teamCache, orgCache)
+}
+
+func tpmLimit(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		rl := p.RateLimit()
+		limit := rl.TPM
+		failClosed := rl.FailClosed
+		defaultReservation := rl.Reservation
+		if defaultReservation <= 0 {
+			defaultReservation = 2000
+		}
 		// Skip TPM for non-chat endpoints that have no chat-token accounting.
 		// These handlers report 0 tokens; without the skip each request would
 		// reserve defaultReservation (2000) tokens that never get reconciled,
@@ -270,7 +310,6 @@ func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCac
 		}
 
 		res := &tpmReservations{}
-		limit := tpm
 		// WARNING: See RateLimit() comment about TrustedProxies and ClientIP().
 		tpmKey := c.ClientIP()
 		apiKey := GetAPIKeyFromContext(c)

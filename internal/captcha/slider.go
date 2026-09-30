@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,7 @@ func DefaultSliderConfig() SliderConfig {
 // images + trajectory-based Verify. Works in any environment (no external
 // network).
 type SliderProvider struct {
+	mu    sync.RWMutex
 	store Store
 	cfg   SliderConfig
 }
@@ -41,22 +43,36 @@ func NewSliderProvider(store Store, cfg SliderConfig) *SliderProvider {
 	return &SliderProvider{store: store, cfg: cfg}
 }
 
+// ApplySliderConfig hot-swaps the puzzle geometry (runtime settings).
+func (p *SliderProvider) ApplySliderConfig(cfg SliderConfig) {
+	if cfg.BGWidth == 0 {
+		cfg = DefaultSliderConfig()
+	}
+	p.mu.Lock()
+	p.cfg = cfg
+	p.mu.Unlock()
+}
+
 func (p *SliderProvider) Name() string { return "slider" }
 
 func (p *SliderProvider) Issue(ctx context.Context, ip, scene string) (*Challenge, error) {
+	p.mu.RLock()
+	cfg := p.cfg
+	p.mu.RUnlock()
+
 	id := newID()
 	// gap kept fully inside the canvas with horizontal room to drag from 0.
-	maxX := p.cfg.BGWidth - p.cfg.PieceSize - 20
-	gapX := randInt(p.cfg.PieceSize+20, maxX)
-	gapY := randInt(20, p.cfg.BGHeight-p.cfg.PieceSize-20)
+	maxX := cfg.BGWidth - cfg.PieceSize - 20
+	gapX := randInt(cfg.PieceSize+20, maxX)
+	gapY := randInt(20, cfg.BGHeight-cfg.PieceSize-20)
 
-	bgPNG, piecePNG := renderSlider(p.cfg, gapX, gapY)
+	bgPNG, piecePNG := renderSlider(cfg, gapX, gapY)
 
 	if err := p.store.Save(ctx, id, StoredChallenge{
 		GapX:  float64(gapX),
 		IP:    ip,
 		Scene: scene,
-	}, p.cfg.TTL); err != nil {
+	}, cfg.TTL); err != nil {
 		return nil, fmt.Errorf("captcha slider: store issue: %w", err)
 	}
 
@@ -65,8 +81,8 @@ func (p *SliderProvider) Issue(ctx context.Context, ip, scene string) (*Challeng
 		Provider:    "slider",
 		BGImage:     bgPNG,
 		PuzzleImage: piecePNG,
-		BGWidth:     p.cfg.BGWidth,
-		BGHeight:    p.cfg.BGHeight,
+		BGWidth:     cfg.BGWidth,
+		BGHeight:    cfg.BGHeight,
 		GapY:        gapY,
 	}, nil
 }
@@ -88,7 +104,10 @@ func (p *SliderProvider) Verify(ctx context.Context, captchaID, ip string, answe
 	if len(answer.Points) == 0 {
 		return Verdict{Pass: false, Reasons: []string{"no_trajectory"}}
 	}
-	return ScoreSliderTrajectory(answer.Points, stored.GapX, p.cfg.TolerancePx, p.cfg.MinPoints)
+	p.mu.RLock()
+	tolerance, minPoints := p.cfg.TolerancePx, p.cfg.MinPoints
+	p.mu.RUnlock()
+	return ScoreSliderTrajectory(answer.Points, stored.GapX, tolerance, minPoints)
 }
 
 // newID returns a fresh 32-hex-char captcha ID from crypto/rand.

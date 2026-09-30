@@ -27,6 +27,30 @@ type DataLensAggregatorService struct {
 	backfillDays int
 	hourlyDays   int
 	dailyDays    int
+	// settings, when wired (SetRetentionProvider), supplies the retention
+	// day counts per cleanup cycle (hot-reload via PUT /system/config).
+	// nil ⇒ boot values. The interval/lookback/backfill remain boot-pinned.
+	settings     DataLensSettingsProvider
+}
+
+// DataLensSettingsProvider supplies effective DataLens settings per cycle
+// (satisfied by *settings.Provider).
+type DataLensSettingsProvider interface {
+	DataLens() config.DataLensConfig
+}
+
+// SetSettingsProvider wires the runtime settings source (optional).
+func (s *DataLensAggregatorService) SetSettingsProvider(p DataLensSettingsProvider) {
+	s.settings = p
+}
+
+// effRetention returns the effective retention day counts.
+func (s *DataLensAggregatorService) effRetention() (hourly, daily int) {
+	if s.settings != nil {
+		r := s.settings.DataLens().Retention
+		return r.HourlyDays, r.DailyDays
+	}
+	return s.hourlyDays, s.dailyDays
 }
 
 func NewDataLensAggregatorService(db *gorm.DB, d dialect.Dialect, cfg config.DataLensConfig) *DataLensAggregatorService {
@@ -577,8 +601,9 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 // cleanupRetentionPolicy removes stale pre-aggregated rows beyond the configured retention.
 func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) error {
 	var firstErr error
-	if s.hourlyDays > 0 {
-		cutoff := time.Now().UTC().AddDate(0, 0, -s.hourlyDays)
+	hourlyDays, dailyDays := s.effRetention()
+	if hourlyDays > 0 {
+		cutoff := time.Now().UTC().AddDate(0, 0, -hourlyDays)
 		result := s.db.WithContext(ctx).Exec(
 			"DELETE FROM datalens_hourly_metrics WHERE hour_bucket < $1", cutoff,
 		)
@@ -591,8 +616,8 @@ func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) 
 			slog.Info("datalens aggregator: hourly cleanup", "deleted", result.RowsAffected, "cutoff", cutoff.Format("2006-01-02"))
 		}
 	}
-	if s.dailyDays > 0 {
-		cutoff := time.Now().UTC().AddDate(0, 0, -s.dailyDays)
+	if dailyDays > 0 {
+		cutoff := time.Now().UTC().AddDate(0, 0, -dailyDays)
 		result := s.db.WithContext(ctx).Exec(
 			"DELETE FROM datalens_daily_metrics WHERE day_bucket < $1", cutoff,
 		)

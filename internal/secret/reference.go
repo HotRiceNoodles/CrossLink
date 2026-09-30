@@ -14,6 +14,13 @@ func IsReference(s string) bool {
 	return scheme != "http" && scheme != "https"
 }
 
+// IsEncryptedRef reports whether s is an at-rest encrypted value ("enc://"
+// or "enc2://" prefix). Package-level mirror of EncryptedDBStore.IsEncrypted
+// for callers that only have a string (e.g. the settings snapshot builder).
+func IsEncryptedRef(s string) bool {
+	return strings.HasPrefix(s, "enc://") || strings.HasPrefix(s, "enc2://")
+}
+
 // ParseScheme splits a URI reference into scheme and key path.
 // Returns ("", "", false) if the string is not a reference.
 func ParseScheme(ref string) (scheme, keyPath string, ok bool) {
