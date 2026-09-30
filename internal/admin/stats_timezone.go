@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"regexp"
 	"time"
+
+	"github.com/crosslink/internal/model"
+	"gorm.io/gorm"
 )
 
 // Statistics timezone: the single timezone that defines "a day" for usage
@@ -18,6 +21,23 @@ var (
 	statsTZName string
 	statsLoc    = time.Local
 )
+
+// LoadStatsTimezone returns the system_settings stats_timezone row written
+// by the setup wizard. Empty when absent, unreadable (fresh install before
+// migrations), or not a valid IANA name — callers fall back to the config
+// value / process local zone. DB row wins over database.timezone (P2
+// direction: operational config lives in the DB, yaml is the bootstrap
+// default).
+func LoadStatsTimezone(db *gorm.DB) string {
+	var row model.SystemSetting
+	if err := db.Where("key = ?", "stats_timezone").First(&row).Error; err != nil || row.Value == "" {
+		return ""
+	}
+	if _, err := time.LoadLocation(row.Value); err != nil {
+		return ""
+	}
+	return row.Value
+}
 
 // SetStatsTimezone pins the statistics timezone (IANA name, e.g.
 // "Asia/Shanghai"). Empty resets to the process local timezone. Invalid

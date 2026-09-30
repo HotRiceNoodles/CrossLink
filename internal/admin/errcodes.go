@@ -120,6 +120,12 @@ const (
 	// Secret / encryption
 	ErrEncryptionNotEnabled = "encryption_not_enabled"
 
+	// Setup wizard
+	ErrSetupStatusInvalid = "setup_status_invalid"
+	ErrTimezoneInvalid    = "timezone_invalid"
+	ErrBaseURLInvalid     = "base_url_invalid"
+	ErrEncryptionKeyActive = "encryption_key_active"
+
 	// File / upload
 	ErrFailedReadFile = "failed_read_file"
 

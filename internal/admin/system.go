@@ -12,6 +12,7 @@ import (
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/settings"
 	"github.com/crosslink/internal/version"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -28,6 +29,7 @@ type SystemHandler struct {
 	health     *provider.HealthTracker
 	budget     *provider.RetryBudget
 	auditSvc   *service.AuditService
+	settings   *settings.Provider
 }
 
 func NewSystemHandler(db *gorm.DB, rdb *redis.Client, cfg config.AdminConfig, usageSvc *service.UsageService, debugStore *debug.Store, health *provider.HealthTracker, budget *provider.RetryBudget, auditSvc *service.AuditService) *SystemHandler {
