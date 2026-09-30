@@ -463,6 +463,16 @@ CrossLink قيد التطوير النشط. التركيز الحالي:
 
 طالع [CONTRIBUTING.md](CONTRIBUTING.md) للإرشادات المفصّلة.
 
+## المساهمون
+
+شكراً لكل من ساهم في CrossLink!
+
+<p align="center">
+  <a href="https://github.com/HotRiceNoodles"><img src="https://github.com/HotRiceNoodles.png" width="80px" alt="HotRiceNoodles" style="border-radius:50%"/></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/jinghunsanzu"><img src="https://github.com/jinghunsanzu.png" width="80px" alt="jinghunsanzu" style="border-radius:50%"/></a>
+</p>
+
 ### التطوير
 
 ```bash

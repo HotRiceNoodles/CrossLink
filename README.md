@@ -460,6 +460,16 @@ We welcome contributions of all sizes — bug fixes, features, docs, or ideas.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
+## Contributors
+
+Thanks to everyone who has contributed to CrossLink!
+
+<p align="center">
+  <a href="https://github.com/HotRiceNoodles"><img src="https://github.com/HotRiceNoodles.png" width="80px" alt="HotRiceNoodles" style="border-radius:50%"/></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/jinghunsanzu"><img src="https://github.com/jinghunsanzu.png" width="80px" alt="jinghunsanzu" style="border-radius:50%"/></a>
+</p>
+
 ### Development
 
 ```bash
