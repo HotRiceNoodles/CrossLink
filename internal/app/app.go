@@ -24,6 +24,7 @@ import (
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/settings"
 	"github.com/crosslink/internal/version"
 	"github.com/crosslink/internal/worker"
 	"github.com/gin-gonic/gin"
@@ -88,6 +89,20 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	secrets := buildSecrets(db, cfg, ext, cryptoProvider, rdb)
 	defer secrets.CleanupCancel()
 
+	// Runtime operational config: system_settings row > yaml/env baseline.
+	// Constructed after buildSecrets (needs the enc store for smtp_password)
+	// and before route registration (middleware closures capture it).
+	settingsProvider := settings.NewProvider(db, cfg, secrets.EncStore)
+	// The MCP service is constructed in main (before FullSetup) — hand it the
+	// provider via the extension hook (same pattern as MCPEncSetter).
+	if ext.MCPSettingsSetter != nil {
+		ext.MCPSettingsSetter(settingsProvider)
+	}
+
+	// Config doctor startup summary: log danger/warn check ids so CLI/docker
+	// users get the same signal as the dashboard panel. Read-only, never fatal.
+	admin.LogReadinessSummary(db, cfg)
+
 	// Repositories
 	repos := repository.ProvideRepos(db)
 
@@ -98,8 +113,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	// Pin the statistics timezone so day buckets and query windows agree with
-	// the DB session timezone set in main (CL_DATABASE_TIMEZONE).
-	admin.SetStatsTimezone(cfg.Database.Timezone)
+	// the DB session timezone set in main. The setup-wizard DB row
+	// (stats_timezone) wins over database.timezone — same precedence main.go
+	// applies when building the DSN.
+	statsTZ := admin.LoadStatsTimezone(db)
+	if statsTZ == "" {
+		statsTZ = cfg.Database.Timezone
+	}
+	admin.SetStatsTimezone(statsTZ)
 
 	// Services
 	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
@@ -182,6 +203,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Background refresh: keep resilience cooldowns/thresholds in sync without restart
 	go admin.RunResilienceRefreshLoop(appCtx, db, infra.Health, 30*time.Second)
+	// Background refresh: keep the runtime settings snapshot in sync across
+	// instances (admin writes hot-apply locally via RefreshNow).
+	go settingsProvider.RunRefreshLoop(appCtx, 30*time.Second)
 	// Background refresh: keep the error-classification rule table hot-reloaded
 	go infra.Classifier.RunRefreshLoop(appCtx)
 
@@ -216,6 +240,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		LatencySvc:     svcs.LatencySvc,
 		GuardrailSvc:   guardrailSvc,
 		Config:         cfg,
+		Settings:       settingsProvider,
 		PermCache:      permCache,
 		KeySvc:         svcs.KeySvc,
 		DebugStore:     debugStore,
@@ -276,7 +301,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Tracing())
 	r.Use(middleware.Recovery())
-	r.Use(middleware.CORS(middleware.CORSConfig{AllowedOrigins: cfg.CORS.AllowedOrigins}))
+	// CORS allowlist from runtime settings (DB row > cors.allowed_origins): admin
+	// edits hot-apply without restart.
+	r.Use(middleware.CORSFromProvider(settingsProvider))
 	r.Use(middleware.Logger())
 	r.Use(middleware.Metrics())
 
@@ -322,6 +349,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		DebugStore:     debugStore,
 		Crypto:         cryptoProvider,
 		Config:         cfg,
+		Settings:       settingsProvider,
 		AuditSvc:       ext.Deps.AuditSvc,
 		TemplateRegistry: templateRegistry,
 		TemplateSync:     templateSync,
@@ -352,11 +380,20 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Login endpoint (no auth, rate limited)
 	// Registered after ExtraPublicRoutes so deps.AuditSvc is available.
 	captchaGate := buildCaptchaGate(cfg.Captcha, rdb, []byte(cfg.Admin.JWTSecret))
+	loginReadiness := admin.NewReadinessChecker(db, cfg)
+	loginReadiness.SetSettingsProvider(settingsProvider)
+	// Hot-swap the captcha config (runtime settings): enable/disable, trust
+	// window, slider geometry. The HMAC secret is not swappable — trust
+	// cookies survive config changes.
+	settingsProvider.Subscribe(func(s *settings.Snapshot) {
+		gateCfg, sliderCfg := captchaConfigsFrom(s.Captcha)
+		captchaGate.ApplyConfig(gateCfg, sliderCfg)
+	})
 	// Captcha issue: pre-auth, image generation is cheap; dedicated per-IP
 	// issue rate limit deferred (login limiter already caps the real attack
 	// surface — failed logins). See docs/plans/2026-07-03-login-captcha-design.md §3.4.
 	r.GET("/admin/api/auth/captcha/issue", admin.CaptchaIssueHandler(captchaGate))
-	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider, captchaGate))
+	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider, captchaGate, loginReadiness))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
 
 	// Lightweight auth endpoints (JWT required, exempt from rate limit)
@@ -462,6 +499,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// System info (self-service, no RequireAction)
 		adminGroup.GET("/system/info", handlers.System.Info)
+		// Config doctor: readiness report (self-service, no RequireAction —
+		// every viewer should see deployment health, like /system/info).
+		adminGroup.GET("/system/readiness", handlers.Readiness.Report)
+		// Runtime operational config: DB-backed settings with hot-apply
+		// (Community-owned — replaces the frontend's dependency on the
+		// Pro-only /system/settings aggregate).
+		adminGroup.GET("/system/config", middleware.RequireAction(permCache, "system:view"), handlers.System.GetConfig)
+		adminGroup.PUT("/system/config", middleware.RequireAction(permCache, "system:update"), handlers.System.UpdateConfig)
+		// First-run setup wizard persistence (system_settings KV rows).
+		adminGroup.POST("/system/setup/apply", middleware.RequireAction(permCache, "system:update"), handlers.Setup.Apply)
+		adminGroup.POST("/system/setup/skip", middleware.RequireAction(permCache, "system:update"), handlers.Setup.Skip)
 		adminGroup.POST("/system/password", middleware.RequireAction(permCache, "system:password"), handlers.System.ChangePassword)
 		// Content-log toggle — community-core setting; the aggregate
 		// /system/settings endpoint stays in the Pro overlay.
@@ -551,11 +599,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
 	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider))
-	gwGroup.Use(middleware.RateLimit(rdb, cfg.RateLimit.RPM, teamCache, orgCache))
+	gwGroup.Use(middleware.RateLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	// BudgetCheck before TPMLimit: a budget-rejected request must not make a
 	// TPM reservation (the aborting chain never reaches ReportTokens).
 	gwGroup.Use(middleware.BudgetCheck(svcs.BudgetSvc, teamCache, orgCache))
-	gwGroup.Use(middleware.TPMLimit(rdb, cfg.RateLimit.TPM, teamCache, orgCache, cfg.RateLimit.Reservation, cfg.RateLimit.FailClosed))
+	gwGroup.Use(middleware.TPMLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	gwGroup.Use(middleware.ReportTokens(rdb, orgCache))
 	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
 	// RoutingStats (per-minute Redis hashes) removed: it was write-only —
@@ -625,6 +673,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 				slog.Warn("usage_logs is not partitioned. Run 'crosslink migrate-partition' to enable partitioning. DataLens aggregation will use unpartitioned table (slower).")
 			}
 		}
+		// Retention day counts hot-reload via runtime settings (interval /
+		// lookback / enabled stay boot-pinned, labeled restart-required).
+		svcs.DataLensAggSvc.SetSettingsProvider(settingsProvider)
 		go svcs.DataLensAggSvc.Run(appCtx)
 	}
 	// Update cache size gauge periodically via approximate counter

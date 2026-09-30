@@ -10,6 +10,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/settings"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -28,6 +29,8 @@ type AdminHandlers struct {
 	Routing      *RoutingHandler
 	Onboarding   *OnboardingHandler
 	Templates    *TemplateHandler
+	Readiness    *ReadinessHandler
+	Setup        *SetupHandler
 	Perms        gin.HandlerFunc
 }
 
@@ -47,6 +50,7 @@ type AdminDeps struct {
 	DebugStore     *debug.Store
 	Crypto         crypto.CryptoProvider
 	Config         *config.Config
+	Settings       *settings.Provider // runtime DB-backed operational config
 	AuditSvc       *service.AuditService // set by commercial build; nil in Community
 	TemplateRegistry *service.TemplateRegistry
 	TemplateSync     *service.TemplateRegistrySync // nil when Redis absent
@@ -54,7 +58,9 @@ type AdminDeps struct {
 
 // ProvideAdminHandlers constructs all admin handlers from their dependencies.
 func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
-	return &AdminHandlers{
+	readiness := NewReadinessChecker(deps.DB, deps.Config)
+	readiness.SetSettingsProvider(deps.Settings)
+	h := &AdminHandlers{
 		Provider: NewProviderHandler(
 			deps.Repos.ProviderRepo,
 			deps.Repos.ProviderModelCRUDRepo,
@@ -110,6 +116,13 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.AuditSvc,
 		),
 		Templates: NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
-		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo),
+		Readiness: NewReadinessHandler(readiness),
+		Setup:     NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
+		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
 	}
+	// Runtime settings provider (may be nil in handler-level tests). Wired
+	// via setter to keep NewSystemHandler's signature stable for the
+	// commercial overlay's construction path.
+	h.System.SetSettingsProvider(deps.Settings)
+	return h
 }

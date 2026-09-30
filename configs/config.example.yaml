@@ -2,6 +2,9 @@ server:
   port: 8080
   read_timeout: 30s
   write_timeout: 120s
+  # trusted_proxies:       # Reverse proxy IPs trusted for X-Forwarded-For
+  #   - "127.0.0.1"        # (ClientIP / rate limiting / CORS). Empty = trust none.
+                          # Only list known proxy IPs — spoofable header otherwise.
 
 database:
   driver: postgres          # postgres | kingbasees | mysql | oceanbase | sqlite
@@ -55,6 +58,8 @@ demo:
                                               # Must be set when enabled. Env: CL_DEMO_API_KEY
 
 rate_limit:
+  # Bootstrap defaults — editable at runtime via Settings (PUT /admin/api/system/config,
+  # hot-reload). Values here apply only until DB rows override them.
   # Global defaults applied when API Key / Team / Org has no explicit RPM/TPM override.
   # Set to 0 to disable (recommended: manage limits per API Key/Team/Org instead).
   rpm: 0               # requests per minute (0 = unlimited)
@@ -66,6 +71,13 @@ logging:
   level: info
   format: json
 
+# Response cache for identical LLM requests.
+# cache:
+#   enabled: true
+#   default_ttl: 5m            # TTL for chat/messages responses
+#   embeddings_ttl: 60m        # TTL for embeddings responses
+#   max_body_size: 10485760    # skip caching bodies larger than this (bytes)
+
 admin:
   username: admin
   password: admin123
@@ -74,12 +86,14 @@ admin:
 
 secret_manager:
   encryption_key: "aU8za9Ezj+PMGvWr0F2YLb1oLiNxD7nEq4CbdWsP5ek="    # gm: 3DYiFuVMEbi77ENlkqyWqg==
+  # cache_ttl: 5m              # TTL for resolved external secret references
 
 crypto:
   mode: standard          # standard (SHA-256/RSA/AES) or gm (SM3/SM2/SM4)
 
 # SMTP mail server for key delivery emails (Pro/Enterprise)
-# Supports STARTTLS on port 587 only. Implicit TLS (port 465) is not supported.
+# Bootstrap default — editable at runtime in Settings (system/config); changes
+# apply without restart. Supports STARTTLS on port 587 only.
 # Credentials can also be set via env vars: CL_SMTP_HOST, CL_SMTP_PORT, etc.
 # smtp:
 #   host: smtp.example.com
@@ -92,9 +106,28 @@ crypto:
 ip_binding:
   notify_cooldown_seconds: 300  # min 60, max 86400; cooldown (seconds) between email alerts per key on IP mismatch
 
+# Guardrail alert dispatch (Pro/Enterprise). Community ignores this section.
+# Bootstrap default — editable at runtime in Settings (concurrency needs restart).
+# guardrail_alert:
+#   enabled: true
+#   concurrency: 8             # max concurrent alert dispatches
+#   content_preview: true      # include request content preview in alerts
+#   content_preview_len: 200   # preview length (characters)
+
+# CORS allowed origins for the admin/gateway HTTP APIs.
+# Bootstrap default — editable at runtime in Settings (hot-reload).
+# Unset = defaults to local dev origins (localhost:5173/3000/8080). Set explicitly
+# when serving the dashboard from another origin.
+# cors:
+#   allowed_origins:
+#     - "https://dashboard.example.com"
+
 license:
   # server_url: "http://localhost:8090"   # License Server address
   # license_key: ""                        # Filled after online activation
+  # license_file: ""                       # Cache file for the online-activation JWT token
+  # offline_file: ""                       # Offline license file (fingerprint-bound, used when license_key is empty)
+  # node_id: ""                            # Stable node identifier bound into the license fingerprint
   heartbeat_enabled: true
   heartbeat_interval: 24h
 
@@ -111,10 +144,45 @@ captcha:
         bg_height: 150
         piece_size: 44
 mcp:
+  # Bootstrap defaults — max_servers/tool_cache_ttl/request_timeout editable at
+  # runtime in Settings (hot); the rest needs a restart.
   enabled: true
+  # max_servers: 0                # Max MCP servers per owner (0 = unlimited)
+  # health_check_interval: 30s    # Interval between MCP server health checks
+  # tool_cache_ttl: 5m            # TTL for cached MCP tool listings
+  # request_timeout: 30s          # Timeout for MCP tool calls
+  # http_max_idle_conns: 10       # Max idle HTTP connections per MCP server
+  # rate_limit_enabled: true      # Rate-limit MCP tool calls
+  # rate_limit_default_rpm: 60    # Default RPM per API key when no explicit limit
+  # log_retention_days: 180       # Days to keep MCP call logs
   # allow_stdio: false   # SECURITY: stdio MCP servers spawn LOCAL subprocesses
                          # configured by MCP server admins. Disabled by default —
                          # enabling lets any admin with mcp:create (incl. org_admin
                          # in multi-tenant) execute arbitrary commands on the
                          # gateway host. Only enable in a single-tenant/trusted
                          # deployment or with host isolation. Commercial build.
+
+# DataLens usage analytics: raw log retention, hourly/daily metric aggregation.
+# Bootstrap default — retention/from fields editable at runtime in Settings;
+# enabled/interval/lookback/backfill need a restart.
+# datalens:
+#   enabled: true
+#   retention:
+#     raw_logs_days: 365           # Days to keep raw usage logs
+#     hourly_metrics_days: 90      # Days to keep hourly aggregates
+#     daily_metrics_days: 730      # Days to keep daily aggregates
+#   aggregation:
+#     interval: 1h                 # Aggregation run interval
+#     lookback: 3h                 # Re-aggregate window each run (late arrivals)
+#     backfill_days: 7             # Days to backfill on first start
+#     backfill_concurrency: 1      # Parallel workers for backfill
+#     levels:                      # Aggregation dimensions (subset allowed)
+#       - global
+#       - by_model
+#       - by_team
+#       - by_provider
+#       - by_key
+#       - team_model
+#       - key_model
+#   from_name: "CrossLink DataLens"   # Sender name for DataLens email reports
+#   # from_address: "noreply@example.com"  # Sender address (required for reports)

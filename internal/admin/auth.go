@@ -257,7 +257,7 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 // dummyBcryptHash is used to normalize response timing when a username is not found.
 const dummyBcryptHash = "$2a$10$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
-func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider, gate *captcha.Gate) gin.HandlerFunc {
+func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, roleRepo *repository.RoleRepo, orgRepo *repository.OrgRepo, cfg config.AdminConfig, auditSvc *service.AuditService, cp crypto.CryptoProvider, gate *captcha.Gate, readiness *ReadinessChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input struct {
 			Username      string         `json:"username" binding:"required"`
@@ -404,8 +404,9 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 					"org_role":              result.OrgRole,
 					"force_password_change": user.ForcePasswordChange,
 				},
-				"permissions": result.Permissions,
-				"tier":        result.Tier,
+				"permissions":  result.Permissions,
+				"tier":         result.Tier,
+				"setup_needed": readiness != nil && readiness.SetupNeeded(c.Request.Context()),
 			},
 		})
 	}
@@ -509,7 +510,7 @@ func isAdminUser(u *model.User) bool {
 	return u.Role.ID != 0 && u.Role.Name == model.RoleAdmin
 }
 
-func GetPermissionsHandler(roleRepo *repository.RoleRepo) gin.HandlerFunc {
+func GetPermissionsHandler(roleRepo *repository.RoleRepo, readiness *ReadinessChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		roleID := GetRoleID(c)
 		dbActions, err := roleRepo.GetPermissions(c.Request.Context(), roleID)
@@ -520,8 +521,9 @@ func GetPermissionsHandler(roleRepo *repository.RoleRepo) gin.HandlerFunc {
 		perms := license.EffectiveActions(dbActions)
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"permissions": perms,
-				"tier":        license.G().CurrentTier(),
+				"permissions":  perms,
+				"tier":         license.G().CurrentTier(),
+				"setup_needed": readiness != nil && readiness.SetupNeeded(c.Request.Context()),
 			},
 		})
 	}

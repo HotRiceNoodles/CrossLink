@@ -9,11 +9,13 @@ import (
 	"github.com/crosslink/internal/debug"
 	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/guardrail"
+	"github.com/crosslink/internal/mcp"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
+	"github.com/crosslink/internal/settings"
 	"github.com/crosslink/internal/service"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -50,6 +52,7 @@ type AppDeps struct {
 	UsageSvc       *service.UsageService
 	GuardrailSvc   *guardrail.GuardrailService
 	Config         *config.Config
+	Settings       *settings.Provider // runtime DB-backed operational config (P2)
 	PermCache      *middleware.PermissionCache
 	KeySvc         *service.KeyService
 	DebugStore     *debug.Store
@@ -74,6 +77,7 @@ type Extensions struct {
 	ExtraPublicRoutes  func(*gin.Engine, *Extensions)  // public routes (no auth, e.g. SSO login)
 	ExtraEngineRoutes  func(*gin.Engine, *Extensions)  // main router (for docs, etc.)
 	MCPEncSetter       func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
+	MCPSettingsSetter  func(p mcp.MCPSettingsProvider)          // called by app.go after the settings provider is ready
 	IPPolicy           service.IPPolicy
 	AssemblerHook      middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
 	Gate             GateInterface

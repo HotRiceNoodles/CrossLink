@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/app"
@@ -61,22 +60,33 @@ func main() {
 	}
 	defer otelShutdown(context.Background())
 
-	// Effective stats timezone: explicit config, else the process local zone.
-	// Used both for the DB session timezone (SQL date bucketing) and the
-	// admin usage-statistics day boundaries — keeping the two in sync is the
-	// fix for "early-morning requests bucketed into the previous day".
+	// Effective stats timezone: the setup-wizard DB override (stats_timezone
+	// row) wins over database.timezone, else the process local zone. Used both
+	// for the DB session timezone (SQL date bucketing) and the admin
+	// usage-statistics day boundaries — keeping the two in sync is the fix for
+	// "early-morning requests bucketed into the previous day".
 	//
 	// Only pass a real IANA name to the DSN: time.Local.String() can return
 	// the placeholder "Local" (e.g. Windows without zoneinfo), which the
 	// database rejects as an invalid TimeZone value. An empty value omits the
 	// DSN parameter and the session keeps the server default.
-	effectiveTZ := cfg.Database.Timezone
-	if effectiveTZ == "" || effectiveTZ == "Local" {
-		if name := time.Local.String(); name != "" && name != "Local" {
-			effectiveTZ = name
+	//
+	// Two-phase connect: the timezone rides in the DSN, but the override
+	// lives in the DB — so a short-lived preliminary pool (timezone-less)
+	// reads it first. Errors (e.g. system_settings not migrated yet on a
+	// fresh install) mean "no override". SQLite has no DSN timezone
+	// parameter, so it skips the preliminary connection.
+	dbTZ := ""
+	if cfg.Database.Driver != "sqlite" {
+		if tz, err := readStatsTimezoneOverride(cfg); err != nil {
+			slog.Warn("failed to read stats_timezone override, using config timezone", "error", err)
 		} else {
-			effectiveTZ = ""
+			dbTZ = tz
 		}
+	}
+	effectiveTZ := resolveEffectiveTimezone(dbTZ, cfg.Database.Timezone)
+	if dbTZ != "" && dbTZ != cfg.Database.Timezone && cfg.Database.Timezone != "" {
+		slog.Warn("stats_timezone DB override shadows database.timezone", "db", dbTZ, "config", cfg.Database.Timezone)
 	}
 	dia, err := dialect.New(dialect.DBConfig{
 		Driver:     cfg.Database.Driver,
@@ -150,6 +160,9 @@ func main() {
 				mcpSvc.SetEncStore(encStore)
 				mcpAdmin.SetEncStore(encStore)
 			}
+		},
+		MCPSettingsSetter: func(p mcp.MCPSettingsProvider) {
+			mcpSvc.SetSettingsProvider(p)
 		},
 		ExtraMCPRoutes: func(mcpGroup *gin.RouterGroup, ext *app.Extensions) {
 			var mcpKeyValidator mcp.KeyValidator

@@ -72,7 +72,7 @@ func passingTrajectory(targetX float64) []captcha.Point {
 // adminLoginHandlerForTest wraps LoginHandler with nil team/org repos (not
 // needed for the captcha-gate assertions here).
 func adminLoginHandlerForTest(userRepo *repository.UserRepo, roleRepo *repository.RoleRepo, cfg config.AdminConfig, cp crypto.CryptoProvider, gate *captcha.Gate) gin.HandlerFunc {
-	return LoginHandler(userRepo, nil, roleRepo, nil, cfg, nil, cp, gate)
+	return LoginHandler(userRepo, nil, roleRepo, nil, cfg, nil, cp, gate, nil)
 }
 
 func callLogin(t *testing.T, h gin.HandlerFunc, body map[string]any) *httptest.ResponseRecorder {
