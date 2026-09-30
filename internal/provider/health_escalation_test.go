@@ -79,8 +79,8 @@ func TestRecordTransientFailure_RetryAfterNotEscalated(t *testing.T) {
 		t.Fatalf("second open should be ~20ms, got %v", got)
 	}
 
-	time.Sleep(25 * time.Millisecond)                       // expire the 20ms escalation
-	h.RecordTransientFailure("X", "", 0)                    // half-open failure
+	time.Sleep(25 * time.Millisecond)                    // expire the 20ms escalation
+	h.RecordTransientFailure("X", "", 0)                 // half-open failure
 	h.RecordTransientFailure("X", "", 200*time.Millisecond) // open 3, hinted: clamp → 200ms (not 40s escalated)
 	snap = h.Snapshot()[0]
 	if got := time.Until(snap.Until); got < 150*time.Millisecond || got > 230*time.Millisecond {
