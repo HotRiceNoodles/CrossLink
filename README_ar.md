@@ -451,6 +451,19 @@ CrossLink قيد التطوير النشط. التركيز الحالي:
 
 ---
 
+## تاريخ النجوم
+
+<p align="center">
+  <a href="https://star-history.com/#HotRiceNoodles/CrossLink&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date" width="720">
+    </picture>
+  </a>
+</p>
+
+---
+
 ## المساهمة
 
 نرحّب بمساهمات بكل الأحجام — إصلاحات أخطاء، ميزات، توثيق، أو أفكار.

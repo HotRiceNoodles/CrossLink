@@ -429,6 +429,19 @@ CrossLink 正在快速迭代，当前重点：
 
 ---
 
+## Star 趋势
+
+<p align="center">
+  <a href="https://star-history.com/#HotRiceNoodles/CrossLink&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date" width="720">
+    </picture>
+  </a>
+</p>
+
+---
+
 ## 参与贡献
 
 欢迎所有形式的贡献——Bug 修复、新功能、文档完善、想法建议。

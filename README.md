@@ -448,6 +448,19 @@ Have a request? Open a [Discussion](https://github.com/HotRiceNoodles/CrossLink/
 
 ---
 
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#HotRiceNoodles/CrossLink&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date" width="720">
+    </picture>
+  </a>
+</p>
+
+---
+
 ## Contributing
 
 We welcome contributions of all sizes — bug fixes, features, docs, or ideas.
