@@ -50,11 +50,11 @@ checksum:
 sboms:
   - artifacts: archive
 
-changelog:
-  # Release notes are produced by git-cliff in the release workflow
-  # (orhun/git-cliff-action) and passed via release notes template; the
-  # built-in changelog is disabled to avoid duplication.
-  disable: true
+# No changelog config here: release notes come from git-cliff in the release
+# workflow, passed via `--release-notes=RELEASE_NOTES.md`. Do NOT set
+# `changelog.disable: true` — it skips the changelog pipe entirely, which is
+# also where goreleaser loads the --release-notes file, resulting in an empty
+# release body (bit us on the v0.2.0-rc.1 run).
 
 release:
   draft: false
