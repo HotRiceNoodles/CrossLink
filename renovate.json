@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "rangeStrategy": "bump",
+  "dependencyDashboard": true,
+  "labels": ["dependencies"],
+  "postUpdateOptions": ["gomodTidy"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "OpenTelemetry packages must be upgraded as a group",
+      "matchPackageNames": ["go.opentelemetry.io/**"],
+      "groupName": "opentelemetry"
+    },
+    {
+      "description": "GORM packages must be upgraded as a group",
+      "matchPackageNames": ["gorm.io/**"],
+      "groupName": "gorm"
+    },
+    {
+      "description": "Gin and its direct deps upgrade together",
+      "matchPackageNames": ["github.com/gin-gonic/**"],
+      "groupName": "gin"
+    },
+    {
+      "description": "Crypto-sensitive dependency: require careful review",
+      "matchPackageNames": ["github.com/tjfoc/gmsm"],
+      "groupName": null,
+      "labels": ["security", "crypto", "needs-careful-review"],
+      "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "Go toolchain follows go.mod, separate PR",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["go"],
+      "groupName": "go-toolchain",
+      "commitMessageSuffix": " (go directive)"
+    },
+    {
+      "description": "Non-security patch+minor updates, aggregated weekly",
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchDepTypes": ["direct"],
+      "excludePackageNames": ["github.com/tjfoc/gmsm"],
+      "groupName": "weekly patch/minor updates",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "description": "Major version bumps get individual PRs",
+      "matchUpdateTypes": ["major"],
+      "matchDepTypes": ["direct"],
+      "groupName": null,
+      "labels": ["major-update"]
+    }
+  ]
+}
