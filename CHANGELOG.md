@@ -5,40 +5,279 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
+## [0.2.0-rc.2] - 2026-10-06
 ### Added
-- Build metadata (version, commit, date) injected via ldflags into all build paths (Makefile, Dockerfile, CI)
-- CI baseline: lint, test, OpenAPI spec check, Python SDK check, cross-compile smoke jobs
-- CHANGELOG generation via git-cliff (`make changelog`)
-- Release pipeline: goreleaser multi-platform binaries + Docker images on ghcr.io
-- API deprecation mechanism: `Deprecation`/`Sunset` response headers, `/admin/api/deprecations` endpoint
-- Database migration governance: guidelines, structural checks, CI up→down→up verification
-- Dependency update automation via Renovate
+- **provider:** Add ErrorQuota type and Code/Type fields to ProviderError
+- **provider:** Add persistent and model-scope circuit breaker to HealthTracker
+- **router:** Use model-aware health checks in route resolver
+- Add error classification rule model, repository, and migration
+- Add ErrorClassifier service with TTL-cached rule table
+- Integrate error classification into FallbackEngine
+- Add runtime-tunable resilience config and refresh loop
+- Add error classification rules admin API and tier permissions
+- Wire error classifier and resilience refresh into app bootstrap
+- **db:** Add error_classification_rules to MySQL and SQLite init schemas
+- Add StreamChatWithConnect with pre-stream route callback
+- Expose fallback headers and graceful stream interruption
+- Track matched rule id in error classification
+- Add self-service usage query endpoint
+- Add capability domain types, models, and migrations
+- **router:** Add AliasResolver and delegate alias resolution in Resolver
+- Add capability modality guards and Pro error mapping in handlers
+- Add capability admin permissions and Pro tier gating
+- **app:** Add ExtraGatewayRoutes extension point
+- **domain:** Add Responses API DTOs and function strict flag
+- **translator:** Add Responses<->OpenAI bidirectional translation
+- **provider:** Add ResponsesProvider interface and raw passthrough
+- **middleware:** Support Responses API in cache, guardrail, and TPM
+- **middleware:** Classify /v1/responses as its own route type
+- **admin:** Drop Community key and provider count limits
+- **model:** Add AllowedIPs column to APIKey
+- **service:** Add IPPolicy interface and IPBinding config
+- **middleware:** Enforce IPPolicy in Auth and wire into app
+- **captcha:** Add self-hosted slider CAPTCHA package
+- **config:** Add CaptchaConfig and defaults
+- **admin:** Gate login with CAPTCHA and add issue endpoint
+- **key:** Auto-disable expired keys and expose expires_at in admin
+- **routing:** Provider guardrails and health-aware routing (P3a/P4)
+- **admin:** Routing distribution observability (P2)
+- **model:** Provider guard alert rules table and Enterprise perms (B1)
+- **guardrail:** SSRF allowlist, TLS dialer, and redirect guard
+- **provider:** Apply SSRF-safe egress to outbound transports
+- **mcp,video:** Apply SSRF-safe egress to MCP and video downloads
+- **budget:** Reservation primitives with Lua rollback (C5 core)
+- **budget:** Collect scopes and reconcile reservations in middleware
+- **budget:** Pre-request reservation in chat handlers (C5)
+- **mcp:** Gate the stdio transport behind mcp.allow_stdio (secure default)
+- **provider:** Add ModelsLister interface and OpenAI-compatible implementation
+- **admin:** First-run onboarding wizard (probe + atomic commit)
+- **configio:** Encrypted config export/import library
+- **admin:** Onboarding provider-reuse, structured 409, and locale-safe dedup
+- **model:** Prompt_templates table and usage_log.template_id
+- **service:** Prompt-template render, registry, and multi-instance sync
+- **gateway:** Assemble x_context into prompts and track template usage
+- **admin:** Prompt-template CRUD, consumer catalog, and wiring
+- **config:** Seed example prompt templates from YAML on first boot
+- **provider:** Add a Mock adapter for development, CI, and demos
+- **provider:** Mock fixture data layer (Fixture, FixtureStore, repo, table)
+- **provider:** Record real responses into the fixture store (VCR record)
+- **provider:** Replay recorded fixtures from MockProvider (VCR playback)
+- **otel:** OTLP trace exporter and provider child spans
+- **pricing:** Per-Key price multiplier and reconciliation export
+- **admin:** Replay a captured Debug request through the full gateway
+- **handler:** Portal self-service usage API
+- **demo:** Optional zero-cost demo mode (mock provider + embedded key)
+- **gateway:** Make the concurrency limit configurable
+- **apidoc:** Serve a bundled OpenAPI spec at /openapi.json
+- **guardrail:** Community-baseline rule engines and admin CRUD
+- **handler:** Propagate upstream 429 as rate_limit_error with Retry-After
+- **app:** Log effective rate-limit config at gateway startup
+- **usage:** Record image request metadata and tiered image pricing
+- **admin:** Surface image usage metrics in usage stats and reconciliation
+- **router:** Carry provider model context window in route results
+- **usage:** Add context-analysis storage columns and dialect helpers
+- **datalens:** Pre-aggregate context-analysis metrics hourly and daily
+- **analysis:** Wire context-quality analysis into gateway request paths
+- **provider:** Expose circuit breaker state via HealthTracker.Snapshot
+- **rbac:** Register scoped PAT actions (pat:manage, budget:read, health:read)
+- **pat:** Add PatToken model, repository, and service
+- **pat:** Add PATAuthMiddleware and PATAudit middleware
+- **pat:** Wire PAT admin CRUD and read-only API routes
+- **license:** Move system:view/update to community tier actions
+- **admin:** Add content-log toggle endpoint with hot update
+- **admin:** Add playground handler for all interaction modes
+- **app:** Wire playground admin API routes
+- **license:** Move playground:use to community tier actions
+- **billing:** Apply Anthropic prompt-cache pricing via cache_creation_input_tokens
+- **playground:** Enforce org/team budgets and harden billing
+- **video:** Persist team/currency/multiplier on video tasks
+- **provider:** Add GetFileContent and Resolver.Registry accessor
+- **usage:** Log 5xx as server_error and map route types for image/audio/batch/video
+- **video:** Report completion cost to budget scopes and skip call count on polling
+- **admin:** Add error_count_daily to daily usage trend
+- **config:** Add database.timezone setting
+- **admin:** Timezone-aware day bucketing for usage statistics
+- **provider:** Escalate transient circuit cooldown on repeated opens
+- **gateway:** Record and surface circuit cause in no-route errors
+- **service:** Add background circuit prober for early circuit closure
+- **settings:** Add DB-backed runtime settings provider with hot-reload consumers
+- **admin:** Add readiness checker (config doctor) and plaintext secret scan
+- **admin:** Add setup wizard, /system/config API, and stats timezone override
+- **app:** Lazily activate encryption key written by the setup wizard
+- **app:** Wire runtime settings, readiness, and setup wizard into bootstrap
+- **version:** Inject build metadata via ldflags across all build paths
+- **app:** Add API version headers and deprecation mechanism
+- **dialect:** Mark MySQL/SQLite experimental and add migration governance
+- **provider:** Add adapter version metadata and mapping governance docs
+### Changed
+- **budget:** Dedupe ReportUsage/AdjustBudget into applyBudgetDelta
+- **guardrail:** Extract the shared SSRF socket Control callback
+- **middleware:** Extract authFailKey helper for the prefix default
+- **secret:** Extract InitActiveEncryption for shared key resolution
+- **provider:** Consolidate VCR globals and playback tests
+- **app:** Stop serving frontend static files from the gateway
+- **middleware:** Remove write-only RoutingStats middleware
+- **provider:** Gofmt comment alignment in health escalation test
+### Documentation
+- Add issue templates and pull request template
+- **middleware:** Document R7 batch exemption in RequireModel
+- **readme:** Rework README for adoption and add docs/ site
+- **readme:** Add Arabic README and link all three locales
+- **config:** Document demo mode and gateway.concurrency_limit
+- **apidoc:** Document /system/content-log endpoint in bundled OpenAPI spec
+- **apidoc:** Document playground endpoints in bundled OpenAPI spec
+- **readme:** Sync feature list with current community edition
+- **middleware:** Clarify CNY currency on fallback usage rows is label-only
+- **readme:** Add contributors section
+- **readme:** Add Star History chart
+- **changelog:** Add CHANGELOG.md with git-cliff configuration
+### Fixed
+- **middleware:** Handle multipart uploads and non-token endpoints
+- **guardrail:** Mask prompt in /v1/images/generations blocked bodies
+- **debug:** Key entries by store-assigned Seq, not client request_id
+- **guardrail:** Make concurrency counter self-heal via TTL heartbeat (R-4)
+- **license:** Register routing:stats in the Community tier
+- **app:** Warn loudly when the static gateway auth_key is set (H1)
+- **admin:** Enforce http/https scheme on provider base_url update
+- **mcp:** Delegate validateServerURL to the shared SSRF validator
+- **middleware:** Scope the multipart body-buffer exemption to upload routes
+- **repo:** Reserve admin-exclusive actions for the admin role (H5)
+- **admin:** Resolve team/org membership fresh on each request (M7)
+- **app:** Force password change on the seeded admin user
+- **captcha:** Derive a purpose-bound HMAC key for the trust cookie
+- **mcp:** Make SSE same-origin check port-aware
+- **mcp:** Cap upstream body reads and block auth headers as custom headers
+- Cap unbounded response reads in cache capture and Anthropic decode
+- **guardrail:** Make RPM counter INCR+EXPIRE atomic
+- **admin:** Bound the provider-host DNS lookup with a timeout
+- **handler:** Publish token usage on every stream exit path (C6-closure)
+- **mcp:** Guard transportFactories with a RWMutex
+- **middleware:** Make auth-failure limiter read-only on the check path
+- **migration:** Make providers.name unique over non-deleted rows only
+- **gateway:** Derive assembler format from the request path, not the template
+- **admin:** Preserve the existing api_key when an edit sends an empty one
+- **otel:** Simplify the OTLP gRPC insecure-exporter branch
+- **demo:** Seed the mock-only demo key instead of refusing on non-fresh gateways
+- **config:** Map nested keys to underscored env vars
+- **ratelimit:** Halve TPM output-token reservation to reduce spurious 429s
+- **handler:** Record usage when stream is guardrail-blocked
+- **admin:** Record playground usage on early exits and stamp org_id
+- **admin:** Scope PAT usage aggregation to the caller's org
+- **admin:** Align usage day buckets to local midnight and scope sums to primary currency
+- **admin:** Count 4xx responses as errors in routing stats
+- **datalens:** Let super-admin query across all orgs
+- **middleware:** Make budget/TPM reporting panic-safe and refund leaked reservations
+- **playground:** Bill images by size/quality tier and delivered count
+- **datalens:** Widen daily aggregation window to 3 days to self-heal gaps
+- **admin:** Extend DailyTrend rows.Scan for error_count_daily
+- **router:** Stop Resolve from claiming the half-open probe lease
+- **service:** Carry circuit cause in skip error
+- **release:** Drop changelog.disable so --release-notes is honored
+### Miscellaneous
+- Add sdk-generate / sdk-check targets for the Python SDK
+- Add .gitattributes to normalize line endings to LF
+- Add baseline CI (lint, test, spec lint, build smoke, migrations)
+- **release:** Goreleaser pipeline with GitHub Release binaries and ghcr.io images
+- **deps:** Add Renovate config and dependency policy
+- **release:** Skip SBOM in local snapshots, install syft on CI, fix edge image casing
+- **lint:** Adopt incremental linting with new-from-rev
+- **release:** Ignore CI-generated RELEASE_NOTES.md
+### Tests
+- **pricing:** Cover per-Key multiplier and reconciliation export
+- **guardrail:** Adjust credential fixtures to avoid secret-scanner false positives
+- **handler:** Pin single sqlite conn in guardrail stream test
+- **service:** Add end-to-end circuit lifecycle tests
 
 ## [0.1.0] - 2026-06-12
-
-Initial community release of CrossLink.
-
 ### Added
-- Multi-tenant LLM API gateway with Anthropic→OpenAI protocol translation
-- Gateway endpoints: `/v1/messages`, `/v1/chat/completions`, `/v1/models`
-- Provider adapters (`openai_compatible`, `anthropic`, `azure_openai`) with routing strategies (`weighted_random`, `round_robin`)
-- Multi-provider fallback engine with circuit-breaker awareness and error classification
-- Auth (JWT, API keys), RBAC, rate limiting, budget checks, TPM limits, guardrails
-- Admin API with provider/model/key/team/user management
-- DataLens analytics: aggregation levels, daily metrics, context analysis
-- Usage tracking with daily metrics indexes and soft-delete handling
-- MCP gateway integration points
-- PostgreSQL / MySQL / SQLite / Kingbase dialect support
-- OpenAPI spec (`/openapi.json`) and Python SDK generation
-- OpenTelemetry tracing and Prometheus metrics
-
+- Initial commit of CrossLink community edition
+- Update key last_used_at once daily on validation
+- Use partial unique index for soft-deleted provider_models
+- Track Time To First Token (TTFT) in streaming usage logs
+- Add email field to API keys for key delivery
+- Add lang param to key email callback, fix usage stats currency selection
+- Split frontend/backend Docker deployment with one-click compose
+- Add multi-organization (org) support with scoped data isolation
+- Add org_admin role, forced password change, and partial unique org name
+- Thread org context through gateway request pipeline
+- Add Redis health check to system info endpoint
+- Add per-key call count limiting (max_calls/call_period)
+- Multi-database support (PostgreSQL, MySQL, SQLite)
+- Add KingbaseES and OceanBase database dialect support
+- Add ConditionalCount/CastFloat dialect helpers, timezone support
+- Reservation-based TPM limiting with X-RateLimit headers
+- Configurable Redis pool size, add ratelimit unit tests with miniredis
+- Add debug upstream call collector package
+- Add debugTransport to capture upstream HTTP calls
+- Display upstream call chain in debug API, mark fallback attempts
+- Track reasoning and cache read tokens through protocol translators
+- Record reasoning/cache tokens and session ID in usage logs
+- Add SSO provider model and database migration
+- Add SSO public route extension point and admin deps
+- Add CSRF guard middleware for admin API
+- Add IP-based auth failure rate limiting on gateway API
+- Add SSRF protection for provider base URLs
+- Add preference key validation and audit logging
+- Add video generation domain model and provider interface
+- Add video error codes for admin API
+- Add video API DTOs and extend VideoUsage
+- Add video support to OpenAI compatible provider
+- Add video task service with Redis-backed state management
+- Add video gateway handler
+- Add video endpoint awareness to middleware
+- Wire video routes and task service into app
+- Add provider model list endpoint and test model selection
+- **org:** Add ListWithCounts for dashboard stat cards
+- Add IsOrgAdmin helper and ErrForbidden error code
+- Add DataLens config, model, and database migrations
+- Add ConditionalSum dialect method and DataLens repository layer
+- Add DataLens aggregator and metrics services
+- Wire DataLens into app and add tier permission actions
+- Add role management improvements and system permission sync
+- Add global resource counts to usage stats endpoint
+### Changed
+- Use dialect helpers for cross-database SQL in MCP and audit repos
+- Remove PG-specific tags from models for multi-database compatibility
+- Extract login response helper for reuse
+- Inject AuditSvc into admin deps and reorder route registration
+- Scope API key lookups to organization
+- Extract error helpers into shared errors.go
+- Replace OrgWithCounts with inline team/user enrichment
+### Documentation
+- Add CrossLink-UI-Standard repo link in README
+- Add Star History section to README
+- Revamp README with banner, architecture image, and restructured content
+- Update README with one-click frontend+backend Docker Compose setup
 ### Fixed
-- DataLens query scoping, backfill window defaults, and soft-deleted membership handling
-- Various role management and permission sync corrections
-
-[Unreleased]: https://github.com/HotRiceNoodles/CrossLink/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/HotRiceNoodles/CrossLink/releases/tag/v0.1.0
+- Use Expire instead of ExpireNX for budget key TTL
+- Switch frontend Docker images to Debian Slim for production stability
+- Add ca-certificates to frontend Dockerfile for git SSL verification
+- Pass dialect to MCP repo constructor in main
+- Isolate MCP stats tests by serverID, fix audit log SQLite tests
+- Estimate input tokens when provider omits usage in stream response
+- Associate API key with org on creation
+- Encode special characters in database DSN URL
+- Add timing-safe bcrypt fallback and reject default password
+- Truncate large debug response bodies
+- Sanitize provider error messages to prevent credential leaks
+- Cap max_tokens in TPM estimation to prevent over-reservation
+- Refine guardrail content extraction for playground routes
+- Add partial unique index on teams.name for soft-delete
+- Exclude soft-deleted users from team member counts
+- Restore soft-deleted team memberships on re-add
+- Reduce default backfill window and add empty-day fast-forward
+- Scope DataLens queries to correct aggregation level
+### Miscellaneous
+- Add .claude/ to gitignore
+### Performance
+- Add daily metrics indexes for agg_level and dimensions
+### Tests
+- Update existing tests for org-scoped APIs, add unit tests for guardrail/handler/middleware/translator
+- Add dialect integration tests and test-integration make target
+- Add cross-database tests for MCP stats and audit log repos
+- Add KingbaseES lifecycle and MySQL/SQLite E2E dialect tests
+- Add unit tests for debugTransport and captureReadCloser
+- Add tests for cache token translation, stream token tracking, usage stats
+- Add DataLens aggregator and metrics service tests
 
 <!-- generated by git-cliff -->
