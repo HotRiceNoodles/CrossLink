@@ -1,0 +1,9 @@
+version: "2"
+
+issues:
+  # The codebase carries ~86 pre-existing findings (errcheck/staticcheck/
+  # unused) accumulated before CI existed. Lint only lines changed relative
+  # to main so new contributions are held to the standard while old debt is
+  # paid down incrementally. To ratchet: fix a batch, then verify with
+  # `golangci-lint run` on the full tree.
+  new-from-rev: main

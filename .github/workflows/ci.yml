@@ -17,14 +17,19 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
+      # Full history so golangci-lint can diff against main (new-from-rev).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          # Pin to match the version documented in CLAUDE.md workflows;
+          # bump deliberately.
+          version: v2.13.2
 
   test:
     name: Test
