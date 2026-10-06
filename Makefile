@@ -41,7 +41,10 @@ release:
 	goreleaser release --clean
 
 release-snapshot:
-	goreleaser release --snapshot --clean
+	# SBOM is skipped locally: syft on Windows can stall for a long time
+	# scanning archives (Defender real-time scanning of temp extractions).
+	# CI (Linux) generates SBOMs for real releases.
+	goreleaser release --snapshot --clean --skip=sbom
 
 # Generate a CHANGELOG.md draft from Conventional Commits (requires git-cliff).
 # Review and commit manually before tagging a release.

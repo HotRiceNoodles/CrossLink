@@ -30,6 +30,8 @@ jobs:
         env:
           OUTPUT: RELEASE_NOTES.md
           GITHUB_REPO: ${{ github.repository }}
+      - name: Install syft (SBOM generation)
+        run: go install github.com/anchore/syft/cmd/syft@latest
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:

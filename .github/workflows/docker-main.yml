@@ -25,6 +25,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (lowercases the repo name for ghcr)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -32,7 +39,7 @@ jobs:
           file: deployments/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             VERSION=dev-${{ github.sha }}
           cache-from: type=gha
