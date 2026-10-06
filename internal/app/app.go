@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/admin"
+	"github.com/crosslink/internal/apidoc"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
@@ -402,7 +403,24 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	authGroup.Use(middleware.OrgResolve())
 	{
 		authGroup.GET("/version", func(c *gin.Context) {
-			c.JSON(200, gin.H{"version": version.Version})
+			// Top-level fields kept for backward compatibility (additive-only:
+			// `api` was added without moving them — see docs/api-versioning.md).
+			c.JSON(200, gin.H{
+				"version": version.Version,
+				"commit":  version.Commit,
+				"date":    version.Date,
+				// API surface versions — independent of the build version so
+				// clients can pin behavior, not releases. Gateway, admin API and
+				// MCP each carry their own version; see docs/api-versioning.md.
+				"api": gin.H{
+					"gateway": "v1",
+					"admin":   "v1",
+					"mcp":     "1.0",
+				},
+			})
+		})
+		authGroup.GET("/deprecations", func(c *gin.Context) {
+			c.JSON(200, gin.H{"data": apidoc.ActiveDeprecations})
 		})
 		authGroup.GET("/auth/permissions", handlers.Perms)
 		authGroup.POST("/auth/change-forced-password", admin.ChangeForcedPasswordHandler(repos.UserRepo, repos.RoleRepo, repos.OrgRepo, repos.TeamRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider))
@@ -589,6 +607,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		concurrencyLimit = 2000
 	}
 	gwGroup.Use(middleware.ConcurrencyLimit(concurrencyLimit))
+	// API version stamp + deprecation headers (X-API-Version, Deprecation,
+	// Sunset — see docs/api-versioning.md). Mounted first so even aborted
+	// chain responses carry the headers.
+	gwGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
+		return apidoc.ActiveDeprecations
+	}))
 	gwGroup.Use(middleware.ReadBody(10 << 20))
 	gwGroup.Use(middleware.ContextAssembler(templateRegistry, ext.AssemblerHook))
 	gwGroup.Use(debug.Middleware(debugStore))
@@ -633,6 +657,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Self-service usage query: key holders read their own real-time quota.
 	// Lightweight group — only gateway Auth (no cache/guardrail/budget middleware).
 	usageGroup := r.Group("/")
+	usageGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
+		return apidoc.ActiveDeprecations
+	}))
 	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 	// Portal self-service API: same auth, but returns the portal-owned clean
