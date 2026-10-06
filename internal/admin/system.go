@@ -197,6 +197,8 @@ func (h *SystemHandler) Info(c *gin.Context) {
 			"admin_username": h.cfg.Username,
 			"token_expiry":   h.cfg.TokenExpiry,
 			"version":        version.Version,
+			"commit":         version.Commit,
+			"build_date":     version.Date,
 		},
 	})
 }

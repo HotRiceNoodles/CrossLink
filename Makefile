@@ -1,9 +1,16 @@
-.PHONY: build run test test-integration test-integration-oceanbase lint clean release
+.PHONY: build run test test-integration test-integration-oceanbase lint clean release release-snapshot changelog
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+BUILDDATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+LDFLAGS := -s -w \
+	-X github.com/crosslink/internal/version.Version=$(VERSION) \
+	-X github.com/crosslink/internal/version.Commit=$(COMMIT) \
+	-X github.com/crosslink/internal/version.Date=$(BUILDDATE)
 
 build:
-	go build -o bin/crosslink ./cmd/server
+	go build -ldflags "$(LDFLAGS)" -o bin/crosslink ./cmd/server
 
 run:
 	go run ./cmd/server
@@ -27,8 +34,19 @@ lint:
 clean:
 	rm -rf bin/ build/
 
+# Release is always performed by CI (tag push triggers .github/workflows/release.yml).
+# Locally use `make release-snapshot` to exercise the full goreleaser pipeline
+# without publishing anything.
 release:
-	bash scripts/build-release.sh $(VERSION)
+	goreleaser release --clean
+
+release-snapshot:
+	goreleaser release --snapshot --clean
+
+# Generate a CHANGELOG.md draft from Conventional Commits (requires git-cliff).
+# Review and commit manually before tagging a release.
+changelog:
+	git-cliff --output CHANGELOG.md
 
 # Bundle the modular OpenAPI spec (docs/api/*) into a single embedded JSON.
 # Output goes into the apidoc package so go:embed can pick it up (go:embed
