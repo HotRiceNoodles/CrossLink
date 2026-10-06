@@ -47,6 +47,8 @@ See CONTRIBUTING.md for detailed guidelines.
 - [ ] My changes generate no new warnings
 - [ ] I have updated the documentation / config examples where relevant
 - [ ] This change does not leak secrets, API keys, or credentials
+- [ ] If this changes the OpenAPI spec: the change is additive-only (new fields/endpoints), or follows the deprecation process in [docs/api-versioning.md](../docs/api-versioning.md)
+- [ ] If this includes a database migration: it follows [docs/migration-guidelines.md](../docs/migration-guidelines.md) and this PR is labeled `migration`
 
 ## Screenshots / Logs
 

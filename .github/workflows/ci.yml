@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  api-spec-lint:
+    name: OpenAPI spec lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bundled spec
+        run: |
+          python3 - <<'EOF'
+          import json
+          with open("internal/apidoc/openapi.bundled.json", encoding="utf-8") as f:
+              spec = json.load(f)
+          info = spec.get("info", {})
+          assert info.get("version"), "info.version is required"
+          assert spec.get("paths"), "spec must define paths"
+          assert spec.get("openapi", "").startswith("3."), "spec must be OpenAPI 3.x"
+          print(f"OK: {info.get('title')} {info.get('version')}, {len(spec['paths'])} paths")
+          EOF
+
+  migration-check:
+    name: DB migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: crosslink
+          POSTGRES_PASSWORD: crosslink
+          POSTGRES_DB: crosslink
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crosslink"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://crosslink:crosslink@localhost:5432/crosslink?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Structural check (up/down pairs, sequence numbers)
+        run: bash scripts/check-migrations.sh
+      - name: Install migrate CLI
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+      - name: Full cycle up -> down -> up
+        run: |
+          migrate -database "$DATABASE_URL" -path migrations/postgres up
+          migrate -database "$DATABASE_URL" -path migrations/postgres down -all
+          migrate -database "$DATABASE_URL" -path migrations/postgres up
+          echo "Migration cycle verified."
+
+  build-smoke:
+    name: Build smoke (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags "-s -w \
+            -X github.com/crosslink/internal/version.Version=$(git describe --tags --always --dirty) \
+            -X github.com/crosslink/internal/version.Commit=$(git rev-parse --short HEAD) \
+            -X github.com/crosslink/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o /tmp/crosslink-smoke ./cmd/server
+          file /tmp/crosslink-smoke
