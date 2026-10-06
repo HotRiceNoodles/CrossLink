@@ -135,6 +135,31 @@ func TestCircuitProber_NoProbeWhenClosed(t *testing.T) {
 	}
 }
 
+// When the engine skips a provider because its circuit is open, the skip
+// error (FinalError when all routes are skipped) carries the recorded cause.
+func TestFallbackEngine_SkipErrorCarriesCause(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+	health.RecordPersistentFailure("minimax", "test-model", "model", time.Hour)
+	health.RecordCause("minimax", "test-model", "not_found", "provider not found: Model not exists")
+
+	engine := NewFallbackEngine(health, router.FallbackConfig{})
+	result := engine.ExecuteNonStream(context.Background(), makeRoutes("minimax"),
+		func(_ context.Context, _ *router.RouteResult) (any, error) { return "ok", nil })
+
+	if result.FinalError == nil {
+		t.Fatal("expected skip error, got nil")
+	}
+	msg := result.FinalError.Error()
+	if !strings.Contains(msg, "circuit breaker open") || !strings.Contains(msg, "not_found") ||
+		!strings.Contains(msg, "Model not exists") {
+		t.Fatalf("skip error must carry the circuit cause, got %q", msg)
+	}
+	// The upstream must never be called while the circuit is open.
+	if result.Response != nil {
+		t.Fatalf("open circuit must not reach upstream, got %v", result.Response)
+	}
+}
+
 // The fallback engine records the upstream cause on the circuit it opens.
 func TestFallbackEngine_RecordsCause(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Minute)

@@ -80,6 +80,18 @@ func retryAfterFrom(err error) time.Duration {
 
 const defaultPerProviderTimeout = 30 * time.Second
 
+// circuitSkipError builds the error for a circuit-breaker skip, carrying the
+// recorded upstream cause (error type + message from RecordCause) when
+// available so logs and the final error explain WHY the provider was skipped.
+func circuitSkipError(h *provider.HealthTracker, name, model string) error {
+	if h != nil {
+		if d := h.OpenCircuitDescription(name, model); d != "" {
+			return fmt.Errorf("circuit breaker open, skipping provider: %s", d)
+		}
+	}
+	return fmt.Errorf("circuit breaker open, skipping provider %s", name)
+}
+
 func perProviderCtx(parent context.Context, attempt, totalAttempts int) (context.Context, context.CancelFunc) {
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -118,14 +130,16 @@ func (e *FallbackEngine) ExecuteNonStream(
 		model := route.ProviderModel
 
 		if e.health != nil && !e.health.IsHealthyModel(name, model) {
+			skipErr := circuitSkipError(e.health, name, model)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				ProviderName: name,
 				ErrorType:    provider.ErrorServer,
-				Error:        fmt.Errorf("circuit breaker open, skipping"),
+				Error:        skipErr,
 				Success:      false,
 			})
-			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", name)
-			slog.Warn("skipping provider due to circuit breaker", "provider", name)
+			lastErr = skipErr
+			slog.Warn("skipping provider due to circuit breaker", "provider", name,
+				"reason", skipErr.Error())
 			continue
 		}
 
@@ -274,14 +288,16 @@ func (e *FallbackEngine) ExecuteStream(
 		model := route.ProviderModel
 
 		if e.health != nil && !e.health.IsHealthyModel(name, model) {
+			skipErr := circuitSkipError(e.health, name, model)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				ProviderName: name,
 				ErrorType:    provider.ErrorServer,
-				Error:        fmt.Errorf("circuit breaker open, skipping"),
+				Error:        skipErr,
 				Success:      false,
 			})
-			lastErr = fmt.Errorf("circuit breaker open, skipping provider %s", name)
-			slog.Warn("skipping provider due to circuit breaker", "provider", name)
+			lastErr = skipErr
+			slog.Warn("skipping provider due to circuit breaker", "provider", name,
+				"reason", skipErr.Error())
 			continue
 		}
 
