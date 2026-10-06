@@ -1,5 +1,9 @@
 services:
   gateway:
+    # Two mutually exclusive options:
+    #   1) Pre-built image (recommended): replace the `build:` block with
+    #      image: ghcr.io/hotricenoodles/crosslink:${CROSSLINK_VERSION:-latest}
+    #   2) Build from source (default below): requires the full repo checkout.
     build:
       context: ..
       dockerfile: deployments/docker/Dockerfile

@@ -1,0 +1,62 @@
+# goreleaser v2 configuration for CrossLink.
+#
+# Local dry-run (no publish):  make release-snapshot
+# Real release: push a tag (vX.Y.Z) — .github/workflows/release.yml runs goreleaser.
+version: 2
+
+project_name: crosslink
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: crosslink
+    main: ./cmd/server
+    binary: crosslink
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/crosslink/internal/version.Version={{.Version}}
+      - -X github.com/crosslink/internal/version.Commit={{.Commit}}
+      - -X github.com/crosslink/internal/version.Date={{.Date}}
+    # windows/arm64 is not a target platform for this project
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  # Release notes are produced by git-cliff in the release workflow
+  # (orhun/git-cliff-action) and passed via release notes template; the
+  # built-in changelog is disabled to avoid duplication.
+  disable: true
+
+release:
+  draft: false
+  prerelease: auto
+  make_latest: true
