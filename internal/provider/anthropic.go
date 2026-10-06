@@ -184,11 +184,12 @@ func init() {
 	RegisterAdapter("anthropic", func(p *model.Provider, timeout time.Duration) (Provider, error) {
 		return NewAnthropicProvider(p.Name, p.BaseURL, p.APIKey, p.ExtraConfig, timeout)
 	}, &AdapterMeta{
-		DisplayName:  "Anthropic",
-		Description:  "Anthropic Claude API (native)",
-		NeedsBaseURL: true,
-		NeedsAPIKey:  true,
-		Capabilities: []string{"chat", "stream"},
+		DisplayName:    "Anthropic",
+		Description:    "Anthropic Claude API (native)",
+		AdapterVersion: "1",
+		NeedsBaseURL:   true,
+		NeedsAPIKey:    true,
+		Capabilities:   []string{"chat", "stream"},
 		ExtraFields: []AdapterField{
 			{Name: "api_version", Type: "text", Label: "API Version", Placeholder: "2023-06-01", DefaultValue: "2023-06-01"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},

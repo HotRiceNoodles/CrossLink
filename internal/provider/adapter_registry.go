@@ -12,21 +12,26 @@ import (
 type AdapterFactory func(p *model.Provider, timeout time.Duration) (Provider, error)
 
 type AdapterMeta struct {
-	DisplayName       string            `json:"display_name"`
-	Description       string            `json:"description"`
-	NeedsBaseURL      bool              `json:"needs_base_url"`
-	NeedsAPIKey       bool              `json:"needs_api_key"`
-	BaseURLDefault    string            `json:"base_url_default,omitempty"`
-	ProtocolBaseURLs  map[string]string `json:"protocol_base_urls,omitempty"`
-	Capabilities      []string          `json:"capabilities"`
-	ExtraFields       []AdapterField    `json:"extra_fields"`
-	MinimumTier       string            `json:"minimum_tier,omitempty"` // "community", "pro", "enterprise"
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+	// AdapterVersion tracks the adapter's behavior revision independently of
+	// the gateway release — bump it whenever the adapter's wire behavior
+	// changes (translation, auth, retry semantics), so "same gateway version,
+	// different provider behavior" is diagnosable from system info.
+	AdapterVersion   string            `json:"adapter_version"`
+	NeedsBaseURL     bool              `json:"needs_base_url"`
+	NeedsAPIKey      bool              `json:"needs_api_key"`
+	BaseURLDefault   string            `json:"base_url_default,omitempty"`
+	ProtocolBaseURLs map[string]string `json:"protocol_base_urls,omitempty"`
+	Capabilities     []string          `json:"capabilities"`
+	ExtraFields      []AdapterField    `json:"extra_fields"`
+	MinimumTier      string            `json:"minimum_tier,omitempty"` // "community", "pro", "enterprise"
 }
 
 type AdapterField struct {
 	Name         string        `json:"name"`
 	Label        string        `json:"label"`
-	Type         string        `json:"type"`         // text, password, select, number, textarea
+	Type         string        `json:"type"` // text, password, select, number, textarea
 	Required     bool          `json:"required"`
 	Placeholder  string        `json:"placeholder"`
 	DefaultValue string        `json:"default_value"`
