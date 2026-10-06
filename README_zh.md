@@ -174,8 +174,11 @@ CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
 ### 前置要求
 
 - Go 1.22+（源码编译）
-- PostgreSQL 14+
+- PostgreSQL 14+（或 KingbaseES）
 - Redis 7+
+
+> **数据库支持等级**：PostgreSQL 14+ 与 KingbaseES 为一级支持（迁移完整）。
+> MySQL 和 SQLite 为**实验性**支持——迁移只到初始 schema，仅供评估使用。
 
 ### Docker Compose（推荐）
 

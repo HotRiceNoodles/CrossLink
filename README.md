@@ -190,8 +190,12 @@ state machine, the fallback engine's timeout budgeting, and the 5-phase graceful
 ### Prerequisites
 
 - Go 1.22+ (building from source)
-- PostgreSQL 14+
+- PostgreSQL 14+ (or KingbaseES)
 - Redis 7+
+
+> **Database support:** PostgreSQL 14+ and KingbaseES are first-class, fully
+> migrated backends. MySQL and SQLite are **experimental** — their migration
+> sets stop at the initial schema and are suitable for evaluation only.
 
 ### Docker Compose (Recommended)
 

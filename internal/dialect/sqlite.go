@@ -90,6 +90,11 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 		return fmt.Errorf("InitDB must be called before RunMigrations")
 	}
 
+	// Experimental dialect: only the initial schema (000001) is applied.
+	// Only suitable for evaluation, not production.
+	slog.Warn("SQLite is an EXPERIMENTAL backend: only the initial schema (000001) "+
+		"is applied; schema will be missing most tables. Use PostgreSQL (or Kingbase) for anything real.")
+
 	migrationFile := filepath.Join(s.MigrationDir(), "000001_init_schema.up.sql")
 	sqlBytes, err := os.ReadFile(migrationFile)
 	if err != nil {

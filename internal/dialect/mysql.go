@@ -74,6 +74,10 @@ func (m *MySQLDialect) InitDB() (*gorm.DB, error) {
 
 // RunMigrations runs golang-migrate using files from MigrationDir.
 func (m *MySQLDialect) RunMigrations(ctx context.Context) error {
+	// Experimental dialect: migrations stop at 000002 while PostgreSQL is at
+	// the full set. Only suitable for evaluation, not production.
+	slog.Warn("MySQL is an EXPERIMENTAL backend: migrations stop at 000002; " +
+		"schema will be missing most tables. Use PostgreSQL (or Kingbase) for anything real.")
 	db, err := sql.Open("mysql", m.dsn())
 	if err != nil {
 		return fmt.Errorf("open mysql for migration: %w", err)
