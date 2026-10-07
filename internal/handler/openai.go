@@ -89,6 +89,11 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 		currency = route.Currency
 		providerID = route.ProviderRow.ID
 	}
+	// Error observability L1: persist the sanitized upstream message and
+	// status/code; 0 upstream status marks a gateway-side rejection.
+	errMsg, upstreamStatus, upstreamCode := providerErrorDetail(result.FinalError)
+	// L2: per-provider attempt timeline.
+	attempts := attemptsJSON(result.Attempts)
 	c.Set("usage_logged", true)
 	submitUsage(func() {
 		h.usageSvc.Log(context.Background(), &service.UsageEntry{
@@ -101,6 +106,10 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			Currency:       currency,
 			StatusCode:     statusCode,
 			ErrorType:      "provider_error",
+			ErrorMessage:      errMsg,
+			UpstreamStatus:    upstreamStatus,
+			UpstreamErrorCode: upstreamCode,
+			Attempts:          attempts,
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     retryCount,

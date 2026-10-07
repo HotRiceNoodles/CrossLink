@@ -14,6 +14,8 @@ import (
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
+	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/translator"
 )
 
 func TestTruncateContent(t *testing.T) {
@@ -127,6 +129,90 @@ func TestMapProviderErrorStatus(t *testing.T) {	tests := []struct {
 			}
 		})
 	}
+}
+
+// gatewayErrorStatus replaces the logFailure-hardcoded 502: the usage log must
+// record the same class the client saw (upstream 400 → 400, not 502).
+func TestGatewayErrorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"upstream 400", &provider.ProviderError{StatusCode: 400}, 400},
+		{"upstream 429", &provider.ProviderError{StatusCode: 429}, 429},
+		{"upstream 401 masked as 502", &provider.ProviderError{StatusCode: 401}, 502},
+		{"upstream 500 stays 500", &provider.ProviderError{StatusCode: 500}, 500},
+		{"translator missing model", translator.ErrMissingModel, 400},
+		{"generic error", errors.New("boom"), 500},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gatewayErrorStatus(tt.err); got != tt.want {
+				t.Errorf("gatewayErrorStatus() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderErrorDetail(t *testing.T) {
+	t.Run("provider error carries upstream fields", func(t *testing.T) {
+		pe := &provider.ProviderError{StatusCode: 400, Message: "provider bad request: Invalid model ID org-abc123456", Code: "model_not_found"}
+		msg, status, code := providerErrorDetail(pe)
+		if msg != "provider bad request: Invalid model ID [REDACTED]" {
+			t.Errorf("msg = %q, want redacted org ID", msg)
+		}
+		if status != 400 {
+			t.Errorf("status = %d, want 400", status)
+		}
+		if code != "model_not_found" {
+			t.Errorf("code = %q, want model_not_found", code)
+		}
+	})
+	t.Run("gateway-side rejection has no upstream status", func(t *testing.T) {
+		msg, status, code := providerErrorDetail(errors.New("missing messages"))
+		if msg != "missing messages" {
+			t.Errorf("msg = %q, want missing messages", msg)
+		}
+		if status != 0 || code != "" {
+			t.Errorf("upstream fields = %d/%q, want 0/empty", status, code)
+		}
+	})
+}
+
+func TestAttemptsJSON(t *testing.T) {
+	t.Run("clean single-attempt success stays nil", func(t *testing.T) {
+		if got := attemptsJSON([]service.FallbackAttempt{{ProviderName: "p", ProviderModel: "m", Success: true}}); got != nil {
+			t.Errorf("attemptsJSON() = %s, want nil", got)
+		}
+	})
+	t.Run("empty stays nil", func(t *testing.T) {
+		if got := attemptsJSON(nil); got != nil {
+			t.Errorf("attemptsJSON(nil) = %s, want nil", got)
+		}
+	})
+	t.Run("timeline serializes provider/model/status", func(t *testing.T) {
+		got := attemptsJSON([]service.FallbackAttempt{
+			{ProviderName: "openai", ProviderModel: "gpt-4o", ErrorType: "bad_request", UpstreamStatus: 400, LatencyMs: 120, Success: false},
+			{ProviderName: "azure", ProviderModel: "gpt-4o", LatencyMs: 300, Success: true},
+		})
+		if got == nil {
+			t.Fatal("attemptsJSON() = nil, want timeline")
+		}
+		var parsed []attemptRecord
+		if err := json.Unmarshal(got, &parsed); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(parsed) != 2 {
+			t.Fatalf("len = %d, want 2", len(parsed))
+		}
+		if parsed[0].Provider != "openai" || parsed[0].Model != "gpt-4o" || parsed[0].UpstreamStatus != 400 || parsed[0].ErrorType != "bad_request" {
+			t.Errorf("first attempt = %+v", parsed[0])
+		}
+		if !parsed[1].Success || parsed[1].ErrorType != "" {
+			t.Errorf("second attempt = %+v", parsed[1])
+		}
+	})
 }
 
 // Upstream 429 must surface as rate_limit_error with Retry-After so clients

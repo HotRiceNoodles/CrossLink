@@ -73,7 +73,7 @@ func estimateAnthropicInputTokens(req *domain.AnthropicRequest) int {
 	return n
 }
 
-func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.Time, gatewayErr error, sessionID string) {
+func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode int, start time.Time, gatewayErr error, sessionID string) {
 	var keyID int64
 	var teamID int64
 	orgID := c.GetInt64("org_id")
@@ -98,6 +98,14 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.T
 		fallbackCount = routeErr.FallbackCount
 		retryCount = routeErr.RetryCount
 	}
+	// Error observability L1: persist the sanitized upstream message and
+	// status/code; 0 upstream status marks a gateway-side rejection.
+	errMsg, upstreamStatus, upstreamCode := providerErrorDetail(gatewayErr)
+	// L2: per-provider attempt timeline when the error came from routing.
+	var attempts datatypes.JSON
+	if routeErr != nil {
+		attempts = attemptsJSON(routeErr.Attempts)
+	}
 	c.Set("usage_logged", true)
 	submitUsage(func() {
 		h.usageSvc.Log(context.Background(), &service.UsageEntry{
@@ -108,8 +116,12 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, start time.T
 			TeamID:         teamID,
 			OrgID:          orgID,
 			Currency:       currency,
-			StatusCode:     http.StatusBadGateway,
+			StatusCode:     statusCode,
 			ErrorType:      "provider_error",
+			ErrorMessage:      errMsg,
+			UpstreamStatus:    upstreamStatus,
+			UpstreamErrorCode: upstreamCode,
+			Attempts:          attempts,
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  fallbackCount,
 			RetryCount:     retryCount,
@@ -210,7 +222,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID, orgID)
 	if err != nil {
-		h.logFailure(c, req.Model, start, err, sessionID)
+		h.logFailure(c, req.Model, gatewayErrorStatus(err), start, err, sessionID)
 		h.writeError(c, err, req.Model)
 		return
 	}
@@ -544,7 +556,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 
 	if err != nil {
 		slog.Error("stream error", "error", err, "model", req.Model)
-		h.logFailure(c, req.Model, start, err, sessionID)
+		h.logFailure(c, req.Model, gatewayErrorStatus(err), start, err, sessionID)
 		errData, _ := json.Marshal(map[string]any{
 			"type":    "api_error",
 			"message": safeProviderError(err),
@@ -666,7 +678,11 @@ func anthropicCacheAdjustedCost(inputTokens, outputTokens, cacheRead, cacheCreat
 	return cost
 }
 
-func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
+// gatewayErrorStatus maps a GatewayService error to the client-facing HTTP
+// status. Shared by writeError and logFailure so the client response and the
+// usage log always record the same code (the log previously hardcoded 502,
+// masking upstream 400s as server errors).
+func gatewayErrorStatus(err error) int {
 	status := http.StatusInternalServerError
 
 	switch {
@@ -690,6 +706,10 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 		}
 	}
 
+	return status
+}
+
+func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 	slog.Error("gateway error", "error", err, "model", model)
 	// Upstream 429 must surface as rate_limit_error + Retry-After so clients
 	// can back off with correct semantics instead of treating it as a generic
@@ -699,7 +719,7 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 		errType = "rate_limit_error"
 		providerRetryAfterHeader(c, err)
 	}
-	c.JSON(status, gin.H{
+	c.JSON(gatewayErrorStatus(err), gin.H{
 		"type":  "error",
 		"error": gin.H{"type": errType, "message": safeProviderError(err)},
 	})
