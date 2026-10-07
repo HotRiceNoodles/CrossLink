@@ -2,13 +2,14 @@ package admin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -87,6 +88,47 @@ func applyOrgScope(query *gorm.DB, c *gin.Context) *gorm.DB {
 	return query
 }
 
+// usageListColumns is the explicit column set for list responses. It excludes
+// the heavy TEXT content columns (user_message, model_response, up to 64KB
+// each); full rows are served by Get. context_snapshot stays: it is a small
+// fixed-shape analysis blob consumed by the list's expand row.
+var usageListColumns = []string{
+	"id", "request_id", "api_key_id", "provider_id", "route_type",
+	"model_requested", "model_used",
+	"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+	"cost", "billable_cost", "currency",
+	"latency_ms", "first_token_ms", "status_code", "error_type",
+	"team_id", "org_id", "session_id", "template_id",
+	"fallback_count", "retry_count", "guardrail_triggered", "guardrail_rule",
+	"cache_hit", "agent_type", "security_events",
+	"image_count", "image_size", "image_quality",
+	"system_tokens", "history_tokens", "question_tokens", "tool_tokens", "tool_output_tokens",
+	"context_window", "context_utilization_bp", "analysis_flags", "context_snapshot",
+	"created_at",
+}
+
+// Get returns one usage log including the content columns (user_message,
+// model_response) that List omits. Team/org scoping matches List: a row the
+// caller could not see in the list is reported as 404, not 403.
+func (h *UsageHandler) Get(c *gin.Context) {
+	id := parseID(c.Param("id"))
+	if id <= 0 {
+		errorResp(c, http.StatusNotFound, ErrNotFound, "usage log not found")
+		return
+	}
+	query := applyOrgScope(applyTeamScope(h.db.WithContext(c.Request.Context()), c), c)
+	var log model.UsageLog
+	if err := query.First(&log, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			errorResp(c, http.StatusNotFound, ErrNotFound, "usage log not found")
+			return
+		}
+		internalErr(c, err, "get usage log failed")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": log})
+}
+
 func (h *UsageHandler) List(c *gin.Context) {
 	query := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Order("created_at DESC"), c), c), c)
 
@@ -104,7 +146,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 	offset := (page - 1) * pageSize
 
 	var logs []model.UsageLog
-	if err := query.Offset(offset).Limit(pageSize).Find(&logs).Error; err != nil {
+	if err := query.Select(usageListColumns).Offset(offset).Limit(pageSize).Find(&logs).Error; err != nil {
 		internalErr(c, err, "list usage failed")
 		return
 	}
@@ -217,26 +259,26 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		Scan(&currencySums)
 
 	data := gin.H{
-		"total_requests":     stats.TotalRequests,
-		"total_sessions":    stats.TotalSessions,
-		"total_tokens":      stats.TotalTokens,
-		"input_tokens":      stats.InputTokens,
-		"output_tokens":     stats.OutputTokens,
-		"reasoning_tokens":  stats.ReasoningTokens,
-		"cache_read_tokens": stats.CacheReadTokens,
-		"total_cost":        stats.TotalCost,
-		"cost_per_1k_tokens": stats.CostPer1kTokens,
-		"cost_per_request":   stats.CostPerRequest,
-		"avg_latency_ms":    stats.AvgLatencyMs,
-		"avg_first_token_ms": stats.AvgFirstTokenMs,
-		"error_rate":        stats.ErrorRate,
-		"active_api_keys":   stats.ActiveAPIKeys,
-		"total_images":      stats.TotalImages,
-		"fallback_rate":     stats.FallbackRate,
-		"retry_rate":        stats.RetryRate,
+		"total_requests":       stats.TotalRequests,
+		"total_sessions":       stats.TotalSessions,
+		"total_tokens":         stats.TotalTokens,
+		"input_tokens":         stats.InputTokens,
+		"output_tokens":        stats.OutputTokens,
+		"reasoning_tokens":     stats.ReasoningTokens,
+		"cache_read_tokens":    stats.CacheReadTokens,
+		"total_cost":           stats.TotalCost,
+		"cost_per_1k_tokens":   stats.CostPer1kTokens,
+		"cost_per_request":     stats.CostPerRequest,
+		"avg_latency_ms":       stats.AvgLatencyMs,
+		"avg_first_token_ms":   stats.AvgFirstTokenMs,
+		"error_rate":           stats.ErrorRate,
+		"active_api_keys":      stats.ActiveAPIKeys,
+		"total_images":         stats.TotalImages,
+		"fallback_rate":        stats.FallbackRate,
+		"retry_rate":           stats.RetryRate,
 		"guardrail_block_rate": stats.GuardrailRate,
-		"currency":          stats.Currency,
-		"cost_by_currency":  currencySums,
+		"currency":             stats.Currency,
+		"cost_by_currency":     currencySums,
 	}
 
 	// Global-view-only resource totals. These are point-in-time counts of
