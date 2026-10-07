@@ -3,6 +3,8 @@ package service
 import (
 	"testing"
 
+	"gorm.io/datatypes"
+
 	"github.com/crosslink/internal/model"
 )
 
@@ -92,6 +94,46 @@ func TestBuildUsageLog(t *testing.T) {
 		{"zero ids stay nil", UsageEntry{}, func(t *testing.T, log *model.UsageLog) {
 			if log.ProviderID != nil || log.APIKeyID != nil || log.TeamID != nil || log.OrgID != nil || log.FirstTokenMs != nil {
 				t.Errorf("optional ids should be nil")
+			}
+		}},
+		{"error detail populated", UsageEntry{
+			ErrorMessage: "provider bad request: invalid model", UpstreamStatus: 400, UpstreamErrorCode: "model_not_found",
+		}, func(t *testing.T, log *model.UsageLog) {
+			if log.ErrorMessage == nil || *log.ErrorMessage != "provider bad request: invalid model" {
+				t.Errorf("ErrorMessage = %v, want provider bad request: invalid model", log.ErrorMessage)
+			}
+			if log.UpstreamStatus == nil || *log.UpstreamStatus != 400 {
+				t.Errorf("UpstreamStatus = %v, want 400", log.UpstreamStatus)
+			}
+			if log.UpstreamErrorCode == nil || *log.UpstreamErrorCode != "model_not_found" {
+				t.Errorf("UpstreamErrorCode = %v, want model_not_found", log.UpstreamErrorCode)
+			}
+		}},
+		{"gateway-side rejection keeps upstream nil", UsageEntry{
+			ErrorMessage: "missing model",
+		}, func(t *testing.T, log *model.UsageLog) {
+			if log.ErrorMessage == nil || *log.ErrorMessage != "missing model" {
+				t.Errorf("ErrorMessage = %v, want missing model", log.ErrorMessage)
+			}
+			if log.UpstreamStatus != nil || log.UpstreamErrorCode != nil {
+				t.Errorf("upstream fields should be nil for gateway-side rejection, got %v/%v", log.UpstreamStatus, log.UpstreamErrorCode)
+			}
+		}},
+		{"success keeps error fields nil", UsageEntry{}, func(t *testing.T, log *model.UsageLog) {
+			if log.ErrorMessage != nil || log.UpstreamStatus != nil || log.UpstreamErrorCode != nil {
+				t.Errorf("error fields should be nil for success")
+			}
+		}},
+		{"attempts passthrough", UsageEntry{
+			Attempts: datatypes.JSON(`[{"provider":"openai","model":"gpt-4o","success":true}]`),
+		}, func(t *testing.T, log *model.UsageLog) {
+			if string(log.Attempts) != `[{"provider":"openai","model":"gpt-4o","success":true}]` {
+				t.Errorf("Attempts = %s", log.Attempts)
+			}
+		}},
+		{"attempts nil stays nil", UsageEntry{}, func(t *testing.T, log *model.UsageLog) {
+			if log.Attempts != nil {
+				t.Errorf("Attempts should be nil, got %s", log.Attempts)
 			}
 		}},
 	}

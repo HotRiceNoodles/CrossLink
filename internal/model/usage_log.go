@@ -22,6 +22,17 @@ type UsageLog struct {
 	FirstTokenMs     *int       `json:"first_token_ms"`
 	StatusCode       int        `gorm:"not null" json:"status_code"`
 	ErrorType        string     `gorm:"size:64" json:"error_type"`
+	// Error observability (docs/plans/2026-10-07-error-observability-design.md L1).
+	// ErrorMessage is the sanitized error text (truncated + org-ID redacted);
+	// UpstreamStatus NULL distinguishes gateway-side rejections from upstream
+	// rejections; UpstreamErrorCode is the upstream error.code when present.
+	ErrorMessage      *string    `gorm:"type:text" json:"error_message,omitempty"`
+	UpstreamStatus    *int       `gorm:"default:null" json:"upstream_status,omitempty"`
+	UpstreamErrorCode *string    `gorm:"size:64" json:"upstream_error_code,omitempty"`
+	// Attempts is the fallback timeline [{provider, model, error_type,
+	// upstream_status, latency_ms, success, persistent}]; NULL when the first
+	// attempt succeeded cleanly (error observability L2).
+	Attempts datatypes.JSON `gorm:"default:null" json:"attempts,omitempty"`
 	Currency         string     `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	TeamID           *int64     `gorm:"index" json:"team_id"`
 	UserMessage      *string    `gorm:"type:text" json:"user_message,omitempty"`

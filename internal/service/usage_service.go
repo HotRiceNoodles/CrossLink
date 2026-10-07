@@ -99,6 +99,14 @@ type UsageEntry struct {
 	FirstTokenMs   int64
 	StatusCode     int
 	ErrorType      string
+	// Error observability L1: sanitized error text + upstream status/code.
+	// UpstreamStatus 0 = gateway-side rejection, not an upstream response.
+	ErrorMessage      string
+	UpstreamStatus    int
+	UpstreamErrorCode string
+	// Attempts is the serialized fallback timeline; nil on clean single-attempt
+	// successes (error observability L2).
+	Attempts datatypes.JSON
 	UserMessage    string
 	ModelResponse  string
 	FallbackCount       int
@@ -190,6 +198,19 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 	}
 	if entry.ModelResponse != "" {
 		log.ModelResponse = &entry.ModelResponse
+	}
+	if entry.ErrorMessage != "" {
+		log.ErrorMessage = &entry.ErrorMessage
+	}
+	if entry.UpstreamStatus > 0 {
+		us := entry.UpstreamStatus
+		log.UpstreamStatus = &us
+	}
+	if entry.UpstreamErrorCode != "" {
+		log.UpstreamErrorCode = &entry.UpstreamErrorCode
+	}
+	if len(entry.Attempts) > 0 {
+		log.Attempts = entry.Attempts
 	}
 	if entry.ImageCount > 0 {
 		cnt := int64(entry.ImageCount)
