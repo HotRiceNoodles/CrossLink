@@ -25,11 +25,16 @@ type RouteResolver interface {
 // FallbackAttempt records a single provider attempt during fallback.
 type FallbackAttempt struct {
 	ProviderName string
+	ProviderModel string
 	ErrorType    provider.ErrorType
 	Error        error
 	LatencyMs    int64
 	Success      bool
 	Persistent   bool // true if classified as a persistent (quota/billing) failure
+	// UpstreamStatus is the provider's HTTP status when the error carried one
+	// (0 = network/timeout/cancel, no upstream response). Persisted in the
+	// usage log's attempts timeline (error observability L2).
+	UpstreamStatus int
 }
 
 // FallbackResult holds the outcome of a fallback execution.
@@ -92,6 +97,16 @@ func circuitSkipError(h *provider.HealthTracker, name, model string) error {
 	return fmt.Errorf("circuit breaker open, skipping provider %s", name)
 }
 
+// upstreamStatusOf extracts the provider's HTTP status from an attempt error
+// (0 = network/timeout/cancel with no upstream response).
+func upstreamStatusOf(err error) int {
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		return pe.StatusCode
+	}
+	return 0
+}
+
 func perProviderCtx(parent context.Context, attempt, totalAttempts int) (context.Context, context.CancelFunc) {
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -132,10 +147,11 @@ func (e *FallbackEngine) ExecuteNonStream(
 		if e.health != nil && !e.health.IsHealthyModel(name, model) {
 			skipErr := circuitSkipError(e.health, name, model)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: name,
-				ErrorType:    provider.ErrorServer,
-				Error:        skipErr,
-				Success:      false,
+				ProviderName:  name,
+				ProviderModel: model,
+				ErrorType:     provider.ErrorServer,
+				Error:         skipErr,
+				Success:       false,
 			})
 			lastErr = skipErr
 			slog.Warn("skipping provider due to circuit breaker", "provider", name,
@@ -147,12 +163,14 @@ func (e *FallbackEngine) ExecuteNonStream(
 
 		if err != nil {
 			attempt := FallbackAttempt{
-				ProviderName: name,
-				ErrorType:    classified.ErrorType,
-				Error:        err,
-				LatencyMs:    latency,
-				Success:      false,
-				Persistent:   classified.Persistent,
+				ProviderName:  name,
+				ProviderModel: model,
+				ErrorType:     classified.ErrorType,
+				Error:         err,
+				LatencyMs:     latency,
+				Success:       false,
+				Persistent:    classified.Persistent,
+				UpstreamStatus: upstreamStatusOf(err),
 			}
 			result.Attempts = append(result.Attempts, attempt)
 
@@ -207,9 +225,10 @@ func (e *FallbackEngine) ExecuteNonStream(
 
 		// Success
 		result.Attempts = append(result.Attempts, FallbackAttempt{
-			ProviderName: name,
-			LatencyMs:    latency,
-			Success:      true,
+			ProviderName:  name,
+			ProviderModel: model,
+			LatencyMs:     latency,
+			Success:       true,
 		})
 		result.Response = resp
 		result.Route = route
@@ -290,10 +309,11 @@ func (e *FallbackEngine) ExecuteStream(
 		if e.health != nil && !e.health.IsHealthyModel(name, model) {
 			skipErr := circuitSkipError(e.health, name, model)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: name,
-				ErrorType:    provider.ErrorServer,
-				Error:        skipErr,
-				Success:      false,
+				ProviderName:  name,
+				ProviderModel: model,
+				ErrorType:     provider.ErrorServer,
+				Error:         skipErr,
+				Success:       false,
 			})
 			lastErr = skipErr
 			slog.Warn("skipping provider due to circuit breaker", "provider", name,
@@ -304,11 +324,13 @@ func (e *FallbackEngine) ExecuteStream(
 		ch, classified, err := e.attemptStream(ctx, route, i, maxAttempts, connectFn)
 		if err != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName: name,
-				ErrorType:    classified.ErrorType,
-				Error:        err,
-				Success:      false,
-				Persistent:   classified.Persistent,
+				ProviderName:  name,
+				ProviderModel: model,
+				ErrorType:     classified.ErrorType,
+				Error:         err,
+				Success:       false,
+				Persistent:    classified.Persistent,
+				UpstreamStatus: upstreamStatusOf(err),
 			})
 
 			if classified.ErrorType == "" {
@@ -348,8 +370,9 @@ func (e *FallbackEngine) ExecuteStream(
 
 		// Stream connection succeeded
 		result.Attempts = append(result.Attempts, FallbackAttempt{
-			ProviderName: name,
-			Success:      true,
+			ProviderName:  name,
+			ProviderModel: model,
+			Success:       true,
 		})
 		result.StreamCh = ch
 		result.Route = route

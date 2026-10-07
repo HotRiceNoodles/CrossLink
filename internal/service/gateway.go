@@ -130,7 +130,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)
 		if route != nil {
-			return nil, &RouteError{Route: route, Inner: result.FinalError, Model: req.Model, FallbackCount: result.FallbackCount, RetryCount: totalRetries}
+			return nil, &RouteError{Route: route, Inner: result.FinalError, Model: req.Model, FallbackCount: result.FallbackCount, RetryCount: totalRetries, Attempts: result.Attempts}
 		}
 		return nil, fmt.Errorf("all providers failed for model %s: %w", req.Model, result.FinalError)
 	}
@@ -269,7 +269,7 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)
 		if route != nil {
-			return nil, &RouteError{Route: route, Inner: result.FinalError, Model: req.Model, FallbackCount: result.FallbackCount, RetryCount: totalRetries}
+			return nil, &RouteError{Route: route, Inner: result.FinalError, Model: req.Model, FallbackCount: result.FallbackCount, RetryCount: totalRetries, Attempts: result.Attempts}
 		}
 		return nil, fmt.Errorf("all providers failed for model %s: %w", req.Model, result.FinalError)
 	}
@@ -382,6 +382,9 @@ type RouteError struct {
 	Model         string
 	FallbackCount int
 	RetryCount    int
+	// Attempts is the per-provider attempt timeline from the fallback engine,
+	// persisted in the usage log (error observability L2).
+	Attempts []FallbackAttempt
 }
 
 func (e *RouteError) Error() string {
