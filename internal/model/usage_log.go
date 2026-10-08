@@ -29,6 +29,12 @@ type UsageLog struct {
 	ErrorMessage      *string    `gorm:"type:text" json:"error_message,omitempty"`
 	UpstreamStatus    *int       `gorm:"default:null" json:"upstream_status,omitempty"`
 	UpstreamErrorCode *string    `gorm:"size:64" json:"upstream_error_code,omitempty"`
+	// Error observability L1.5: upstream error.type/param plus the gateway
+	// stage the request died at (request | resolve | translate | upstream |
+	// internal) — answers "which field was rejected" and "which stage failed".
+	UpstreamErrorType  *string    `gorm:"size:64" json:"upstream_error_type,omitempty"`
+	UpstreamErrorParam *string    `gorm:"size:128" json:"upstream_error_param,omitempty"`
+	ErrorStage         *string    `gorm:"size:16" json:"error_stage,omitempty"`
 	// Attempts is the fallback timeline [{provider, model, error_type,
 	// upstream_status, latency_ms, success, persistent}]; NULL when the first
 	// attempt succeeded cleanly (error observability L2).

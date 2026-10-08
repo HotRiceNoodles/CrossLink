@@ -104,6 +104,11 @@ type UsageEntry struct {
 	ErrorMessage      string
 	UpstreamStatus    int
 	UpstreamErrorCode string
+	// Error observability L1.5: upstream error.type/param and the gateway
+	// stage the request died at.
+	UpstreamErrorType  string
+	UpstreamErrorParam string
+	ErrorStage         string
 	// Attempts is the serialized fallback timeline; nil on clean single-attempt
 	// successes (error observability L2).
 	Attempts datatypes.JSON
@@ -208,6 +213,15 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 	}
 	if entry.UpstreamErrorCode != "" {
 		log.UpstreamErrorCode = &entry.UpstreamErrorCode
+	}
+	if entry.UpstreamErrorType != "" {
+		log.UpstreamErrorType = &entry.UpstreamErrorType
+	}
+	if entry.UpstreamErrorParam != "" {
+		log.UpstreamErrorParam = &entry.UpstreamErrorParam
+	}
+	if entry.ErrorStage != "" {
+		log.ErrorStage = &entry.ErrorStage
 	}
 	if len(entry.Attempts) > 0 {
 		log.Attempts = entry.Attempts
