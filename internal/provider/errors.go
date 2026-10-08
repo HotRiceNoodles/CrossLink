@@ -32,7 +32,11 @@ type ProviderError struct {
 	ErrorType  ErrorType
 	Code       string
 	Type       string
-	RetryAfter time.Duration
+	// Param is the upstream error.param (OpenAI convention): the request
+	// field the upstream rejected, e.g. "max_tokens". The most direct
+	// locator for diagnosing a 400 (error observability L1.5).
+	Param       string
+	RetryAfter  time.Duration
 }
 
 func (e *ProviderError) Error() string {
@@ -47,6 +51,7 @@ func parseProviderError(resp *http.Response) error {
 			Message string `json:"message"`
 			Type    string `json:"type"`
 			Code    string `json:"code"`
+			Param   string `json:"param"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &errResp)
@@ -82,6 +87,7 @@ func parseProviderError(resp *http.Response) error {
 		ErrorType:  et,
 		Code:       errResp.Error.Code,
 		Type:       errResp.Error.Type,
+		Param:      errResp.Error.Param,
 	}
 
 	// Parse Retry-After header (rate-limit, 503, and other retryable errors)
