@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -155,29 +157,55 @@ func TestGatewayErrorStatus(t *testing.T) {
 	}
 }
 
-func TestProviderErrorDetail(t *testing.T) {
-	t.Run("provider error carries upstream fields", func(t *testing.T) {
-		pe := &provider.ProviderError{StatusCode: 400, Message: "provider bad request: Invalid model ID org-abc123456", Code: "model_not_found"}
-		msg, status, code := providerErrorDetail(pe)
-		if msg != "provider bad request: Invalid model ID [REDACTED]" {
-			t.Errorf("msg = %q, want redacted org ID", msg)
+func TestErrorInfo(t *testing.T) {
+	t.Run("provider error carries upstream fields and stage", func(t *testing.T) {
+		pe := &provider.ProviderError{
+			StatusCode: 400, Message: "provider bad request: Invalid value org-abc123456",
+			Code: "model_not_found", Type: "invalid_request_error", Param: "max_tokens",
 		}
-		if status != 400 {
-			t.Errorf("status = %d, want 400", status)
+		d := errorInfo(pe)
+		if d.Message != "provider bad request: Invalid value [REDACTED]" {
+			t.Errorf("Message = %q, want redacted org ID", d.Message)
 		}
-		if code != "model_not_found" {
-			t.Errorf("code = %q, want model_not_found", code)
+		if d.UpstreamStatus != 400 || d.Code != "model_not_found" || d.Type != "invalid_request_error" || d.Param != "max_tokens" {
+			t.Errorf("upstream fields = %+v", d)
 		}
-	})
-	t.Run("gateway-side rejection has no upstream status", func(t *testing.T) {
-		msg, status, code := providerErrorDetail(errors.New("missing messages"))
-		if msg != "missing messages" {
-			t.Errorf("msg = %q, want missing messages", msg)
-		}
-		if status != 0 || code != "" {
-			t.Errorf("upstream fields = %d/%q, want 0/empty", status, code)
+		if d.Stage != "upstream" {
+			t.Errorf("Stage = %q, want upstream", d.Stage)
 		}
 	})
+	t.Run("gateway-side rejection infers translate stage, no upstream fields", func(t *testing.T) {
+		d := errorInfo(translator.ErrMissingModel)
+		if d.Stage != "translate" {
+			t.Errorf("Stage = %q, want translate", d.Stage)
+		}
+		if d.UpstreamStatus != 0 || d.Code != "" || d.Param != "" {
+			t.Errorf("upstream fields should be empty, got %+v", d)
+		}
+	})
+	t.Run("unknown error falls to internal stage", func(t *testing.T) {
+		if d := errorInfo(errors.New("boom")); d.Stage != "internal" {
+			t.Errorf("Stage = %q, want internal", d.Stage)
+		}
+	})
+}
+
+func TestSanitizeMessageRuneSafe(t *testing.T) {
+	// 300 CJK runes: byte-length 900 > 200, rune-length 300 > 200. A byte
+	// slice would cut the last character in half and leave invalid UTF-8.
+	long := strings.Repeat("错", 300)
+	got := sanitizeProviderMessage(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("client copy is not valid UTF-8: %q", got)
+	}
+	if r := len([]rune(got)); r > 200 {
+		t.Errorf("client copy = %d runes, want <= 200", r)
+	}
+	// Storage copy keeps more of the original.
+	gotLog := sanitizeMessageForLog(long)
+	if r := len([]rune(gotLog)); r != 300 {
+		t.Errorf("storage copy = %d runes, want 300 (under limit)", r)
+	}
 }
 
 func TestAttemptsJSON(t *testing.T) {

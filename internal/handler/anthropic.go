@@ -98,10 +98,10 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 		fallbackCount = routeErr.FallbackCount
 		retryCount = routeErr.RetryCount
 	}
-	// Error observability L1: persist the sanitized upstream message and
-	// status/code; 0 upstream status marks a gateway-side rejection.
-	errMsg, upstreamStatus, upstreamCode := providerErrorDetail(gatewayErr)
-	// L2: per-provider attempt timeline when the error came from routing.
+	// Error observability L1/L1.5: sanitized upstream message, status/type/
+	// code/param and the failure stage. L2: per-provider attempt timeline
+	// when the error came from routing.
+	det := errorInfo(gatewayErr)
 	var attempts datatypes.JSON
 	if routeErr != nil {
 		attempts = attemptsJSON(routeErr.Attempts)
@@ -118,10 +118,13 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 			Currency:       currency,
 			StatusCode:     statusCode,
 			ErrorType:      "provider_error",
-			ErrorMessage:      errMsg,
-			UpstreamStatus:    upstreamStatus,
-			UpstreamErrorCode: upstreamCode,
-			Attempts:          attempts,
+			ErrorMessage:       det.Message,
+			UpstreamStatus:     det.UpstreamStatus,
+			UpstreamErrorCode:  det.Code,
+			UpstreamErrorType:  det.Type,
+			UpstreamErrorParam: det.Param,
+			ErrorStage:         det.Stage,
+			Attempts:           attempts,
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  fallbackCount,
 			RetryCount:     retryCount,
@@ -149,6 +152,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		var err error
 		bodyBytes, err = io.ReadAll(io.LimitReader(c.Request.Body, 10<<20))
 		if err != nil {
+			logRequestStageError(h.usageSvc, c, "anthropic", "", http.StatusBadRequest, "invalid_request_error", "request", err.Error())
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": "request too large"}})
 			c.Abort()
 			return
@@ -157,6 +161,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "request", err.Error())
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "invalid_request_error", "message": safeProviderError(err)},
@@ -176,6 +181,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	priceMult := readPriceMultiplier(c)
 	if m, ok := h.resolver.AliasMetaLookup(c.Request.Context(), req.Model, orgID); ok {
 		if m.Modality != string(domain.ModalityText) {
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "request", "capability modality mismatch: "+m.Modality)
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": "capability modality mismatch"}})
 			return
 		}

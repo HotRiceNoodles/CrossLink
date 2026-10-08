@@ -89,10 +89,9 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 		currency = route.Currency
 		providerID = route.ProviderRow.ID
 	}
-	// Error observability L1: persist the sanitized upstream message and
-	// status/code; 0 upstream status marks a gateway-side rejection.
-	errMsg, upstreamStatus, upstreamCode := providerErrorDetail(result.FinalError)
-	// L2: per-provider attempt timeline.
+	// Error observability L1/L1.5: sanitized upstream message, status/type/
+	// code/param and the failure stage. L2: per-provider attempt timeline.
+	det := errorInfo(result.FinalError)
 	attempts := attemptsJSON(result.Attempts)
 	c.Set("usage_logged", true)
 	submitUsage(func() {
@@ -106,10 +105,13 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			Currency:       currency,
 			StatusCode:     statusCode,
 			ErrorType:      "provider_error",
-			ErrorMessage:      errMsg,
-			UpstreamStatus:    upstreamStatus,
-			UpstreamErrorCode: upstreamCode,
-			Attempts:          attempts,
+			ErrorMessage:       det.Message,
+			UpstreamStatus:     det.UpstreamStatus,
+			UpstreamErrorCode:  det.Code,
+			UpstreamErrorType:  det.Type,
+			UpstreamErrorParam: det.Param,
+			ErrorStage:         det.Stage,
+			Attempts:           attempts,
 			LatencyMs:      time.Since(start).Milliseconds(),
 			FallbackCount:  result.FallbackCount,
 			RetryCount:     retryCount,
@@ -165,6 +167,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 
 	var req domain.OpenAIRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		logRequestStageError(h.usageSvc, c, "openai", req.Model, http.StatusBadRequest, "invalid_request_error", "request", err.Error())
 		c.JSON(http.StatusBadRequest, gin.H{"error": map[string]string{"message": "invalid json"}})
 		return
 	}
@@ -178,6 +181,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	// Modality guard: a capability alias must match this endpoint's modality.
 	if m, ok := h.resolver.AliasMetaLookup(c.Request.Context(), req.Model, orgID); ok {
 		if m.Modality != string(domain.ModalityText) {
+			logRequestStageError(h.usageSvc, c, "openai", req.Model, http.StatusBadRequest, "invalid_request_error", "request", "capability modality mismatch: "+m.Modality)
 			c.JSON(http.StatusBadRequest, gin.H{"error": map[string]string{"message": "capability modality mismatch"}})
 			return
 		}
@@ -186,6 +190,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 
 	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
+		logRequestStageError(h.usageSvc, c, "openai", req.Model, resolveErrorStatus(err), "resolve_error", "resolve", err.Error())
 		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": safeProviderError(err)}})
 		return
 	}

@@ -1,18 +1,22 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 
+	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/translator"
 )
 
 // resolveErrorStatus maps a Resolver error to an HTTP status. Alias-on-Community
@@ -64,16 +68,41 @@ func safeProviderError(err error) string {
 	return "upstream provider error"
 }
 
-// providerErrorDetail extracts the sanitized error text plus the upstream
-// status/code for usage-log persistence (error observability L1). For
-// non-provider errors (gateway-side rejections) upstreamStatus is 0, which is
-// stored as NULL to distinguish them from upstream rejections.
-func providerErrorDetail(err error) (msg string, upstreamStatus int, upstreamCode string) {
+// errorDetail is everything the usage log needs to diagnose one failure
+// (error observability L1.5).
+type errorDetail struct {
+	Message        string // sanitized, storage-width (1000 runes)
+	UpstreamStatus int    // 0 = gateway-side rejection, stored as NULL
+	Code           string // upstream error.code
+	Type           string // upstream error.type (e.g. invalid_request_error)
+	Param          string // upstream error.param — the rejected request field
+	Stage          string // request | resolve | translate | upstream | internal
+}
+
+// errorInfo classifies a gateway error for the usage log. Stage says WHERE the
+// request died; the upstream fields say what the provider said when it did.
+func errorInfo(err error) errorDetail {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) {
-		return sanitizeProviderMessage(pe.Message), pe.StatusCode, pe.Code
+		return errorDetail{
+			Message:        sanitizeMessageForLog(pe.Message),
+			UpstreamStatus: pe.StatusCode,
+			Code:           pe.Code,
+			Type:           pe.Type,
+			Param:          pe.Param,
+			Stage:          "upstream",
+		}
 	}
-	return sanitizeProviderMessage(err.Error()), 0, ""
+	stage := "internal"
+	switch {
+	case errors.Is(err, translator.ErrMissingModel),
+		errors.Is(err, translator.ErrMissingMessages),
+		errors.Is(err, translator.ErrMissingMaxTokens):
+		stage = "translate"
+	case errors.Is(err, router.ErrProRequired):
+		stage = "resolve"
+	}
+	return errorDetail{Message: sanitizeMessageForLog(err.Error()), Stage: stage}
 }
 
 // attemptRecord is the persisted shape of one fallback attempt. The error
@@ -116,10 +145,30 @@ func attemptsJSON(attempts []service.FallbackAttempt) datatypes.JSON {
 }
 
 // sanitizeProviderMessage truncates provider error messages and strips
-// common sensitive patterns like org-xxx account identifiers.
+// common sensitive patterns like org-xxx account identifiers. Client-facing
+// width: 200.
 func sanitizeProviderMessage(msg string) string {
-	if len(msg) > 200 {
-		msg = msg[:200]
+	return sanitizeMessage(msg, clientMessageLimit)
+}
+
+// sanitizeMessageForLog is the storage-width variant: the usage-log copy is
+// admin-only, so it keeps up to 1000 runes (error observability L1.5 — the
+// locator details often sit at the end of long upstream JSON errors).
+func sanitizeMessageForLog(msg string) string {
+	return sanitizeMessage(msg, storageMessageLimit)
+}
+
+const (
+	clientMessageLimit  = 200
+	storageMessageLimit = 1000
+)
+
+// sanitizeMessage truncates at a rune boundary (a plain byte slice would cut
+// multi-byte CJK characters in half and leave mojibake) and strips common
+// account/org ID patterns (e.g. org-abc123, org_abc123).
+func sanitizeMessage(msg string, limit int) string {
+	if runes := []rune(msg); len(runes) > limit {
+		msg = string(runes[:limit])
 	}
 	// Strip common account/org ID patterns (e.g. org-abc123, org_abc123)
 	msg = regexpOrgID.ReplaceAllString(msg, "[REDACTED]")
@@ -127,3 +176,37 @@ func sanitizeProviderMessage(msg string) string {
 }
 
 var regexpOrgID = regexp.MustCompile(`(?i)\borg[_-][a-zA-Z0-9]{4,}\b`)
+
+// logRequestStageError records a usage row for rejections that return before
+// routing (parse / modality / resolve). These previously left no trace in the
+// logs at all — a blind spot when counting 4xx (error observability L1.5).
+func logRequestStageError(usageSvc *service.UsageService, c *gin.Context, routeType, model string, statusCode int, errorType, stage, message string) {
+	if usageSvc == nil {
+		return
+	}
+	start := time.Now()
+	var keyID int64
+	var teamID int64
+	orgID := c.GetInt64("org_id")
+	if key := middleware.GetAPIKeyFromContext(c); key != nil {
+		keyID = key.ID
+		if key.TeamID != nil {
+			teamID = *key.TeamID
+		}
+	}
+	c.Set("usage_logged", true)
+	submitUsage(func() {
+		usageSvc.Log(context.Background(), &service.UsageEntry{
+			RouteType:      routeType,
+			ModelRequested: model,
+			APIKeyID:       keyID,
+			TeamID:         teamID,
+			OrgID:          orgID,
+			StatusCode:     statusCode,
+			ErrorType:      errorType,
+			ErrorMessage:   sanitizeMessageForLog(message),
+			ErrorStage:     stage,
+			LatencyMs:      time.Since(start).Milliseconds(),
+		})
+	})
+}
