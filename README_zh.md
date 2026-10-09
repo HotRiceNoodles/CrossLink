@@ -465,6 +465,8 @@ CrossLink 正在快速迭代，当前重点：
   <a href="https://github.com/HotRiceNoodles"><img src="https://github.com/HotRiceNoodles.png" width="80px" alt="HotRiceNoodles" style="border-radius:50%"/></a>
   &nbsp;&nbsp;
   <a href="https://github.com/jinghunsanzu"><img src="https://github.com/jinghunsanzu.png" width="80px" alt="jinghunsanzu" style="border-radius:50%"/></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/ahfkfdkhdkfka-afk"><img src="https://github.com/ahfkfdkhdkfka-afk.png" width="80px" alt="ahfkfdkhdkfka-afk" style="border-radius:50%"/></a>
 </p>
 
 ### 开发
