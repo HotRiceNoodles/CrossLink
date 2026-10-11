@@ -17,8 +17,8 @@ import (
 type ApplyReport struct {
 	DryRun  bool
 	Created struct {
-		Providers int
-		Models    int
+		Providers  int
+		Models     int
 		ErrorRules int
 	}
 	Skipped []SkippedEntry
@@ -91,7 +91,12 @@ func ApplyBundle(db *gorm.DB, encStore *secret.EncryptedDBStore, bundle *ExportB
 			providerIDByName[pe.Name] = p.ID
 		}
 		report.Created.Providers++
-		providerIDByName[pe.Name] = providerIDByName[pe.Name] // dry-run: id stays 0, models will lookup-fail gracefully
+		if dryRun {
+			// Nothing was persisted, so the id stays 0 — but the name must be
+			// registered so the model pass counts its models as would-create
+			// instead of erroring "provider not found".
+			providerIDByName[pe.Name] = 0
+		}
 	}
 
 	// 2) Models — resolve provider_id by name, soft-dedup on (provider_id, model_name).

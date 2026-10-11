@@ -169,3 +169,36 @@ func TestApplyDryRun(t *testing.T) {
 	dst.Model(&model.Provider{}).Count(&cnt)
 	assert.EqualValues(t, 0, cnt, "dry-run must not write to DB")
 }
+
+func TestApplyDryRunWithModels(t *testing.T) {
+	src := setupConfigioDB(t)
+	require.NoError(t, src.Create(&model.Provider{
+		Name: "p", DisplayName: "P", AdapterType: "openai_compatible",
+		BaseURL: "https://x", APIKey: "sk-plain", Status: 1,
+	}).Error)
+	var pid int64
+	src.Model(&model.Provider{}).Where("name = ?", "p").Pluck("id", &pid)
+	for _, name := range []string{"m1", "m2"} {
+		require.NoError(t, src.Create(&model.ProviderModel{
+			ProviderID: pid, ModelName: name, ProviderModel: name,
+			Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+		}).Error)
+	}
+	bundle, _, err := BuildBundle(src, nil)
+	require.NoError(t, err)
+
+	dst := setupConfigioDB(t)
+	report, err := ApplyBundle(dst, nil, bundle, true)
+	require.NoError(t, err)
+	assert.True(t, report.DryRun)
+	assert.Equal(t, 1, report.Created.Providers)
+	// New providers are registered in the name map with a zero id during
+	// dry-run, so their models count as would-create — no lookup errors.
+	assert.Equal(t, 2, report.Created.Models)
+	assert.Empty(t, report.Errors)
+	assert.Empty(t, report.Skipped)
+
+	var cnt int64
+	dst.Model(&model.ProviderModel{}).Count(&cnt)
+	assert.EqualValues(t, 0, cnt, "dry-run must not write to DB")
+}
