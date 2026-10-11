@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration test-integration-oceanbase lint clean release release-snapshot changelog
+.PHONY: build run test test-integration test-integration-oceanbase lint fmt fmt-check clean release release-snapshot changelog
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -30,6 +30,12 @@ test-integration-oceanbase:
 
 lint:
 	golangci-lint run
+
+fmt:
+	gofmt -w .
+
+fmt-check:
+	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "not gofmt-clean:"; echo "$$unformatted"; exit 1; fi
 
 clean:
 	rm -rf bin/ build/
