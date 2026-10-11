@@ -7,11 +7,19 @@ import (
 	"gorm.io/gorm"
 )
 
+// KeySource values for APIKey.KeySource.
+const (
+	KeySourceNative   = "native"   // gateway-generated cl- key
+	KeySourceImported = "imported" // equal-value vendor key (transitional, see docs/plans/2026-10-11-zero-key-migration.md)
+)
+
 type APIKey struct {
 	ID              int64          `gorm:"primaryKey" json:"id"`
 	Name            string         `gorm:"size:128;not null" json:"name"`
 	KeyHash         string         `gorm:"size:64;uniqueIndex;not null" json:"-"`
 	KeyPrefix       string         `gorm:"size:8;not null" json:"key_prefix"`
+	KeySource       string         `gorm:"size:16;not null;default:'native'" json:"key_source"`
+	SourceVendor    string         `gorm:"size:32;not null;default:''" json:"source_vendor"`
 	Status          int16          `gorm:"not null;default:1" json:"status"`
 	AllowedModels   datatypes.JSON `json:"allowed_models"`
 	AllowedRoutes   datatypes.JSON `json:"allowed_routes"`

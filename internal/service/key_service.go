@@ -51,12 +51,15 @@ type CreateKeyInput struct {
 	CreatedByID     int64
 	TeamID          int64
 	OrgID           int64
+	RawKey          string // non-empty = register an existing vendor key as-is (equal-value key)
+	Vendor          string // source vendor for imported keys (openai/anthropic/gemini/azure/other)
 }
 
 type CreateKeyResult struct {
 	APIKey    string // plaintext, shown only once
 	KeyPrefix string
 	KeyHash   string
+	ID        int64
 }
 
 type RotateResult struct {
@@ -65,9 +68,15 @@ type RotateResult struct {
 }
 
 func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*CreateKeyResult, error) {
-	rawKey, err := generateRawKey()
-	if err != nil {
-		return nil, fmt.Errorf("generate key: %w", err)
+	rawKey := input.RawKey
+	if rawKey == "" {
+		generated, err := generateRawKey()
+		if err != nil {
+			return nil, fmt.Errorf("generate key: %w", err)
+		}
+		rawKey = generated
+	} else if err := ValidateImportedKey(rawKey); err != nil {
+		return nil, fmt.Errorf("invalid imported key: %w", err)
 	}
 	keyHash := s.crypto.HashHex([]byte(rawKey))
 	prefix := rawKey[:7]
@@ -85,6 +94,10 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 		CallPeriod:      input.CallPeriod,
 		ExpiresAt:       input.ExpiresAt,
 		PriceMultiplier: multOrDefault(input.PriceMultiplier),
+	}
+	if input.RawKey != "" {
+		key.KeySource = model.KeySourceImported
+		key.SourceVendor = input.Vendor
 	}
 	if len(input.AllowedModels) > 0 {
 		key.AllowedModels, _ = json.Marshal(input.AllowedModels)
@@ -112,7 +125,7 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 		IsPrimary: true,
 	}
 
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(key).Error; err != nil {
 			return fmt.Errorf("create api key: %w", err)
 		}
@@ -130,6 +143,7 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 		APIKey:    rawKey,
 		KeyPrefix: prefix,
 		KeyHash:   keyHash,
+		ID:        key.ID,
 	}, nil
 }
 
@@ -297,10 +311,17 @@ func (s *KeyService) Rotate(ctx context.Context, apiKeyID int64, gracePeriod tim
 			return fmt.Errorf("create new hash: %w", err)
 		}
 
-		if err := tx.Model(key).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"key_hash":   keyHash,
 			"key_prefix": prefix,
-		}).Error; err != nil {
+		}
+		if key.KeySource == model.KeySourceImported {
+			// Imported (equal-value) keys must not linger in the transitional
+			// state after rotation — flip back to native in the same transaction.
+			updates["key_source"] = model.KeySourceNative
+			updates["source_vendor"] = ""
+		}
+		if err := tx.Model(key).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update key: %w", err)
 		}
 
@@ -339,6 +360,151 @@ func (s *KeyService) Regenerate(ctx context.Context, id int64) (*CreateKeyResult
 
 func (s *KeyService) ListHashes(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error) {
 	return s.hashRepo.ListByAPIKeyID(ctx, apiKeyID)
+}
+
+// Import registers existing vendor keys as gateway keys as-is (equal-value
+// keys, docs/plans/2026-10-11-zero-key-migration.md). Each item is processed
+// independently; a failing item never blocks the rest.
+type ImportKeyItem struct {
+	Key           string   `json:"key"`
+	Name          string   `json:"name"`
+	Vendor        string   `json:"vendor"`
+	TeamID        int64    `json:"team_id"`
+	AllowedModels []string `json:"allowed_models"`
+}
+
+type ImportKeysInput struct {
+	Items       []ImportKeyItem
+	CreatedByID int64
+	OrgID       int64
+}
+
+// Per-item import result statuses.
+const (
+	ImportStatusCreated      = "created"
+	ImportStatusDuplicate    = "duplicate"
+	ImportStatusInvalid      = "invalid"
+	ImportStatusModelMissing = "model_not_found"
+	ImportStatusFailed       = "failed"
+)
+
+type ImportKeyResult struct {
+	Index          int      `json:"index"`
+	Name           string   `json:"name,omitempty"`
+	Status         string   `json:"status"`
+	KeyPrefix      string   `json:"key_prefix,omitempty"`
+	KeyID          int64    `json:"key_id,omitempty"`
+	ExistingKeyID  int64    `json:"existing_key_id,omitempty"`
+	Reason         string   `json:"reason,omitempty"`
+	MissingModels  []string `json:"missing_models,omitempty"`
+}
+
+var validImportVendors = map[string]bool{
+	"openai": true, "anthropic": true, "gemini": true, "azure": true, "other": true,
+}
+
+// ValidateImportedKey enforces the floor validation for imported raw keys:
+// 16-200 printable ASCII chars, no spaces. (Gateway cl- keys are 51 chars.)
+func ValidateImportedKey(rawKey string) error {
+	if len(rawKey) < 16 {
+		return errors.New("key too short (min 16 chars)")
+	}
+	if len(rawKey) > 200 {
+		return errors.New("key too long (max 200 chars)")
+	}
+	for i := 0; i < len(rawKey); i++ {
+		if rawKey[i] < 0x21 || rawKey[i] > 0x7E {
+			return errors.New("key contains non-printable or non-ASCII characters")
+		}
+	}
+	return nil
+}
+
+func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []ImportKeyResult {
+	results := make([]ImportKeyResult, 0, len(input.Items))
+	for i, item := range input.Items {
+		res := ImportKeyResult{Index: i}
+		if !validImportVendors[item.Vendor] {
+			res.Status = ImportStatusInvalid
+			res.Reason = "vendor must be one of openai, anthropic, gemini, azure, other"
+			results = append(results, res)
+			continue
+		}
+		if err := ValidateImportedKey(item.Key); err != nil {
+			res.Status = ImportStatusInvalid
+			res.Reason = err.Error()
+			results = append(results, res)
+			continue
+		}
+		// Duplicate pre-check: registering the same string twice is almost
+		// certainly a re-run of the migration wizard, not a new key.
+		keyHash := s.crypto.HashHex([]byte(item.Key))
+		if existing, err := s.hashRepo.GetKeyByHash(ctx, keyHash); err == nil {
+			res.Status = ImportStatusDuplicate
+			res.ExistingKeyID = existing.ID
+			res.Reason = "key already registered on this gateway"
+			results = append(results, res)
+			continue
+		} else if !errors.Is(err, repository.ErrHashNotFound) {
+			res.Status = ImportStatusFailed
+			res.Reason = "duplicate check failed"
+			results = append(results, res)
+			continue
+		}
+		name := item.Name
+		if name == "" {
+			name = fmt.Sprintf("imported-%s-%s", item.Vendor, item.Key[:7])
+		}
+		res.Name = name
+		// Optional model allowlist: verify every selected model exists in the
+		// registry so the imported key is not dead on arrival.
+		if missing := s.missingModels(ctx, item.AllowedModels); len(missing) > 0 {
+			res.Status = ImportStatusModelMissing
+			res.MissingModels = missing
+			results = append(results, res)
+			continue
+		}
+		created, err := s.Create(ctx, &CreateKeyInput{
+			Name:          name,
+			AllowedModels: item.AllowedModels,
+			RawKey:        item.Key,
+			Vendor:        item.Vendor,
+			CreatedByID:   input.CreatedByID,
+			TeamID:        item.TeamID,
+			OrgID:         input.OrgID,
+		})
+		if err != nil {
+			res.Status = ImportStatusFailed
+			res.Reason = "create key failed"
+			results = append(results, res)
+			continue
+		}
+		res.Status = ImportStatusCreated
+		res.KeyPrefix = created.KeyPrefix
+		res.KeyID = created.ID
+		results = append(results, res)
+	}
+	return results
+}
+
+// missingModels returns the subset of names with no active provider_models row.
+// Best-effort: a lookup error does not block the import.
+func (s *KeyService) missingModels(ctx context.Context, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	var missing []string
+	for _, name := range names {
+		var count int64
+		if err := s.db.WithContext(ctx).Table("provider_models").
+			Where("model_name = ? AND status = 1", name).Count(&count).Error; err != nil {
+			continue
+		}
+		if count == 0 {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // GenerateRawKey produces a new random API key string (cl-<48 hex chars>).
