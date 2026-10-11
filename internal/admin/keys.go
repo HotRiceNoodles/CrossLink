@@ -369,6 +369,58 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 	})
 }
 
+// Import registers existing vendor keys as gateway keys as-is (equal-value
+// keys) so migrating apps only change base_url. Batch endpoint: every item is
+// processed independently and reported per-item.
+//
+// Audit red line: the plaintext vendor key must never reach the audit log —
+// only name/prefix/vendor/status are recorded.
+func (h *KeyHandler) Import(c *gin.Context) {
+	var input struct {
+		Keys []service.ImportKeyItem `json:"keys" binding:"required,min=1,max=100,dive"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
+	}
+
+	results := h.keySvc.Import(c.Request.Context(), &service.ImportKeysInput{
+		Items:       input.Keys,
+		CreatedByID: GetUserID(c),
+		OrgID:       GetOrgID(c),
+	})
+
+	created := 0
+	detail := make([]map[string]any, 0, len(results))
+	for _, r := range results {
+		item := map[string]any{"index": r.Index, "status": r.Status}
+		if r.Status == service.ImportStatusCreated {
+			created++
+			item["name"] = r.Name
+			item["key_prefix"] = r.KeyPrefix
+		} else if r.Reason != "" {
+			item["reason"] = r.Reason
+		}
+		if len(r.MissingModels) > 0 {
+			item["missing_models"] = r.MissingModels
+		}
+		detail = append(detail, item)
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "key:import", "key", "", "", service.AuditDetail(map[string]any{
+			"total":   len(results),
+			"created": created,
+			"items":   detail,
+		}))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"created": created,
+		"results": results,
+	}})
+}
+
 func isValidPeriod(p string) bool {
 	return p == "daily" || p == "weekly" || p == "monthly"
 }

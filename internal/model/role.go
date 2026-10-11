@@ -29,6 +29,7 @@ var ValidActions = map[string]bool{
 	"key:update":                  true,
 	"key:delete":                  true,
 	"key:regenerate":              true,
+	"key:import":                  true,
 	"key:rotate":                  true,
 	"key:hashes":                  true,
 	"team:list":                   true,

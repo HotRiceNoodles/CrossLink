@@ -54,6 +54,7 @@ type KeyService interface {
 	Delete(ctx context.Context, id int64) error
 	Rotate(ctx context.Context, apiKeyID int64, gracePeriod time.Duration) (*service.RotateResult, error)
 	Regenerate(ctx context.Context, id int64) (*service.CreateKeyResult, error)
+	Import(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult
 	ListHashes(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error)
 }
 

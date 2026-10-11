@@ -38,6 +38,7 @@ type mockKeySvc struct {
 	deleteFn        func(ctx context.Context, id int64) error
 	rotateFn        func(ctx context.Context, apiKeyID int64, gracePeriod time.Duration) (*service.RotateResult, error)
 	regenerateFn    func(ctx context.Context, id int64) (*service.CreateKeyResult, error)
+	importFn        func(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult
 	listHashesFn    func(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error)
 }
 
@@ -75,6 +76,10 @@ func (m *mockKeySvc) Rotate(ctx context.Context, apiKeyID int64, gracePeriod tim
 
 func (m *mockKeySvc) Regenerate(ctx context.Context, id int64) (*service.CreateKeyResult, error) {
 	return m.regenerateFn(ctx, id)
+}
+
+func (m *mockKeySvc) Import(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult {
+	return m.importFn(ctx, input)
 }
 
 func (m *mockKeySvc) ListHashes(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error) {

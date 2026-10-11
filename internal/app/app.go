@@ -468,6 +468,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.PUT("/keys/:id", middleware.RequireAction(permCache, "key:update"), handlers.Key.Update)
 		adminGroup.DELETE("/keys/:id", middleware.RequireAction(permCache, "key:delete"), handlers.Key.Delete)
 		adminGroup.POST("/keys/:id/regenerate", middleware.RequireAction(permCache, "key:regenerate"), handlers.Key.Regenerate)
+		adminGroup.POST("/keys/import", middleware.RequireAction(permCache, "key:import"), handlers.Key.Import)
 
 		// Usage
 		adminGroup.GET("/usage", middleware.RequireAction(permCache, "usage:list"), handlers.Usage.List)

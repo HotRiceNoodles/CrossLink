@@ -18,6 +18,7 @@ var communityActions = map[string]bool{
 	"key:update":        true,
 	"key:delete":        true,
 	"key:regenerate":    true,
+	"key:import":        true,
 	"usage:list":        true,
 	"usage:stats":       true,
 	"routing:stats":     true,

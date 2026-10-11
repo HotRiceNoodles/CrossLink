@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,9 @@ func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 		regenerateFn: func(ctx context.Context, id int64) (*service.CreateKeyResult, error) {
 			return &service.CreateKeyResult{APIKey: "cl-regen", KeyPrefix: "cl-re"}, nil
 		},
+		importFn: func(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult {
+			return nil
+		},
 		listHashesFn: func(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error) {
 			return nil, nil
 		},
@@ -76,6 +80,73 @@ func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 }
 
 // --- Create tests ---
+
+// --- Import tests ---
+
+func TestKeyHandler_Import_PerItemResultsAndPlaintextNotInResponse(t *testing.T) {
+	keySvc, _ := defaultKeyMocks()
+	keySvc.importFn = func(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult {
+		return []service.ImportKeyResult{
+			{Index: 0, Name: "app-1", Status: service.ImportStatusCreated, KeyPrefix: "sk-abc", KeyID: 11},
+			{Index: 1, Status: service.ImportStatusDuplicate, ExistingKeyID: 11, Reason: "key already registered on this gateway"},
+			{Index: 2, Status: service.ImportStatusInvalid, Reason: "key too short (min 16 chars)"},
+		}
+	}
+	h := newKeyHandler(keySvc, nil)
+
+	body := map[string]any{
+		"keys": []map[string]any{
+			{"key": "sk-vendor-key-aaaaaaaaaa", "vendor": "openai", "name": "app-1"},
+			{"key": "sk-vendor-key-aaaaaaaaaa", "vendor": "openai"},
+			{"key": "sk-short", "vendor": "openai"},
+		},
+	}
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/keys/import", body)
+	setAdminContext(c, 1, 1, "admin")
+
+	h.Import(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data struct {
+			Created int                        `json:"created"`
+			Results []service.ImportKeyResult  `json:"results"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if resp.Data.Created != 1 {
+		t.Errorf("created = %d, want 1", resp.Data.Created)
+	}
+	if len(resp.Data.Results) != 3 {
+		t.Fatalf("results len = %d, want 3", len(resp.Data.Results))
+	}
+	if resp.Data.Results[0].Status != service.ImportStatusCreated {
+		t.Errorf("results[0].status = %s, want created", resp.Data.Results[0].Status)
+	}
+	if resp.Data.Results[1].Status != service.ImportStatusDuplicate {
+		t.Errorf("results[1].status = %s, want duplicate", resp.Data.Results[1].Status)
+	}
+	// Plaintext keys must never be echoed back in the result payload.
+	if s := w.Body.String(); strings.Contains(s, "sk-vendor-key-aaaaaaaaaa") {
+		t.Errorf("response body leaks plaintext key: %s", w.Body.String())
+	}
+}
+
+func TestKeyHandler_Import_EmptyBatchRejected(t *testing.T) {
+	keySvc, _ := defaultKeyMocks()
+	h := newKeyHandler(keySvc, nil)
+
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/keys/import", map[string]any{"keys": []map[string]any{}})
+	setAdminContext(c, 1, 1, "admin")
+
+	h.Import(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
 
 func TestKeyHandler_Create_InvalidBudgetPeriod(t *testing.T) {
 	keySvc, _ := defaultKeyMocks()
