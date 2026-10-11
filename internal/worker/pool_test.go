@@ -55,9 +55,23 @@ func TestPool_QueueFullRunsViaOverflow(t *testing.T) {
 	defer cancel()
 	defer p.Shutdown(ctx)
 
+	// Occupy the worker, waiting for proof it has STARTED before filling the
+	// queue — otherwise the filler submit may take the overflow path (queue
+	// still holds task 1) and the queue slot frees up for the probe task,
+	// which then waits forever behind the blocked worker.
+	started := make(chan struct{})
 	block := make(chan struct{})
-	p.Submit(func() { <-block }) // occupies the worker
-	p.Submit(func() {})          // fills the queue
+	p.Submit(func() {
+		close(started)
+		<-block
+	})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first task never started; worker not running")
+	}
+
+	p.Submit(func() {}) // fills the queue (worker provably occupied)
 
 	// Queue full — this must run via the overflow allowance, not drop.
 	ran := make(chan struct{})
