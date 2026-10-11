@@ -215,17 +215,77 @@ func TestStreamTranslator_MultipleToolCallsStreaming(t *testing.T) {
 	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a.go\"}"}}]},"finish_reason":null}]}`))
 	assert.Equal(t, []string{"content_block_delta"}, eventTypes(events))
 
-	// Second tool call starts — first should auto-close
+	// Second tool call header arrives while tool 0's block is open — its block
+	// is deferred (Anthropic blocks are strictly sequential and tool 0's args
+	// may still arrive), so no events are emitted yet.
 	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}`))
-	assert.Equal(t, []string{"content_block_stop", "content_block_start"}, eventTypes(events))
+	assert.Empty(t, eventTypes(events))
 
-	// Second tool args
+	// Second tool args buffer until the block can be opened in order
 	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"path\":\"b.go\"}"}}]},"finish_reason":null}]}`))
-	assert.Equal(t, []string{"content_block_delta"}, eventTypes(events))
+	assert.Empty(t, eventTypes(events))
 
-	// Finish
+	// Finish: close tool 0's block, then flush tool 1 (start + buffered args + stop)
 	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`))
-	assert.Equal(t, []string{"content_block_stop", "message_delta", "message_stop"}, eventTypes(events))
+	assert.Equal(t, []string{
+		"content_block_stop", "content_block_start", "content_block_delta",
+		"content_block_stop", "message_delta", "message_stop",
+	}, eventTypes(events))
+
+	// Tool 1's flushed arguments must be complete
+	var flushedDelta struct {
+		Index int `json:"index"`
+		Delta struct {
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+	}
+	_ = json.Unmarshal(events[2].Data, &flushedDelta)
+	assert.Equal(t, 1, flushedDelta.Index)
+	assert.Equal(t, `{"path":"b.go"}`, flushedDelta.Delta.PartialJSON)
+}
+
+// TestStreamTranslator_InterleavedParallelToolArgs locks in the fix for
+// parallel tool calls: OpenAI sends all tool headers first, then argument
+// fragments interleaved by index. Each tool's arguments must stay separate.
+func TestStreamTranslator_InterleavedParallelToolArgs(t *testing.T) {
+	st := NewStreamTranslator("msg_test", "claude-sonnet-4-20250514", 0)
+
+	// message_start
+	st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`))
+
+	// Both headers first (tool 0 opens, tool 1 defers)
+	events := st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`))
+	assert.Equal(t, []string{"content_block_start"}, eventTypes(events))
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","type":"function","function":{"name":"get_time","arguments":""}}]},"finish_reason":null}]}`))
+	assert.Empty(t, eventTypes(events))
+
+	// Interleaved argument fragments: 0a, 1a, 0b, 1b
+	// Fragments for the open block 0 stream inline; fragments for tool 1 buffer.
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"ci"}}]},"finish_reason":null}]}`))
+	assert.Equal(t, []string{"content_block_delta"}, eventTypes(events))
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"tz\":"}}]},"finish_reason":null}]}`))
+	assert.Empty(t, eventTypes(events))
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ty\":\"Beijing\"}"}}]},"finish_reason":null}]}`))
+	assert.Equal(t, []string{"content_block_delta"}, eventTypes(events))
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"UTC\"}"}}]},"finish_reason":null}]}`))
+	assert.Empty(t, eventTypes(events))
+
+	// Finish: stop 0, then tool 1's block with its complete buffered args
+	events = st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`))
+	assert.Equal(t, []string{
+		"content_block_stop", "content_block_start", "content_block_delta",
+		"content_block_stop", "message_delta", "message_stop",
+	}, eventTypes(events))
+
+	var delta0 struct {
+		Index int `json:"index"`
+		Delta struct {
+			PartialJSON string `json:"partial_json"`
+		} `json:"delta"`
+	}
+	_ = json.Unmarshal(events[2].Data, &delta0)
+	assert.Equal(t, 1, delta0.Index)
+	assert.Equal(t, `{"tz":"UTC"}`, delta0.Delta.PartialJSON)
 }
 
 func TestStreamTranslator_TextThenToolCalls(t *testing.T) {

@@ -31,10 +31,26 @@ type StreamTranslator struct {
 	// Block type tracking: "text", "thinking", or "" (no active block)
 	activeBlockType string
 
-	// Tool use tracking during streaming
-	activeToolID   string
-	activeToolName string
-	activeToolArgs strings.Builder
+	// Tool use tracking during streaming, keyed by the OpenAI tool_calls index.
+	tools         map[int]*toolStreamState
+	toolOrder     []int // first-seen order, used to flush blocks deterministically
+	activeToolIdx int   // OpenAI index of the tool whose block is open; -1 = none
+}
+
+// toolStreamState tracks one in-flight tool call. Anthropic content blocks are
+// strictly sequential (start → deltas → stop, never reopened), while OpenAI may
+// interleave argument fragments across parallel tool calls (all headers first,
+// then fragments by index). So only the currently open tool block streams its
+// deltas inline; fragments for other tools buffer here and flush in order when
+// the earlier blocks can be closed (at finish / provider disconnect).
+type toolStreamState struct {
+	id   string
+	name string
+	args strings.Builder
+
+	blockIndex int // assigned when the block is opened
+	opened     bool
+	closed     bool
 }
 
 func NewStreamTranslator(messageID, requestedModel string, inputTokens int) *StreamTranslator {
@@ -43,6 +59,7 @@ func NewStreamTranslator(messageID, requestedModel string, inputTokens int) *Str
 		messageID:      messageID,
 		requestedModel: requestedModel,
 		inputTokens:    inputTokens,
+		activeToolIdx:  -1,
 	}
 }
 
@@ -174,33 +191,45 @@ func (t *StreamTranslator) translateToolCallDelta(toolCalls []domain.OpenAIChunk
 	for _, tc := range toolCalls {
 		// New tool call starts when ID is present
 		if tc.ID != "" {
-			// Close any active content block (thinking, text, or tool_use)
-			if t.state == stateBlockActive {
-				events = append(events, t.closeActiveToolBlock()...)
-				if t.state == stateBlockActive {
-					events = append(events, contentBlockStop(t.blockIndex))
-					t.blockIndex++
-					t.activeBlockType = ""
-					t.state = stateStarted
-				}
+			if prev := t.tools[tc.Index]; prev != nil && prev.id == tc.ID {
+				continue // duplicate header for an already-tracked call
 			}
 
-			// Start a new tool_use content block
-			events = append(events, toolUseBlockStart(t.blockIndex, tc.ID, tc.Function.Name))
-			t.activeToolID = tc.ID
-			t.activeToolName = tc.Function.Name
-			t.activeToolArgs.Reset()
+			// Close any active text/thinking block. An open tool_use block is
+			// NOT closed here: its argument fragments may still arrive, and
+			// Anthropic blocks cannot be reopened once stopped.
+			if t.state == stateBlockActive && t.activeBlockType != "" {
+				events = append(events, contentBlockStop(t.blockIndex))
+				t.blockIndex++
+				t.activeBlockType = ""
+				t.state = stateStarted
+			}
+
+			if t.tools == nil {
+				t.tools = make(map[int]*toolStreamState)
+			}
+			t.tools[tc.Index] = &toolStreamState{id: tc.ID, name: tc.Function.Name}
+			t.toolOrder = append(t.toolOrder, tc.Index)
 			t.state = stateBlockActive
+
+			// Open the block immediately only when no other tool block is
+			// open; otherwise defer until closeActiveToolBlock flushes in order.
+			if t.activeToolIdx < 0 {
+				events = append(events, t.openToolBlock(tc.Index)...)
+			}
 		}
 
 		// Arguments delta
 		if tc.Function.Arguments != "" {
-			if t.activeToolID != "" {
-				events = append(events, toolUseArgumentsDelta(t.blockIndex, tc.Function.Arguments))
-				if t.activeToolArgs.Len() > 1<<20 { // 1MB max
-					continue
-				}
-				t.activeToolArgs.WriteString(tc.Function.Arguments)
+			tool, ok := t.tools[tc.Index]
+			if !ok {
+				continue
+			}
+			if t.activeToolIdx == tc.Index {
+				events = append(events, toolUseArgumentsDelta(tool.blockIndex, tc.Function.Arguments))
+			}
+			if tool.args.Len() <= 1<<20 { // 1MB max per tool
+				tool.args.WriteString(tc.Function.Arguments)
 			}
 		}
 	}
@@ -208,16 +237,38 @@ func (t *StreamTranslator) translateToolCallDelta(toolCalls []domain.OpenAIChunk
 	return events
 }
 
+// openToolBlock emits content_block_start for the tool and marks it active.
+func (t *StreamTranslator) openToolBlock(idx int) []domain.SSEEvent {
+	tool := t.tools[idx]
+	tool.blockIndex = t.blockIndex
+	tool.opened = true
+	t.activeToolIdx = idx
+	return []domain.SSEEvent{toolUseBlockStart(tool.blockIndex, tool.id, tool.name)}
+}
+
+// closeActiveToolBlock closes the open tool block and flushes any deferred
+// tool blocks (with their buffered arguments) in first-seen order.
 func (t *StreamTranslator) closeActiveToolBlock() []domain.SSEEvent {
-	if t.activeToolID == "" {
-		return nil
+	var events []domain.SSEEvent
+	for _, idx := range t.toolOrder {
+		tool := t.tools[idx]
+		if tool.closed {
+			continue
+		}
+		if !tool.opened {
+			events = append(events, t.openToolBlock(idx)...)
+			if args := tool.args.String(); args != "" {
+				events = append(events, toolUseArgumentsDelta(tool.blockIndex, args))
+			}
+		}
+		events = append(events, contentBlockStop(tool.blockIndex))
+		tool.closed = true
+		t.blockIndex++
 	}
-	events := []domain.SSEEvent{contentBlockStop(t.blockIndex)}
-	t.blockIndex++
-	t.activeToolID = ""
-	t.activeToolName = ""
-	t.activeToolArgs.Reset()
-	t.state = stateStarted
+	t.activeToolIdx = -1
+	if len(t.toolOrder) > 0 {
+		t.state = stateStarted
+	}
 	return events
 }
 
@@ -226,7 +277,7 @@ func (t *StreamTranslator) OnProviderDisconnect() []domain.SSEEvent {
 
 	switch t.state {
 	case stateBlockActive:
-		if t.activeToolID != "" {
+		if len(t.toolOrder) > 0 {
 			events = append(events, t.closeActiveToolBlock()...)
 		} else {
 			events = append(events, contentBlockStop(t.blockIndex))
