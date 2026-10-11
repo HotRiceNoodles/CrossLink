@@ -11,11 +11,12 @@ import (
 
 // loginCheckAndIncrScript atomically checks the current count and increments if under the limit.
 // This eliminates the TOCTOU window between GET and INCR in the previous implementation.
-// Returns the new count after increment.
+// Returns the new count after increment, or count+1 (a sentinel above the limit) when
+// the limit is already reached — so callers comparing result > max reject those requests.
 var loginCheckAndIncrScript = redis.NewScript(`
 	local count = redis.call('GET', KEYS[1])
 	if count and tonumber(count) >= tonumber(ARGV[1]) then
-		return tonumber(count)
+		return tonumber(count) + 1
 	end
 	local new_count = redis.call('INCR', KEYS[1])
 	if new_count == 1 then
