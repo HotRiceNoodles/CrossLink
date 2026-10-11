@@ -2,6 +2,7 @@ package translator
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/crosslink/internal/domain"
@@ -16,15 +17,22 @@ func OpenAIToAnthropicRequest(req *domain.OpenAIRequest) (*domain.AnthropicReque
 		switch msg.Role {
 		case "system":
 			systemParts = append(systemParts, domain.ContentText(msg.Content))
+		case "developer":
+			// Current OpenAI spec: developer is the system-role alias.
+			systemParts = append(systemParts, domain.ContentText(msg.Content))
 		case "user":
 			content, _ := json.Marshal(msg.Content)
 			msgs = append(msgs, domain.AnthropicMessage{Role: "user", Content: content})
 		case "assistant":
 			content, _ := json.Marshal(assistantToContentBlocks(msg))
 			msgs = append(msgs, domain.AnthropicMessage{Role: "assistant", Content: content})
-		case "tool":
+		case "tool", "function":
+			// "function" is the legacy OpenAI equivalent of a tool result message.
 			content, _ := json.Marshal(toolResultToContentBlocks(msg))
 			msgs = append(msgs, domain.AnthropicMessage{Role: "user", Content: content})
+		default:
+			slog.Warn("reverse translator: dropping message with unknown role",
+				"role", msg.Role)
 		}
 	}
 
