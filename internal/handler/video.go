@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -123,6 +124,17 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 			c.Data(cached.StatusCode, "application/json", cached.Body)
 			return
 		}
+		// Concurrent-duplicate guard: video task submission is the most
+		// expensive thing to accidentally run twice.
+		if !h.idemCache.TryAcquire(c.Request.Context(), apiKeyID, idemKey) {
+			c.Set("skip_call_count", true) // rejected before any upstream work
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": "idempotency key is currently in use by another request",
+			}})
+			c.Abort()
+			return
+		}
+		defer h.idemCache.Release(context.Background(), apiKeyID, idemKey)
 	}
 
 	// Resolve routes
@@ -339,7 +351,7 @@ func (h *VideoHandler) GetVideoContent(c *gin.Context) {
 	}
 
 	// Size check (500MB cap)
-	if resp.ContentLength > 500*1024*1024 {
+	if resp.ContentLength > maxVideoDownloadBytes {
 		io.Copy(io.Discard, resp.Body) // drain body
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"message": "video file too large (max 500MB)", "type": "invalid_request_error", "code": "payload_too_large"}})
 		return
@@ -355,8 +367,22 @@ func (h *VideoHandler) GetVideoContent(c *gin.Context) {
 		c.Header("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 	c.Status(http.StatusOK)
-	io.Copy(c.Writer, resp.Body)
+	if resp.ContentLength >= 0 {
+		io.Copy(c.Writer, resp.Body)
+		return
+	}
+	// Unknown length (chunked, ContentLength == -1): the upfront check above
+	// is bypassable, so enforce the cap while streaming. The 200 is already
+	// sent — past-cap transfers are truncated and logged, not errorable.
+	copied, _ := io.Copy(c.Writer, io.LimitReader(resp.Body, maxVideoDownloadBytes+1))
+	if copied > maxVideoDownloadBytes {
+		slog.Warn("video download exceeded 500MB cap (unknown length), truncated",
+			"task_id", taskID)
+	}
 }
+
+// maxVideoDownloadBytes caps video file downloads (500MB).
+const maxVideoDownloadBytes = 500 * 1024 * 1024
 
 // handleVideoError maps service errors to HTTP responses.
 func handleVideoError(c *gin.Context, err error) {
@@ -452,6 +478,10 @@ func gcd(a, b int) int {
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	// Back off to a valid UTF-8 boundary so multi-byte runes are not split.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }
