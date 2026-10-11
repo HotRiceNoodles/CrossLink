@@ -218,6 +218,18 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				c.Data(cached.StatusCode, "application/json", cached.Body)
 				return
 			}
+			// Concurrent-duplicate guard: claim the key so a second request with
+			// the same key cannot also execute while this one is in flight.
+			if !h.idemCache.TryAcquire(c.Request.Context(), idemKeyID, idemKey) {
+				c.Set("skip_call_count", true) // rejected before any upstream work
+				c.JSON(http.StatusConflict, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "invalid_request_error", "message": "idempotency key is currently in use by another request"},
+				})
+				c.Abort()
+				return
+			}
+			defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
 		}
 	}
 
@@ -397,6 +409,25 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 }
 
 func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicRequest, maxCtx *int, start time.Time, sessionID string) {
+	// Streaming responses are not replay-cached; the idempotency key is only
+	// used to prevent concurrent duplicate execution.
+	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
+		var idemKeyID int64
+		if key := middleware.GetAPIKeyFromContext(c); key != nil {
+			idemKeyID = key.ID
+		}
+		if !h.idemCache.TryAcquire(c.Request.Context(), idemKeyID, idemKey) {
+			c.Set("skip_call_count", true) // rejected before any upstream work
+			c.JSON(http.StatusConflict, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "invalid_request_error", "message": "idempotency key is currently in use by another request"},
+			})
+			c.Abort()
+			return
+		}
+		defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
+	}
+
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		slog.Error("response writer does not support flushing")
@@ -469,7 +500,10 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 							"type":  "content_block_delta",
 							"delta": map[string]any{"type": "text_delta", "text": grResult.MaskedContent},
 						})
-						fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData)
+						if _, werr := fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData); werr != nil {
+							slog.Debug("anthropic stream: write failed, stopping", "error", werr)
+							return false
+						}
 						flusher.Flush()
 						return true
 					}
@@ -478,8 +512,13 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 						"type":  "error",
 						"error": map[string]any{"type": "guardrail_blocked", "message": reason},
 					})
-					fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
-					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+					_, werr := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+					if _, werr2 := fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"); werr2 != nil {
+						werr = werr2
+					}
+					if werr != nil {
+						slog.Debug("anthropic stream: write failed, stopping", "error", werr)
+					}
 					messageStopSent = true
 					flusher.Flush()
 					return false
@@ -487,7 +526,11 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			}
 		}
 
-		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.Event, event.Data)
+		if _, werr := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.Event, event.Data); werr != nil {
+			// Client is gone (or the write failed) — stop pulling from upstream.
+			slog.Debug("anthropic stream: write failed, stopping", "error", werr)
+			return false
+		}
 		flusher.Flush()
 
 		if event.Event == "message_stop" {

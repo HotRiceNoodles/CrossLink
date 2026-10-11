@@ -286,6 +286,17 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			c.Data(cached.StatusCode, "application/json", cached.Body)
 			return
 		}
+		// Concurrent-duplicate guard: claim the key so a second request with
+		// the same key cannot also execute while this one is in flight.
+		if !h.idemCache.TryAcquire(c.Request.Context(), idemKeyID, idemKey) {
+			c.Set("skip_call_count", true) // rejected before any upstream work
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": "idempotency key is currently in use by another request",
+			}})
+			c.Abort()
+			return
+		}
+		defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
 	}
 
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
@@ -520,6 +531,25 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	orgID := c.GetInt64("org_id")
 	templateID := readTemplateID(c)
 	priceMult := readPriceMultiplier(c)
+
+	// Streaming responses are not replay-cached; the idempotency key is only
+	// used to prevent concurrent duplicate execution.
+	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
+		var idemKeyID int64
+		if key := middleware.GetAPIKeyFromContext(c); key != nil {
+			idemKeyID = key.ID
+		}
+		if !h.idemCache.TryAcquire(c.Request.Context(), idemKeyID, idemKey) {
+			c.Set("skip_call_count", true) // rejected before any upstream work
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": "idempotency key is currently in use by another request",
+			}})
+			c.Abort()
+			return
+		}
+		defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
+	}
+
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
@@ -582,6 +612,9 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 
 	ch := result.StreamCh
 	route := result.Route
+	if result.CancelStream != nil {
+		defer result.CancelStream()
+	}
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
