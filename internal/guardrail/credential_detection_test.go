@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-
 )
 
 func TestCredentialDetection_OpenAIKey(t *testing.T) {

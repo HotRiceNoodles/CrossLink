@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/secret"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 )
 
@@ -120,14 +120,14 @@ func (h *AdminHandler) Get(c *gin.Context) {
 }
 
 type updateServerInput struct {
-	DisplayName   *string          `json:"display_name"`
-	Description   *string          `json:"description"`
-	URL           *string          `json:"url"`
-	Enabled       *bool            `json:"enabled"`
-	TransportType *string          `json:"transport_type"`
-	AuthType      *string          `json:"auth_type"`
-	AuthConfig    json.RawMessage  `json:"auth_config"`
-	CustomHeaders json.RawMessage  `json:"custom_headers"`
+	DisplayName   *string         `json:"display_name"`
+	Description   *string         `json:"description"`
+	URL           *string         `json:"url"`
+	Enabled       *bool           `json:"enabled"`
+	TransportType *string         `json:"transport_type"`
+	AuthType      *string         `json:"auth_type"`
+	AuthConfig    json.RawMessage `json:"auth_config"`
+	CustomHeaders json.RawMessage `json:"custom_headers"`
 }
 
 func (h *AdminHandler) Update(c *gin.Context) {
@@ -360,7 +360,7 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data": logs,
+		"data":       logs,
 		"pagination": gin.H{"total": total, "page": page, "page_size": pageSize},
 	})
 }

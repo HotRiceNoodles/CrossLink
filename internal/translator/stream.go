@@ -10,23 +10,23 @@ import (
 type streamState int
 
 const (
-	stateInit        streamState = iota
+	stateInit streamState = iota
 	stateStarted
 	stateBlockActive
 	stateDone
 )
 
 type StreamTranslator struct {
-	state          streamState
-	messageID      string
-	requestedModel string
-	inputTokens    int
-	outputTokens   int
-	usageSeen      bool // upstream sent a real input usage number (not the seed estimate)
-	reasoningTokens int
-	cacheReadTokens int
+	state               streamState
+	messageID           string
+	requestedModel      string
+	inputTokens         int
+	outputTokens        int
+	usageSeen           bool // upstream sent a real input usage number (not the seed estimate)
+	reasoningTokens     int
+	cacheReadTokens     int
 	cacheCreationTokens int
-	blockIndex     int
+	blockIndex          int
 
 	// Block type tracking: "text", "thinking", or "" (no active block)
 	activeBlockType string
@@ -46,11 +46,11 @@ func NewStreamTranslator(messageID, requestedModel string, inputTokens int) *Str
 	}
 }
 
-func (t *StreamTranslator) InputTokens() int     { return t.inputTokens }
-func (t *StreamTranslator) UsageSeen() bool     { return t.usageSeen }
-func (t *StreamTranslator) OutputTokens() int    { return t.outputTokens }
-func (t *StreamTranslator) ReasoningTokens() int { return t.reasoningTokens }
-func (t *StreamTranslator) CacheReadTokens() int { return t.cacheReadTokens }
+func (t *StreamTranslator) InputTokens() int         { return t.inputTokens }
+func (t *StreamTranslator) UsageSeen() bool          { return t.usageSeen }
+func (t *StreamTranslator) OutputTokens() int        { return t.outputTokens }
+func (t *StreamTranslator) ReasoningTokens() int     { return t.reasoningTokens }
+func (t *StreamTranslator) CacheReadTokens() int     { return t.cacheReadTokens }
 func (t *StreamTranslator) CacheCreationTokens() int { return t.cacheCreationTokens }
 
 func GenerateMessageID() string { return generateMessageID() }

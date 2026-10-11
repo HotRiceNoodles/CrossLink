@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
@@ -51,7 +51,7 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 				LatencyMs:      time.Since(start).Milliseconds(),
 				APIKeyID:       keyID,
 				TeamID:         teamID,
-			OrgID:          orgID,
+				OrgID:          orgID,
 			})
 		}()
 	}

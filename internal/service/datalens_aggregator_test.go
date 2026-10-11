@@ -45,8 +45,8 @@ func TestAggregatorHourlyUpsert(t *testing.T) {
 	cfg := config.DataLensConfig{
 		Enabled: true,
 		Agg: config.DataLensAggConfig{
-			Interval:    "1h",
-			Lookback:    "3h",
+			Interval:     "1h",
+			Lookback:     "3h",
 			BackfillDays: 0,
 		},
 	}
@@ -238,8 +238,8 @@ func TestAggregatorHourlyContextColumns(t *testing.T) {
 	cfg := config.DataLensConfig{
 		Enabled: true,
 		Agg: config.DataLensAggConfig{
-			Interval:  "1h",
-			Lookback:  "3h",
+			Interval: "1h",
+			Lookback: "3h",
 		},
 	}
 	svc := NewDataLensAggregatorService(db, d, cfg)
@@ -387,7 +387,7 @@ func TestQueryBasicMetrics(t *testing.T) {
 		Metrics:     []string{"requests", "cost"},
 		Granularity: "hour",
 		TimeRange: repository.TimeRange{
-			Type: "absolute",
+			Type:  "absolute",
 			Start: &[]time.Time{dayStart.AddDate(0, 0, -2)}[0],
 			End:   &[]time.Time{dayStart.Add(24 * time.Hour)}[0],
 		},

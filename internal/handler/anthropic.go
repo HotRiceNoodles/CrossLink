@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
@@ -22,6 +21,7 @@ import (
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/translator"
 	"github.com/crosslink/pkg/token"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 )
 
@@ -41,7 +41,7 @@ type AnthropicHandler struct {
 	usageSvc     *service.UsageService
 	idemCache    *service.IdempotencyCache
 	guardrailSvc *guardrail.GuardrailService
-	budgetSvc    *service.BudgetService // pre-request budget reservation (C5); nil = disabled
+	budgetSvc    *service.BudgetService      // pre-request budget reservation (C5); nil = disabled
 	calibration  *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
 }
 
@@ -109,15 +109,15 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 	c.Set("usage_logged", true)
 	submitUsage(func() {
 		h.usageSvc.Log(context.Background(), &service.UsageEntry{
-			RouteType:      "anthropic",
-			ModelRequested: model,
-			ProviderID:     providerID,
-			APIKeyID:       keyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			Currency:       currency,
-			StatusCode:     statusCode,
-			ErrorType:      "provider_error",
+			RouteType:          "anthropic",
+			ModelRequested:     model,
+			ProviderID:         providerID,
+			APIKeyID:           keyID,
+			TeamID:             teamID,
+			OrgID:              orgID,
+			Currency:           currency,
+			StatusCode:         statusCode,
+			ErrorType:          "provider_error",
 			ErrorMessage:       det.Message,
 			UpstreamStatus:     det.UpstreamStatus,
 			UpstreamErrorCode:  det.Code,
@@ -125,11 +125,11 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 			UpstreamErrorParam: det.Param,
 			ErrorStage:         det.Stage,
 			Attempts:           attempts,
-			LatencyMs:      time.Since(start).Milliseconds(),
-			FallbackCount:  fallbackCount,
-			RetryCount:     retryCount,
-			TemplateID:     templateID,
-				PriceMultiplier: priceMult,
+			LatencyMs:          time.Since(start).Milliseconds(),
+			FallbackCount:      fallbackCount,
+			RetryCount:         retryCount,
+			TemplateID:         templateID,
+			PriceMultiplier:    priceMult,
 		})
 	})
 }
@@ -239,7 +239,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		return
 	}
 
-			// Extract identity for guardrail and usage logging
+	// Extract identity for guardrail and usage logging
 	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
 		apiKeyID = key.ID
@@ -266,35 +266,35 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				TeamID:    teamID,
 				OrgID:     orgID,
 			})
-				if grErr != nil {
-					if h.guardrailSvc.IsFailOpen() {
-						slog.Warn("guardrail: response check failed, fail-open", "error", grErr)
-					} else {
-						slog.Error("guardrail: response check failed", "error", grErr)
-						c.JSON(http.StatusServiceUnavailable, gin.H{"type": "error", "error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
-						return
-					}
-				} else if grResult != nil && grResult.Blocked {
-					if grResult.Action == "block" {
-						c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
-						return
-					}
-					if grResult.Action == "mask" && grResult.MaskedContent != "" {
-						c.Set("guardrail_triggered", true)
-						c.Set("guardrail_rule", grResult.RuleName)
-						result.Response.Content = []domain.ContentBlock{{Type: "text", Text: grResult.MaskedContent}}
-						respBody, _ = json.Marshal(result.Response)
-					}
-					if grResult.Action == "log" {
-						c.Set("guardrail_triggered", true)
-						c.Set("guardrail_rule", grResult.RuleName)
-					}
-				} else if grResult != nil && grResult.Action == "log" {
+			if grErr != nil {
+				if h.guardrailSvc.IsFailOpen() {
+					slog.Warn("guardrail: response check failed, fail-open", "error", grErr)
+				} else {
+					slog.Error("guardrail: response check failed", "error", grErr)
+					c.JSON(http.StatusServiceUnavailable, gin.H{"type": "error", "error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
+					return
+				}
+			} else if grResult != nil && grResult.Blocked {
+				if grResult.Action == "block" {
+					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
+				}
+				if grResult.Action == "mask" && grResult.MaskedContent != "" {
+					c.Set("guardrail_triggered", true)
+					c.Set("guardrail_rule", grResult.RuleName)
+					result.Response.Content = []domain.ContentBlock{{Type: "text", Text: grResult.MaskedContent}}
+					respBody, _ = json.Marshal(result.Response)
+				}
+				if grResult.Action == "log" {
 					c.Set("guardrail_triggered", true)
 					c.Set("guardrail_rule", grResult.RuleName)
 				}
+			} else if grResult != nil && grResult.Action == "log" {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grResult.RuleName)
 			}
 		}
+	}
 	setFallbackHeaders(c, result.ModelUsed, result.FallbackCount)
 	c.Header("Content-Type", "application/json")
 	c.Status(http.StatusOK)
@@ -303,9 +303,9 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	// Cache response for idempotency
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		h.idemCache.Set(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
-				StatusCode: http.StatusOK,
-				Body:       respBody,
-			})
+			StatusCode: http.StatusOK,
+			Body:       respBody,
+		})
 	}
 
 	c.Set("provider", result.ProviderName)
@@ -323,19 +323,19 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	submitUsage(func() {
 		entry := &service.UsageEntry{
-			RouteType:      "anthropic",
-			ModelRequested: req.Model,
-			ModelUsed:      result.ModelUsed,
-			ProviderID:     result.ProviderID,
-			APIKeyID:       apiKeyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			InputTokens:    result.InputTokens,
-			OutputTokens:   result.OutputTokens,
-			InputPrice:     result.InputPrice,
-			OutputPrice:    result.OutputPrice,
-			Currency:       result.Currency,
-			LatencyMs:      result.LatencyMs,
+			RouteType:       "anthropic",
+			ModelRequested:  req.Model,
+			ModelUsed:       result.ModelUsed,
+			ProviderID:      result.ProviderID,
+			APIKeyID:        apiKeyID,
+			TeamID:          teamID,
+			OrgID:           orgID,
+			InputTokens:     result.InputTokens,
+			OutputTokens:    result.OutputTokens,
+			InputPrice:      result.InputPrice,
+			OutputPrice:     result.OutputPrice,
+			Currency:        result.Currency,
+			LatencyMs:       result.LatencyMs,
 			StatusCode:      http.StatusOK,
 			FallbackCount:   result.FallbackCount,
 			RetryCount:      result.RetryCount,
@@ -343,7 +343,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			CacheReadTokens: result.CacheReadTokens,
 			SessionID:       sessionID,
 			TemplateID:      templateID,
-				PriceMultiplier: priceMult,
+			PriceMultiplier: priceMult,
 			PrecomputedCost: cost,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
@@ -466,7 +466,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 					c.Set("guardrail_rule", grResult.RuleName)
 					if grResult.Action == "mask" && grResult.MaskedContent != "" {
 						maskData, _ := json.Marshal(map[string]any{
-							"type": "content_block_delta",
+							"type":  "content_block_delta",
 							"delta": map[string]any{"type": "text_delta", "text": grResult.MaskedContent},
 						})
 						fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData)
@@ -531,7 +531,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			c.Set("guardrail_rule", grResult.RuleName)
 			if grResult.Action == "mask" && grResult.MaskedContent != "" {
 				maskData, _ := json.Marshal(map[string]any{
-					"type": "content_block_delta",
+					"type":  "content_block_delta",
 					"delta": map[string]any{"type": "text_delta", "text": grResult.MaskedContent},
 				})
 				fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", maskData)
@@ -558,7 +558,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 				messageStopSent = true
 			}
 		}
-		}
+	}
 
 	if err != nil {
 		slog.Error("stream error", "error", err, "model", req.Model)
@@ -598,19 +598,19 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 
 	submitUsage(func() {
 		entry := &service.UsageEntry{
-			RouteType:      "anthropic",
-			ModelRequested: req.Model,
-			ModelUsed:      result.ModelUsed,
-			ProviderID:     result.ProviderID,
-			APIKeyID:       apiKeyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			InputTokens:    result.InputTokens,
-			OutputTokens:   result.OutputTokens,
-			InputPrice:     result.InputPrice,
-			OutputPrice:    result.OutputPrice,
-			Currency:       result.Currency,
-			LatencyMs:      result.LatencyMs,
+			RouteType:       "anthropic",
+			ModelRequested:  req.Model,
+			ModelUsed:       result.ModelUsed,
+			ProviderID:      result.ProviderID,
+			APIKeyID:        apiKeyID,
+			TeamID:          teamID,
+			OrgID:           orgID,
+			InputTokens:     result.InputTokens,
+			OutputTokens:    result.OutputTokens,
+			InputPrice:      result.InputPrice,
+			OutputPrice:     result.OutputPrice,
+			Currency:        result.Currency,
+			LatencyMs:       result.LatencyMs,
 			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
 			StatusCode:      http.StatusOK,
 			FallbackCount:   result.FallbackCount,
@@ -619,7 +619,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			CacheReadTokens: result.CacheReadTokens,
 			SessionID:       sessionID,
 			TemplateID:      templateID,
-				PriceMultiplier: priceMult,
+			PriceMultiplier: priceMult,
 			PrecomputedCost: cost,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {

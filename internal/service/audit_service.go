@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"gorm.io/datatypes"

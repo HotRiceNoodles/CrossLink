@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // extractModel reads the "model" field from a JSON request body.

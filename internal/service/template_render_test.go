@@ -12,11 +12,11 @@ import (
 
 func tpl(system string, vars string) *model.PromptTemplate {
 	return &model.PromptTemplate{
-		Name:             "t",
-		SystemPrompt:     system,
-		VariablesSchema:  datatypes.JSON([]byte(vars)),
-		TargetFormat:     "auto",
-		Status:           1,
+		Name:            "t",
+		SystemPrompt:    system,
+		VariablesSchema: datatypes.JSON([]byte(vars)),
+		TargetFormat:    "auto",
+		Status:          1,
 	}
 }
 

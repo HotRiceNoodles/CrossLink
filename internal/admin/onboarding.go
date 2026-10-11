@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/license"
@@ -19,6 +18,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"log/slog"
@@ -28,14 +28,14 @@ import (
 // (Probe) and an atomic provider+models+key creator (Commit) wrapped in one
 // GORM transaction so partial failures leave no rows behind.
 type OnboardingHandler struct {
-	db              *gorm.DB
-	encStore        *secret.EncryptedDBStore
-	cryptoProvider  crypto.CryptoProvider
-	secretResolver  *secret.SecretResolver
-	registry        *provider.Registry
-	resolver        *router.Resolver
-	cacheSvc        *service.CacheService
-	auditSvc        *service.AuditService
+	db               *gorm.DB
+	encStore         *secret.EncryptedDBStore
+	cryptoProvider   crypto.CryptoProvider
+	secretResolver   *secret.SecretResolver
+	registry         *provider.Registry
+	resolver         *router.Resolver
+	cacheSvc         *service.CacheService
+	auditSvc         *service.AuditService
 	onRegistryChange func(action, providerName string)
 }
 
@@ -179,12 +179,12 @@ type onboardingModelInput struct {
 }
 
 type onboardingKeyInput struct {
-	Name          string   `json:"name" binding:"required,max=64"`
-	AllowedModels []string `json:"allowed_models"`
-	TPMLimit      int      `json:"tpm_limit"`
-	RPMLimit      int      `json:"rpm_limit"`
-	MaxBudget     float64  `json:"max_budget"`
-	BudgetPeriod  string   `json:"budget_period"`
+	Name          string     `json:"name" binding:"required,max=64"`
+	AllowedModels []string   `json:"allowed_models"`
+	TPMLimit      int        `json:"tpm_limit"`
+	RPMLimit      int        `json:"rpm_limit"`
+	MaxBudget     float64    `json:"max_budget"`
+	BudgetPeriod  string     `json:"budget_period"`
 	ExpiresAt     *time.Time `json:"expires_at"`
 }
 
@@ -266,9 +266,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			if !input.ReuseProvider {
 				// Structured 409: wizard prompts the user to reuse or rename.
 				c.JSON(http.StatusConflict, gin.H{
-					"error":                 "provider name already exists",
-					"error_code":            ErrProviderExists,
-					"existing_provider_id":  found.ID,
+					"error":                  "provider name already exists",
+					"error_code":             ErrProviderExists,
+					"existing_provider_id":   found.ID,
 					"existing_provider_name": found.Name,
 				})
 				return
@@ -436,10 +436,10 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "onboarding:commit", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{
-			"provider_id":    p.ID,
-			"model_count":    len(models),
-			"key_name":       input.Key.Name,
-			"api_key_length": len(input.Provider.APIKey),
+			"provider_id":     p.ID,
+			"model_count":     len(models),
+			"key_name":        input.Key.Name,
+			"api_key_length":  len(input.Provider.APIKey),
 			"reused_provider": reuseMode,
 		}))
 	}

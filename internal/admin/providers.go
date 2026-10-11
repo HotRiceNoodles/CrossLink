@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 )
 

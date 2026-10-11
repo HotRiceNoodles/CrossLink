@@ -24,9 +24,9 @@ import (
 //   - "none" (default): tracing disabled, no-op provider
 //   - "stdout": traces printed to stdout (development/debugging)
 //   - "otlp": traces sent via OTLP to CL_OTEL_ENDPOINT (default grpc://localhost:4317)
-//     - "grpc://host:port" → OTLP gRPC exporter
-//     - "http://host:port" → OTLP HTTP exporter
-//     - Set CL_OTEL_INSECURE=true to skip TLS (default true for non-https endpoints)
+//   - "grpc://host:port" → OTLP gRPC exporter
+//   - "http://host:port" → OTLP HTTP exporter
+//   - Set CL_OTEL_INSECURE=true to skip TLS (default true for non-https endpoints)
 func InitTracer(ctx context.Context, serviceName, version string) (func(context.Context) error, error) {
 	exporterType := os.Getenv("CL_OTEL_EXPORTER")
 	if exporterType == "" {

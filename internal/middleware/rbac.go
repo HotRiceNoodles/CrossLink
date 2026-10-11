@@ -3,8 +3,8 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/license"
+	"github.com/gin-gonic/gin"
 )
 
 func getRoleID(c *gin.Context) int64 {

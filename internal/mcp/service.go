@@ -16,9 +16,9 @@ import (
 const logQueueSize = 1024
 
 type MCPService struct {
-	repo               *MCPRepo
-	registry           *Registry
-	cfg                config.MCPConfig
+	repo     *MCPRepo
+	registry *Registry
+	cfg      config.MCPConfig
 	// settings supplies the hot-reloadable subset of MCPConfig at call time
 	// (max_servers, request_timeout, tool_cache_ttl). nil ⇒ boot cfg.
 	settings           MCPSettingsProvider
@@ -90,15 +90,15 @@ func NewMCPService(repo *MCPRepo, registry *Registry, cfg config.MCPConfig, encS
 		maxIdle = 10
 	}
 	return &MCPService{
-		repo:     repo,
-		registry: registry,
-		cfg:      cfg,
-		encStore: encStore,
-		toolCache: &toolCache{items: make(map[string]*toolCacheEntry)},
-		permCache: &permCache{items: make(map[int64]*permCacheEntry)},
+		repo:               repo,
+		registry:           registry,
+		cfg:                cfg,
+		encStore:           encStore,
+		toolCache:          &toolCache{items: make(map[string]*toolCacheEntry)},
+		permCache:          &permCache{items: make(map[int64]*permCacheEntry)},
 		transportFactories: make(map[string]func(*MCPServer) Transport),
-		logQueue: make(chan *MCPToolCallLog, logQueueSize),
-		sharedTransport: newSharedMCPTransport(maxIdle),
+		logQueue:           make(chan *MCPToolCallLog, logQueueSize),
+		sharedTransport:    newSharedMCPTransport(maxIdle),
 	}
 }
 

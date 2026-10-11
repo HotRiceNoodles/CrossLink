@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/crosslink/internal/model"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -390,6 +390,7 @@ func TestGetByIDForOrg(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, globalRole.ID, found.ID)
 }
+
 // roleIDByName looks up a role ID by name in the test DB.
 func roleIDByName(t *testing.T, db *gorm.DB, name string) int64 {
 	t.Helper()

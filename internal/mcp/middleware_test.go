@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 )
 
 // mockKeyValidator implements KeyValidator for testing

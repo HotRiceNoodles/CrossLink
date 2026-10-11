@@ -53,15 +53,15 @@ func (p *Provider) Get() *Snapshot {
 
 // Section getters — value copies, safe for concurrent use.
 
-func (p *Provider) SMTP() config.SMTPConfig               { return p.Get().SMTP }
-func (p *Provider) GatewayBaseURL() string                { return p.Get().GatewayBaseURL }
-func (p *Provider) CORSAllowed() []string                 { return p.Get().CORSAllowed }
-func (p *Provider) RateLimit() config.RateLimitConfig     { return p.Get().RateLimit }
+func (p *Provider) SMTP() config.SMTPConfig                     { return p.Get().SMTP }
+func (p *Provider) GatewayBaseURL() string                      { return p.Get().GatewayBaseURL }
+func (p *Provider) CORSAllowed() []string                       { return p.Get().CORSAllowed }
+func (p *Provider) RateLimit() config.RateLimitConfig           { return p.Get().RateLimit }
 func (p *Provider) GuardrailAlert() config.GuardrailAlertConfig { return p.Get().GuardrailAlert }
-func (p *Provider) IPBinding() config.IPBindingConfig     { return p.Get().IPBinding }
-func (p *Provider) DataLens() config.DataLensConfig       { return p.Get().DataLens }
-func (p *Provider) MCP() config.MCPConfig                 { return p.Get().MCP }
-func (p *Provider) Captcha() config.CaptchaConfig         { return p.Get().Captcha }
+func (p *Provider) IPBinding() config.IPBindingConfig           { return p.Get().IPBinding }
+func (p *Provider) DataLens() config.DataLensConfig             { return p.Get().DataLens }
+func (p *Provider) MCP() config.MCPConfig                       { return p.Get().MCP }
+func (p *Provider) Captcha() config.CaptchaConfig               { return p.Get().Captcha }
 
 // Subscribe registers a callback invoked with every new snapshot (initial
 // load, poll tick, RefreshNow). Callbacks must be cheap and non-blocking —

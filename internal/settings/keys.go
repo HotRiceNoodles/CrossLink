@@ -37,12 +37,12 @@ type KeyDef struct {
 
 // Key types.
 const (
-	TypeString           = "string"
-	TypeInt              = "int"
-	TypeFloat            = "float"
-	TypeBool             = "bool"
-	TypeStringSlice      = "string[]"
-	TypeDurationSeconds  = "duration_seconds"
+	TypeString          = "string"
+	TypeInt             = "int"
+	TypeFloat           = "float"
+	TypeBool            = "bool"
+	TypeStringSlice     = "string[]"
+	TypeDurationSeconds = "duration_seconds"
 )
 
 // Key name constants — shared by the provider, the admin handler, and tests.

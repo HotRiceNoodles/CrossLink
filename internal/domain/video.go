@@ -30,10 +30,10 @@ type VideoUsage struct {
 
 // VideoCreateRequest — 公开 API 请求体 (POST /v1/videos)
 type VideoCreateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt" binding:"required"`
-	Seconds int   `json:"seconds,omitempty"`
-	Size    string `json:"size,omitempty"`
+	Model          string `json:"model"`
+	Prompt         string `json:"prompt" binding:"required"`
+	Seconds        int    `json:"seconds,omitempty"`
+	Size           string `json:"size,omitempty"`
 	ImageReference *struct {
 		ImageURL string `json:"image_url,omitempty"`
 		FileID   string `json:"file_id,omitempty"`
@@ -43,14 +43,14 @@ type VideoCreateRequest struct {
 // VideoResponse — 公开 API 响应 (OpenAI Videos 格式)
 type VideoResponse struct {
 	ID          string        `json:"id"`
-	Object      string        `json:"object"`                   // "video"
-	Status      string        `json:"status"`                   // queued/in_progress/completed/failed
+	Object      string        `json:"object"` // "video"
+	Status      string        `json:"status"` // queued/in_progress/completed/failed
 	Model       string        `json:"model"`
 	Progress    float64       `json:"progress,omitempty"`
 	CreatedAt   int64         `json:"created_at"`
 	CompletedAt *int64        `json:"completed_at,omitempty"`
 	ExpiresAt   *int64        `json:"expires_at,omitempty"`
-	Seconds     string        `json:"seconds,omitempty"`        // string per OpenAI spec
+	Seconds     string        `json:"seconds,omitempty"` // string per OpenAI spec
 	Size        string        `json:"size,omitempty"`
 	Output      []VideoOutput `json:"output,omitempty"`
 	Error       *VideoError   `json:"error,omitempty"`

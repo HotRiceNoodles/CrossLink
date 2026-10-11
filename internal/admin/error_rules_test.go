@@ -6,8 +6,8 @@ import (
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"

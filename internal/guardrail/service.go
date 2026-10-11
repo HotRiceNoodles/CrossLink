@@ -25,10 +25,10 @@ var severityOrder = map[string]int{
 }
 
 type GuardrailService struct {
-	db      *gorm.DB
-	deps    EngineDeps
-	enabled atomic.Bool
-	logOnly atomic.Bool
+	db       *gorm.DB
+	deps     EngineDeps
+	enabled  atomic.Bool
+	logOnly  atomic.Bool
 	failOpen atomic.Bool
 
 	mu       sync.RWMutex
@@ -64,12 +64,12 @@ func NewGuardrailService(db *gorm.DB, rdb redis.Cmdable) *GuardrailService {
 	}
 }
 
-func (s *GuardrailService) SetFailOpen(v bool)        { s.failOpen.Store(v) }
-func (s *GuardrailService) IsFailOpen() bool             { return s.failOpen.Load() }
+func (s *GuardrailService) SetFailOpen(v bool) { s.failOpen.Store(v) }
+func (s *GuardrailService) IsFailOpen() bool   { return s.failOpen.Load() }
 
-func (s *GuardrailService) SetIsDebugEnabled(fn func() bool)      { s.deps.IsDebugEnabled = fn }
-func (s *GuardrailService) SetCheckLicenseTier(fn func() string)  { s.deps.CheckLicenseTier = fn }
-func (s *GuardrailService) SetRedisClient(c *redis.Client)        { s.deps.RedisClient = c }
+func (s *GuardrailService) SetIsDebugEnabled(fn func() bool)     { s.deps.IsDebugEnabled = fn }
+func (s *GuardrailService) SetCheckLicenseTier(fn func() string) { s.deps.CheckLicenseTier = fn }
+func (s *GuardrailService) SetRedisClient(c *redis.Client)       { s.deps.RedisClient = c }
 
 func (s *GuardrailService) AddHandler(h EventHandler) {
 	s.handlersMu.Lock()
@@ -94,10 +94,10 @@ func (s *GuardrailService) emitEvent(ctx context.Context, event GuardrailEvent) 
 		}(h)
 	}
 }
-func (s *GuardrailService) IsEnabled() bool  { return s.enabled.Load() }
+func (s *GuardrailService) IsEnabled() bool   { return s.enabled.Load() }
 func (s *GuardrailService) SetEnabled(v bool) { s.enabled.Store(v) }
 
-func (s *GuardrailService) IsLogOnly() bool  { return s.logOnly.Load() }
+func (s *GuardrailService) IsLogOnly() bool   { return s.logOnly.Load() }
 func (s *GuardrailService) SetLogOnly(v bool) { s.logOnly.Store(v) }
 
 func (s *GuardrailService) ensureRules(ctx context.Context) error {

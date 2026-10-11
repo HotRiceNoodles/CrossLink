@@ -36,21 +36,21 @@ func NewKeyService(repo *repository.APIKeyRepo, hashRepo *repository.APIKeyHashR
 }
 
 type CreateKeyInput struct {
-	Name          string
-	Email         string
-	AllowedModels []string
-	AllowedRoutes []string
-	TPMLimit      int
-	RPMLimit      int
-	MaxBudget     float64
-	BudgetPeriod  string
-	MaxCalls      int
-	CallPeriod    string
+	Name            string
+	Email           string
+	AllowedModels   []string
+	AllowedRoutes   []string
+	TPMLimit        int
+	RPMLimit        int
+	MaxBudget       float64
+	BudgetPeriod    string
+	MaxCalls        int
+	CallPeriod      string
 	ExpiresAt       *time.Time
 	PriceMultiplier *float64
 	CreatedByID     int64
-	TeamID        int64
-	OrgID         int64
+	TeamID          int64
+	OrgID           int64
 }
 
 type CreateKeyResult struct {
@@ -73,17 +73,17 @@ func (s *KeyService) Create(ctx context.Context, input *CreateKeyInput) (*Create
 	prefix := rawKey[:7]
 
 	key := &model.APIKey{
-		Name:          input.Name,
-		KeyHash:       keyHash,
-		KeyPrefix:     prefix,
-		Status:        1,
-		TPMLimit:      input.TPMLimit,
-		RPMLimit:      input.RPMLimit,
-		MaxBudget:     input.MaxBudget,
-		BudgetPeriod:  input.BudgetPeriod,
-		MaxCalls:     input.MaxCalls,
-		CallPeriod:   input.CallPeriod,
-		ExpiresAt:     input.ExpiresAt,
+		Name:            input.Name,
+		KeyHash:         keyHash,
+		KeyPrefix:       prefix,
+		Status:          1,
+		TPMLimit:        input.TPMLimit,
+		RPMLimit:        input.RPMLimit,
+		MaxBudget:       input.MaxBudget,
+		BudgetPeriod:    input.BudgetPeriod,
+		MaxCalls:        input.MaxCalls,
+		CallPeriod:      input.CallPeriod,
+		ExpiresAt:       input.ExpiresAt,
 		PriceMultiplier: multOrDefault(input.PriceMultiplier),
 	}
 	if len(input.AllowedModels) > 0 {

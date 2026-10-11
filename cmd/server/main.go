@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/app"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
@@ -17,6 +16,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/version"
+	"github.com/gin-gonic/gin"
 )
 
 func setupLogger(cfg *config.Config) {

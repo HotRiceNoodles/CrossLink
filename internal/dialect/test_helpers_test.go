@@ -129,4 +129,3 @@ func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
 	db.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
 	db.Exec("SET FOREIGN_KEY_CHECKS = 1")
 }
-

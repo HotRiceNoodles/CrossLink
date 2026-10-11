@@ -8,13 +8,13 @@ import (
 
 // ReverseStreamTranslator converts Anthropic SSE events into OpenAI SSE chunks.
 type ReverseStreamTranslator struct {
-	messageID            string
-	model                string
-	inputTokens          int
-	outputTokens         int
-	cacheReadTokens      int
-	cacheCreationTokens  int
-	activeToolID         string
+	messageID           string
+	model               string
+	inputTokens         int
+	outputTokens        int
+	cacheReadTokens     int
+	cacheCreationTokens int
+	activeToolID        string
 }
 
 func NewReverseStreamTranslator() *ReverseStreamTranslator {
@@ -43,9 +43,9 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage struct {
-				InputTokens                int `json:"input_tokens"`
-				CacheReadInputTokens       int `json:"cache_read_input_tokens"`
-				CacheCreationInputTokens   int `json:"cache_creation_input_tokens"`
+				InputTokens              int `json:"input_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -80,7 +80,7 @@ func (t *ReverseStreamTranslator) handleMessageStart(data []byte) []domain.SSECh
 
 func (t *ReverseStreamTranslator) handleContentBlockStart(data []byte) []domain.SSEChunk {
 	var evt struct {
-		Index        int    `json:"index"`
+		Index        int `json:"index"`
 		ContentBlock struct {
 			Type string `json:"type"`
 			ID   string `json:"id,omitempty"`
@@ -139,9 +139,9 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 	switch evt.Delta.Type {
 	case "thinking_delta":
 		chunk := &domain.OpenAIChunk{
-			ID:      t.messageID,
-			Object:  "chat.completion.chunk",
-			Model:   t.model,
+			ID:     t.messageID,
+			Object: "chat.completion.chunk",
+			Model:  t.model,
 			Choices: []domain.OpenAIChunkChoice{
 				{Index: 0, Delta: domain.OpenAIChunkDelta{ReasoningContent: evt.Delta.Text}},
 			},
@@ -150,9 +150,9 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 
 	case "text_delta":
 		chunk := &domain.OpenAIChunk{
-			ID:      t.messageID,
-			Object:  "chat.completion.chunk",
-			Model:   t.model,
+			ID:     t.messageID,
+			Object: "chat.completion.chunk",
+			Model:  t.model,
 			Choices: []domain.OpenAIChunkChoice{
 				{Index: 0, Delta: domain.OpenAIChunkDelta{Content: evt.Delta.Text}},
 			},
@@ -162,9 +162,9 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 	case "input_json_delta":
 		if t.activeToolID != "" {
 			chunk := &domain.OpenAIChunk{
-				ID:      t.messageID,
-				Object:  "chat.completion.chunk",
-				Model:   t.model,
+				ID:     t.messageID,
+				Object: "chat.completion.chunk",
+				Model:  t.model,
 				Choices: []domain.OpenAIChunkChoice{
 					{
 						Index: 0,
@@ -205,9 +205,9 @@ func (t *ReverseStreamTranslator) handleMessageDelta(data []byte) []domain.SSECh
 	// OpenAI semantics: prompt_tokens includes cached tokens (see handleMessageStart).
 	promptTotal := t.inputTokens + t.cacheReadTokens + t.cacheCreationTokens
 	chunk := &domain.OpenAIChunk{
-		ID:      t.messageID,
-		Object:  "chat.completion.chunk",
-		Model:   t.model,
+		ID:     t.messageID,
+		Object: "chat.completion.chunk",
+		Model:  t.model,
 		Choices: []domain.OpenAIChunkChoice{
 			{Index: 0, FinishReason: &finishReason},
 		},

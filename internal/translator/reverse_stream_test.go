@@ -65,8 +65,8 @@ func TestReverseStream_ToolUse(t *testing.T) {
 
 	// tool_use content_block_start
 	blockStart, _ := json.Marshal(map[string]any{
-		"type":  "content_block_start",
-		"index": 0,
+		"type":          "content_block_start",
+		"index":         0,
 		"content_block": map[string]any{"type": "tool_use", "id": "toolu_1", "name": "get_weather"},
 	})
 	chunks := tl.TranslateEvent("content_block_start", blockStart)
@@ -106,7 +106,7 @@ func TestReverseStream_MessageDelta_FinishReason(t *testing.T) {
 	tl.TranslateEvent("message_start", startData)
 
 	deltaData, _ := json.Marshal(map[string]any{
-		"type": "message_delta",
+		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{"output_tokens": 20},
 	})

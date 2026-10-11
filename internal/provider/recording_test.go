@@ -34,10 +34,10 @@ func (s *mockFixtureStore) Lookup(_ context.Context, model, hash string) (*Fixtu
 
 // fakeProvider is a minimal Provider for testing RecordingProvider.
 type fakeProvider struct {
-	resp  *domain.OpenAIResponse
-	ch    chan domain.SSEChunk
-	err   error
-	name  string
+	resp *domain.OpenAIResponse
+	ch   chan domain.SSEChunk
+	err  error
+	name string
 }
 
 func (f *fakeProvider) Name() string { return f.name }

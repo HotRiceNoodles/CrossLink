@@ -31,9 +31,9 @@ func TestSetupApply_WritesAllRowsAndHotAppliesTimezone(t *testing.T) {
 	defer SetStatsTimezone("") // restore package state
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/setup/apply", map[string]any{
-		"timezone":   "Asia/Shanghai",
-		"base_url":   "https://1.2.4.8",
-		"status":     "done",
+		"timezone": "Asia/Shanghai",
+		"base_url": "https://1.2.4.8",
+		"status":   "done",
 	})
 	h.Apply(c)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -50,9 +50,9 @@ func TestSetupApply_WritesAllRowsAndHotAppliesTimezone(t *testing.T) {
 
 	// Rows persisted.
 	for key, want := range map[string]string{
-		"stats_timezone":             "Asia/Shanghai",
-		"gateway_base_url":           "https://1.2.4.8",
-		"setup_wizard_status":        "done",
+		"stats_timezone":      "Asia/Shanghai",
+		"gateway_base_url":    "https://1.2.4.8",
+		"setup_wizard_status": "done",
 	} {
 		var row model.SystemSetting
 		require.NoError(t, db.Where("key = ?", key).First(&row).Error, key)

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -20,8 +20,8 @@ type TemplateHandler struct {
 	db       *gorm.DB
 	registry *service.TemplateRegistry
 	sync     *service.TemplateRegistrySync // nil in tests / single-instance
-	cacheSvc *service.CacheService          // nil in tests; flushed on update/delete (B3)
-	auditSvc *service.AuditService          // nil in Community
+	cacheSvc *service.CacheService         // nil in tests; flushed on update/delete (B3)
+	auditSvc *service.AuditService         // nil in Community
 }
 
 func NewTemplateHandler(db *gorm.DB, registry *service.TemplateRegistry, sync *service.TemplateRegistrySync, cacheSvc *service.CacheService, auditSvc *service.AuditService) *TemplateHandler {

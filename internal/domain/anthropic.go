@@ -46,9 +46,9 @@ type AnthropicTool struct {
 }
 
 type AnthropicToolChoice struct {
-	Type                    string `json:"type"`
-	Name                    string `json:"name,omitempty"`
-	DisableParallelToolUse  bool   `json:"disable_parallel_tool_use,omitempty"`
+	Type                   string `json:"type"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type AnthropicMetadata struct {
@@ -68,10 +68,10 @@ type AnthropicResponse struct {
 }
 
 type AnthropicUsage struct {
-	InputTokens                int `json:"input_tokens"`
-	OutputTokens               int `json:"output_tokens"`
-	CacheReadInputTokens       int `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens   int `json:"cache_creation_input_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 // SSEEvent represents an Anthropic SSE output event.

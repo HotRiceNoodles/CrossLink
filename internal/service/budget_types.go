@@ -16,7 +16,7 @@ type BudgetServiceInterface interface {
 // BudgetScope identifies one budget counter to reserve against during
 // pre-request reservation. Ordered key → team → org.
 type BudgetScope struct {
-	Scope  string  // "key" | "team" | "org"
+	Scope  string // "key" | "team" | "org"
 	ID     string
 	Period string
 	Limit  float64 // 0 = no limit at this level (skip)

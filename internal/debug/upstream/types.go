@@ -8,7 +8,7 @@ import (
 // Body size limits for upstream capture.
 const (
 	UpstreamBodyLimit  = 256 * 1024      // 256KB — single body per upstream call
-	UpstreamTotalLimit = 2 * 1024 * 1024  // 2MB — total upstream data per Entry
+	UpstreamTotalLimit = 2 * 1024 * 1024 // 2MB — total upstream data per Entry
 	StreamBodyLimit    = 64 * 1024       // 64KB — SSE stream capture cap
 )
 

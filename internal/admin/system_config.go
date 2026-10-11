@@ -48,8 +48,8 @@ func (h *SystemHandler) GetConfig(c *gin.Context) {
 }
 
 type configOp struct {
-	key   string
-	value string // storage form ("" + delete for removals)
+	key    string
+	value  string // storage form ("" + delete for removals)
 	delete bool
 }
 

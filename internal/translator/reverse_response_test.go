@@ -34,7 +34,7 @@ func TestAnthropicToOpenAIResponse_TextOnly(t *testing.T) {
 
 func TestAnthropicToOpenAIResponse_ToolUse(t *testing.T) {
 	resp := &domain.AnthropicResponse{
-		ID:   "msg_456",
+		ID: "msg_456",
 		Content: []domain.ContentBlock{
 			{Type: "text", Text: "Let me check."},
 			{Type: "tool_use", ID: "toolu_1", Name: "get_weather", Input: []byte(`{"city":"Beijing"}`)},
@@ -54,8 +54,8 @@ func TestAnthropicToOpenAIResponse_ToolUse(t *testing.T) {
 
 func TestAnthropicToOpenAIResponse_StopReasons(t *testing.T) {
 	tests := []struct {
-		stopReason   string
-		wantFinish   string
+		stopReason string
+		wantFinish string
 	}{
 		{"end_turn", "stop"},
 		{"max_tokens", "length"},

@@ -16,17 +16,17 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
-	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/debug/upstream"
+	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/pkg/token"
+	"github.com/gin-gonic/gin"
 )
 
-const maxRequestBody = 10 << 20 // 10 MB
+const maxRequestBody = 10 << 20  // 10 MB
 const maxTTSAudioSize = 25 << 20 // 25 MB — playground TTS buffers audio in memory
 
 type PlaygroundHandler struct {
@@ -63,9 +63,9 @@ func NewPlaygroundHandler(
 }
 
 type PlaygroundRequest struct {
-	Model     string                 `json:"model"`
-	Messages  []domain.OpenAIMessage `json:"messages"`
-	MaxTokens *int                   `json:"max_tokens,omitempty"`
+	Model       string                 `json:"model"`
+	Messages    []domain.OpenAIMessage `json:"messages"`
+	MaxTokens   *int                   `json:"max_tokens,omitempty"`
 	Temperature *float64               `json:"temperature,omitempty"`
 	TopP        *float64               `json:"top_p,omitempty"`
 	Stream      bool                   `json:"stream,omitempty"`
@@ -204,16 +204,16 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 		respText := ""
 		if len(resp.Choices) > 0 {
 			respText = domain.ContentText(resp.Choices[0].Message.Content)
-			}
+		}
 
 		if respText != "" {
 			grResult, grErr := h.guardrailSvc.Check(c.Request.Context(), &guardrail.CheckRequest{
 				Content:   respText,
 				Direction: guardrail.DirectionResponse,
 				Model:     req.Model,
-			APIKeyID:  0,
-			TeamID:    0,
-			OrgID:     0,
+				APIKeyID:  0,
+				TeamID:    0,
+				OrgID:     0,
 			})
 			if grErr != nil {
 				slog.Warn("playground: guardrail response check failed", "error", grErr)
@@ -438,7 +438,7 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 				inputTokens = chunk.Chunk.Usage.PromptTokens
 				outputTokens = chunk.Chunk.Usage.CompletionTokens
 			}
-		if len(chunk.Chunk.Choices) > 0 {
+			if len(chunk.Chunk.Choices) > 0 {
 				content := chunk.Chunk.Choices[0].Delta.Content
 				if content != "" {
 					outputEstimate += token.Estimate(content)
@@ -658,7 +658,7 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 		return
 	}
 
-// Session affinity intentionally skipped for playground — interactive testing does not need sticky sessions
+	// Session affinity intentionally skipped for playground — interactive testing does not need sticky sessions
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	var imageRoutes []*router.RouteResult
 	for _, r := range routes {
@@ -979,11 +979,11 @@ func (h *PlaygroundHandler) TextToSpeech(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"audio":       audioBase64,
+			"audio":        audioBase64,
 			"content_type": contentType,
-			"model":       successRoute.ProviderModel,
-			"provider":    pn,
-			"cost":        cost,
+			"model":        successRoute.ProviderModel,
+			"provider":     pn,
+			"cost":         cost,
 		},
 	})
 }
@@ -1323,8 +1323,8 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 				c.Set("guardrail_rule", grResult.RuleName)
 			}
 		} else if grResult != nil && grResult.Action == "log" {
-				c.Set("guardrail_triggered", true)
-				c.Set("guardrail_rule", grResult.RuleName)
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", grResult.RuleName)
 		}
 	}
 
@@ -1334,17 +1334,17 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		h.usageSvc.Log(bgCtx, &service.UsageEntry{
-			RouteType:       "playground_audio",
-			ModelRequested:  req.Model,
-			ModelUsed:       route.ProviderModel,
-			ProviderID:      route.ProviderRow.ID,
-			OrgID:           orgID,
-			Currency:        route.Currency,
-			StatusCode:      http.StatusOK,
-			LatencyMs:       latencyMs,
-			FallbackCount:   result.FallbackCount,
-			RetryCount:      totalRetries,
-			PrecomputedCost: cost,
+			RouteType:          "playground_audio",
+			ModelRequested:     req.Model,
+			ModelUsed:          route.ProviderModel,
+			ProviderID:         route.ProviderRow.ID,
+			OrgID:              orgID,
+			Currency:           route.Currency,
+			StatusCode:         http.StatusOK,
+			LatencyMs:          latencyMs,
+			FallbackCount:      result.FallbackCount,
+			RetryCount:         totalRetries,
+			PrecomputedCost:    cost,
 			GuardrailTriggered: grTriggered,
 			GuardrailRule:      grRule,
 		})

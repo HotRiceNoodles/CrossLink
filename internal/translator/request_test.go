@@ -48,7 +48,7 @@ func TestAnthropicToOpenAI_SystemBlocks_JoinedText(t *testing.T) {
 	req := &domain.AnthropicRequest{
 		Model:     "claude-sonnet-4-20250514",
 		MaxTokens: 512,
-		System: raw(`[{"type":"text","text":"Line 1"},{"type":"text","text":"Line 2"}]`),
+		System:    raw(`[{"type":"text","text":"Line 1"},{"type":"text","text":"Line 2"}]`),
 		Messages: []domain.AnthropicMessage{
 			{Role: "user", Content: raw(`"Hi"`)},
 		},
@@ -133,11 +133,11 @@ func TestAnthropicToOpenAI_MetadataUserID_MappedToUser(t *testing.T) {
 
 func TestAnthropicToOpenAI_Tools_SilentlyStripped(t *testing.T) {
 	req := &domain.AnthropicRequest{
-		Model:     "claude-sonnet-4-20250514",
-		MaxTokens: 512,
-		Tools:     raw(`[{"name":"get_weather"}]`),
+		Model:      "claude-sonnet-4-20250514",
+		MaxTokens:  512,
+		Tools:      raw(`[{"name":"get_weather"}]`),
 		ToolChoice: raw(`{"type":"auto"}`),
-		Thinking:  raw(`{"type":"enabled","budget_tokens":10000}`),
+		Thinking:   raw(`{"type":"enabled","budget_tokens":10000}`),
 		Messages: []domain.AnthropicMessage{
 			{Role: "user", Content: raw(`"Hi"`)},
 		},

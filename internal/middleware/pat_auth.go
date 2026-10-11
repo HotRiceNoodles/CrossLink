@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 // PATValidator is the consumer-side interface of PatService used by PAT auth.

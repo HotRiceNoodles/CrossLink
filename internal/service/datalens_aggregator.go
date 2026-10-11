@@ -30,7 +30,7 @@ type DataLensAggregatorService struct {
 	// settings, when wired (SetRetentionProvider), supplies the retention
 	// day counts per cleanup cycle (hot-reload via PUT /system/config).
 	// nil ⇒ boot values. The interval/lookback/backfill remain boot-pinned.
-	settings     DataLensSettingsProvider
+	settings DataLensSettingsProvider
 }
 
 // DataLensSettingsProvider supplies effective DataLens settings per cycle
@@ -225,21 +225,21 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		"COUNT(*) AS latency_samples",
 		"SUM(COALESCE(first_token_ms, 0)) AS total_first_token_ms",
 		"COUNT(first_token_ms) AS first_token_samples",
-		s.d.ConditionalSum("status_code >= 400") + " AS error_count",
-		s.d.ConditionalSum("fallback_count > 0") + " AS fallback_count",
-		s.d.ConditionalSum("retry_count > 0") + " AS retry_count",
-		s.d.ConditionalSum("guardrail_triggered") + " AS guardrail_blocks",
-		s.d.ConditionalSum("cache_hit") + " AS cache_hits",
+		s.d.ConditionalSum("status_code >= 400")+" AS error_count",
+		s.d.ConditionalSum("fallback_count > 0")+" AS fallback_count",
+		s.d.ConditionalSum("retry_count > 0")+" AS retry_count",
+		s.d.ConditionalSum("guardrail_triggered")+" AS guardrail_blocks",
+		s.d.ConditionalSum("cache_hit")+" AS cache_hits",
 		"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) AS distinct_sessions",
 		"COUNT(DISTINCT api_key_id) AS distinct_keys",
-		s.d.ConditionalSum("latency_ms BETWEEN 0 AND 49") + " AS latency_bucket_50",
-		s.d.ConditionalSum("latency_ms BETWEEN 50 AND 99") + " AS latency_bucket_100",
-		s.d.ConditionalSum("latency_ms BETWEEN 100 AND 199") + " AS latency_bucket_200",
-		s.d.ConditionalSum("latency_ms BETWEEN 200 AND 499") + " AS latency_bucket_500",
-		s.d.ConditionalSum("latency_ms BETWEEN 500 AND 999") + " AS latency_bucket_1000",
-		s.d.ConditionalSum("latency_ms BETWEEN 1000 AND 1999") + " AS latency_bucket_2000",
-		s.d.ConditionalSum("latency_ms BETWEEN 2000 AND 4999") + " AS latency_bucket_5000",
-		s.d.ConditionalSum("latency_ms >= 5000") + " AS latency_bucket_slow",
+		s.d.ConditionalSum("latency_ms BETWEEN 0 AND 49")+" AS latency_bucket_50",
+		s.d.ConditionalSum("latency_ms BETWEEN 50 AND 99")+" AS latency_bucket_100",
+		s.d.ConditionalSum("latency_ms BETWEEN 100 AND 199")+" AS latency_bucket_200",
+		s.d.ConditionalSum("latency_ms BETWEEN 200 AND 499")+" AS latency_bucket_500",
+		s.d.ConditionalSum("latency_ms BETWEEN 500 AND 999")+" AS latency_bucket_1000",
+		s.d.ConditionalSum("latency_ms BETWEEN 1000 AND 1999")+" AS latency_bucket_2000",
+		s.d.ConditionalSum("latency_ms BETWEEN 2000 AND 4999")+" AS latency_bucket_5000",
+		s.d.ConditionalSum("latency_ms >= 5000")+" AS latency_bucket_slow",
 		s.d.ConditionalSumCol("system_tokens", ctxAnalyzedCond)+" AS ctx_system_tokens",
 		s.d.ConditionalSumCol("history_tokens", ctxAnalyzedCond)+" AS ctx_history_tokens",
 		s.d.ConditionalSumCol("question_tokens", ctxAnalyzedCond)+" AS ctx_question_tokens",
@@ -247,12 +247,12 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		s.d.ConditionalSumCol("tool_output_tokens", ctxAnalyzedCond)+" AS ctx_tool_output_tokens",
 		s.d.ConditionalSumCol("context_window", ctxAnalyzedCond)+" AS ctx_total_window",
 		s.d.ConditionalCountWhere(ctxAnalyzedCond)+" AS ctx_analyzed_count",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 1 != 0") + " AS ctx_overflow_count",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 8 != 0") + " AS ctx_window_unknown_count",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 0 AND context_utilization_bp < 5000") + " AS ctx_util_bucket_lt50",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 5000 AND context_utilization_bp < 8000") + " AS ctx_util_bucket_50_80",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 8000 AND context_utilization_bp < 9500") + " AS ctx_util_bucket_80_95",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 9500") + " AS ctx_util_bucket_gt95",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 1 != 0")+" AS ctx_overflow_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 8 != 0")+" AS ctx_window_unknown_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 0 AND context_utilization_bp < 5000")+" AS ctx_util_bucket_lt50",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 5000 AND context_utilization_bp < 8000")+" AS ctx_util_bucket_50_80",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 8000 AND context_utilization_bp < 9500")+" AS ctx_util_bucket_80_95",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 9500")+" AS ctx_util_bucket_gt95",
 	)
 
 	// GROUP BY columns

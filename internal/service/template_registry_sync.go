@@ -16,7 +16,7 @@ import (
 const TemplateSyncChannel = "crosslink:templates:sync"
 
 type templateSyncMessage struct {
-	Action    string `json:"action"`     // "reload" (invalidate) | "remove"
+	Action    string `json:"action"` // "reload" (invalidate) | "remove"
 	Name      string `json:"name"`
 	Timestamp int64  `json:"timestamp"`
 	Instance  string `json:"instance_id"`

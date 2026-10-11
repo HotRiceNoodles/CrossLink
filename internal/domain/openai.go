@@ -7,20 +7,20 @@ import (
 )
 
 type OpenAIRequest struct {
-	Model              string          `json:"model"`
-	Messages           []OpenAIMessage `json:"messages"`
-	MaxTokens          *int            `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int           `json:"max_completion_tokens,omitempty"`
-	Stream             bool            `json:"stream,omitempty"`
-	Temperature        *float64        `json:"temperature,omitempty"`
-	TopP               *float64        `json:"top_p,omitempty"`
-	Stop               any             `json:"stop,omitempty"`
-	User               string          `json:"user,omitempty"`
-	StreamOptions      *StreamOptions  `json:"stream_options,omitempty"`
-	Tools              []OpenAITool    `json:"tools,omitempty"`
-	ToolChoice         any             `json:"tool_choice,omitempty"`
-	ReasoningEffort    string          `json:"reasoning_effort,omitempty"`
-	Thinking           json.RawMessage `json:"thinking,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []OpenAIMessage `json:"messages"`
+	MaxTokens           *int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int            `json:"max_completion_tokens,omitempty"`
+	Stream              bool            `json:"stream,omitempty"`
+	Temperature         *float64        `json:"temperature,omitempty"`
+	TopP                *float64        `json:"top_p,omitempty"`
+	Stop                any             `json:"stop,omitempty"`
+	User                string          `json:"user,omitempty"`
+	StreamOptions       *StreamOptions  `json:"stream_options,omitempty"`
+	Tools               []OpenAITool    `json:"tools,omitempty"`
+	ToolChoice          any             `json:"tool_choice,omitempty"`
+	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
+	Thinking            json.RawMessage `json:"thinking,omitempty"`
 }
 
 type StreamOptions struct {
@@ -62,9 +62,9 @@ func ContentText(v any) string {
 }
 
 type OpenAIToolCall struct {
-	ID       string               `json:"id"`
-	Type     string               `json:"type"`
-	Function OpenAIFunctionCall   `json:"function"`
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function OpenAIFunctionCall `json:"function"`
 }
 
 type OpenAIFunctionCall struct {
@@ -102,11 +102,11 @@ type OpenAIChoice struct {
 }
 
 type OpenAIUsage struct {
-	PromptTokens            int                       `json:"prompt_tokens"`
-	CompletionTokens        int                       `json:"completion_tokens"`
-	TotalTokens             int                       `json:"total_tokens"`
-	CompletionTokensDetails *CompletionTokensDetails  `json:"completion_tokens_details,omitempty"`
-	PromptTokensDetails     *PromptTokensDetails      `json:"prompt_tokens_details,omitempty"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	// CacheCreationTokens carries Anthropic cache_creation_input_tokens through
 	// the internal pipeline (billing); never serialized to clients (json:"-").
 	CacheCreationTokens int `json:"-"`
@@ -138,10 +138,10 @@ type OpenAIChunkChoice struct {
 }
 
 type OpenAIChunkDelta struct {
-	Role             string                 `json:"role,omitempty"`
-	Content          string                 `json:"content,omitempty"`
-	ReasoningContent string                 `json:"reasoning_content,omitempty"`
-	ToolCalls        []OpenAIChunkToolCall  `json:"tool_calls,omitempty"`
+	Role             string                `json:"role,omitempty"`
+	Content          string                `json:"content,omitempty"`
+	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIChunkToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIChunkToolCall struct {

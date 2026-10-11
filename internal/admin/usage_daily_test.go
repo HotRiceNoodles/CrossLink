@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 // defaultBudgetOutputTokens is the output-cost estimate used when a request does

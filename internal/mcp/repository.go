@@ -206,7 +206,7 @@ func (r *MCPRepo) GetTopTools(ctx context.Context, orgID int64, serverID int64, 
 	since := time.Now().AddDate(0, 0, -days)
 	errorCountExpr := r.dia.ConditionalCount("status", "0") + " + " + r.dia.ConditionalCount("status", "-1")
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
-		Select("tool_name as name, COUNT(*) as count, COALESCE(AVG(duration),0) as avg_dur, COALESCE(" + r.dia.CastFloat(errorCountExpr) + " / NULLIF(COUNT(*), 0), 0) as error_rate").
+		Select("tool_name as name, COUNT(*) as count, COALESCE(AVG(duration),0) as avg_dur, COALESCE("+r.dia.CastFloat(errorCountExpr)+" / NULLIF(COUNT(*), 0), 0) as error_rate").
 		Where("created_at >= ? AND tool_name != ''", since).
 		Group("tool_name").Order("count DESC")
 	if orgID != 0 {
@@ -230,7 +230,7 @@ func (r *MCPRepo) GetCallsByDay(ctx context.Context, orgID int64, serverID int64
 	successExpr := r.dia.ConditionalCount("status", "1")
 	errorExpr := r.dia.ConditionalCount("status", "0") + " + " + r.dia.ConditionalCount("status", "-1")
 	q := r.db.WithContext(ctx).Model(&MCPToolCallLog{}).
-		Select("DATE(created_at) as date, COUNT(*) as count, " + successExpr + " as success, " + errorExpr + " as error").
+		Select("DATE(created_at) as date, COUNT(*) as count, "+successExpr+" as success, "+errorExpr+" as error").
 		Where("created_at >= ?", since).
 		Group("DATE(created_at)").Order("date ASC")
 	if orgID != 0 {

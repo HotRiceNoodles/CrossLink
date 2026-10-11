@@ -85,7 +85,7 @@ func (r *TeamRepo) populateMemberCounts(ctx context.Context, teams []model.Team)
 		ids[i] = t.ID
 	}
 	type countRow struct {
-		TeamID     int64
+		TeamID      int64
 		MemberCount int64
 	}
 	var rows []countRow

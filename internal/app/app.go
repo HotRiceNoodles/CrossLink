@@ -260,7 +260,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Video gateway
 	videoTaskSvc := service.NewVideoTaskService(rdb, secrets.EncStore, infra.Registry, svcs.UsageSvc)
 	videoTaskSvc.SetBudgetSvc(svcs.BudgetSvc) // completion-time budget reporting
-	ext.Deps.VideoTaskSvc = videoTaskSvc // expose to commercial overlay
+	ext.Deps.VideoTaskSvc = videoTaskSvc      // expose to commercial overlay
 	videoHandler := handler.NewVideoHandler(
 		videoTaskSvc, infra.Resolver, infra.Health,
 		svcs.UsageSvc, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget,
@@ -336,22 +336,22 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		templateSync = service.NewTemplateRegistrySync(rdb, templateRegistry, db)
 	}
 	handlers := admin.ProvideAdminHandlers(&admin.AdminDeps{
-		DB:             db,
-		RDB:            rdb,
-		Repos:          repos,
-		Svcs:           svcs,
-		Resolver:       infra.Resolver,
-		Registry:       infra.Registry,
-		Health:         infra.Health,
-		RetryBudget:    infra.RetryBudget,
-		CacheSvc:       svcs.CacheSvc,
-		SecretResolver: secrets.SecretResolver,
-		EncStore:       secrets.EncStore,
-		DebugStore:     debugStore,
-		Crypto:         cryptoProvider,
-		Config:         cfg,
-		Settings:       settingsProvider,
-		AuditSvc:       ext.Deps.AuditSvc,
+		DB:               db,
+		RDB:              rdb,
+		Repos:            repos,
+		Svcs:             svcs,
+		Resolver:         infra.Resolver,
+		Registry:         infra.Registry,
+		Health:           infra.Health,
+		RetryBudget:      infra.RetryBudget,
+		CacheSvc:         svcs.CacheSvc,
+		SecretResolver:   secrets.SecretResolver,
+		EncStore:         secrets.EncStore,
+		DebugStore:       debugStore,
+		Crypto:           cryptoProvider,
+		Config:           cfg,
+		Settings:         settingsProvider,
+		AuditSvc:         ext.Deps.AuditSvc,
 		TemplateRegistry: templateRegistry,
 		TemplateSync:     templateSync,
 	})
@@ -895,11 +895,11 @@ func ensureAdminUser(db *gorm.DB, cfg *config.AdminConfig) {
 		return
 	}
 	user := &model.User{
-		Username:          cfg.Username,
-		PasswordHash:      cfg.PasswordHash,
-		DisplayName:       "Administrator",
-		RoleID:            adminRole.ID,
-		Status:            1,
+		Username:            cfg.Username,
+		PasswordHash:        cfg.PasswordHash,
+		DisplayName:         "Administrator",
+		RoleID:              adminRole.ID,
+		Status:              1,
 		ForcePasswordChange: true,
 	}
 	if err := db.Create(user).Error; err != nil {

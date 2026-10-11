@@ -52,7 +52,7 @@ func (w *StreamGuardrailWrapper) Next(ctx context.Context) StreamResult {
 		return StreamResult{Done: true}
 	}
 
-		if chunk.Done {
+	if chunk.Done {
 		if w.buf.Len() > 0 {
 			text := w.buf.String()
 			result, err := w.svc.Check(ctx, &CheckRequest{
@@ -94,16 +94,16 @@ func (w *StreamGuardrailWrapper) Next(ctx context.Context) StreamResult {
 			TeamID:    w.teamID,
 			OrgID:     w.orgID,
 		})
-			if err != nil {
-				if !w.failOpen {
-					return StreamResult{Blocked: &CheckResponse{Blocked: true, Reason: "guardrail service unavailable"}}
-				}
-				slog.Warn("guardrail: stream check failed, fail-open", "error", err)
-			} else if result != nil && result.Blocked {
-				return StreamResult{Blocked: result}
+		if err != nil {
+			if !w.failOpen {
+				return StreamResult{Blocked: &CheckResponse{Blocked: true, Reason: "guardrail service unavailable"}}
 			}
-			w.slide()
+			slog.Warn("guardrail: stream check failed, fail-open", "error", err)
+		} else if result != nil && result.Blocked {
+			return StreamResult{Blocked: result}
 		}
+		w.slide()
+	}
 
 	return StreamResult{Chunk: &chunk}
 }
@@ -181,9 +181,9 @@ func (w *CallbackStreamGuardrail) Append(text string) {
 	w.buf.WriteString(text)
 }
 
-func (w *CallbackStreamGuardrail) BufferLen() int      { return utf8.RuneCountInString(w.buf.String()) }
-func (w *CallbackStreamGuardrail) BufferText() string  { return w.buf.String() }
-func (w *CallbackStreamGuardrail) WindowSize() int     { return w.windowSize }
+func (w *CallbackStreamGuardrail) BufferLen() int     { return utf8.RuneCountInString(w.buf.String()) }
+func (w *CallbackStreamGuardrail) BufferText() string { return w.buf.String() }
+func (w *CallbackStreamGuardrail) WindowSize() int    { return w.windowSize }
 
 func (w *CallbackStreamGuardrail) Slide() { slideBuffer(&w.buf, w.windowSize) }
 

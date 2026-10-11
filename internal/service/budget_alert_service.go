@@ -124,15 +124,15 @@ func (s *BudgetAlertService) sendWebhook(alert model.BudgetAlert, scope, targetI
 	}
 
 	payload := map[string]any{
-		"scope":           scope,
-		"target_id":       targetID,
-		"spent":           spent,
-		"budget":          budget,
-		"usage_pct":       pct,
-		"threshold":       alert.ThresholdPct,
-		"triggered_at":    time.Now().Format(time.RFC3339),
+		"scope":            scope,
+		"target_id":        targetID,
+		"spent":            spent,
+		"budget":           budget,
+		"usage_pct":        pct,
+		"threshold":        alert.ThresholdPct,
+		"triggered_at":     time.Now().Format(time.RFC3339),
 		"suggested_action": suggestedAction,
-		"action_type":     actionType,
+		"action_type":      actionType,
 	}
 	body, _ := json.Marshal(payload)
 

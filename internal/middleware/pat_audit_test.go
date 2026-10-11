@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 type fakeAuditLogger struct {

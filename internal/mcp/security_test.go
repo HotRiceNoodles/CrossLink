@@ -58,10 +58,10 @@ func TestSanitizeServer(t *testing.T) {
 
 func TestValidateSameOrigin(t *testing.T) {
 	tests := []struct {
-		name     string
-		baseURL  string
-		target   string
-		wantErr  bool
+		name    string
+		baseURL string
+		target  string
+		wantErr bool
 	}{
 		{"same origin", "http://example.com/sse", "http://example.com/message", false},
 		{"same host different port", "http://example.com:8080/sse", "http://example.com:9090/message", true},

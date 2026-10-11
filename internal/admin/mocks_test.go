@@ -112,9 +112,9 @@ func (m *mockProviderRepo) Delete(ctx context.Context, id int64) error {
 
 // mockProviderModelRepo implements ProviderModelRepository for testing.
 type mockProviderModelRepo struct {
-	countByProviderIDFn  func(ctx context.Context, providerID int64) (int64, error)
-	firstByProviderIDFn  func(ctx context.Context, providerID int64) (*model.ProviderModel, error)
-	listByProviderIDFn   func(ctx context.Context, providerID int64) ([]model.ProviderModel, error)
+	countByProviderIDFn func(ctx context.Context, providerID int64) (int64, error)
+	firstByProviderIDFn func(ctx context.Context, providerID int64) (*model.ProviderModel, error)
+	listByProviderIDFn  func(ctx context.Context, providerID int64) ([]model.ProviderModel, error)
 }
 
 func (m *mockProviderModelRepo) CountByProviderID(ctx context.Context, providerID int64) (int64, error) {

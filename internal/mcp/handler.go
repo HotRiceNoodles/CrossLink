@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 )
 
 const maxRequestBodySize = 10 << 20 // 10MB

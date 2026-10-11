@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
@@ -15,6 +14,7 @@ import (
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 	sqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -104,8 +104,8 @@ func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T
 	}}
 
 	req := &domain.OpenAIRequest{
-		Stream:  true,
-		Model:   "fake-model",
+		Stream:   true,
+		Model:    "fake-model",
 		Messages: []domain.OpenAIMessage{{Role: "user", Content: "please respond to this request"}},
 	}
 

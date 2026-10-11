@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 )
 
 // KeyValidator validates raw API keys against the database.

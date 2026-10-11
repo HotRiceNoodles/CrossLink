@@ -18,13 +18,13 @@ type TemplateSeed struct {
 }
 
 type TemplateConfig struct {
-	Name            string          `yaml:"name"`
-	Description     string          `yaml:"description"`
-	SystemPrompt    string          `yaml:"system_prompt"`
+	Name            string           `yaml:"name"`
+	Description     string           `yaml:"description"`
+	SystemPrompt    string           `yaml:"system_prompt"`
 	VariablesSchema []VariableConfig `yaml:"variables_schema"`
-	FewShot         []FewShotConfig `yaml:"few_shot"`
-	TargetFormat    string          `yaml:"target_format"`
-	Status          int             `yaml:"status"`
+	FewShot         []FewShotConfig  `yaml:"few_shot"`
+	TargetFormat    string           `yaml:"target_format"`
+	Status          int              `yaml:"status"`
 }
 
 type VariableConfig struct {

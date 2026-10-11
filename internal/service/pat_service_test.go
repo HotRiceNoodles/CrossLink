@@ -15,10 +15,10 @@ import (
 // ---- functional mock repo ----
 
 type mockPatRepo struct {
-	findByHash   func(ctx context.Context, hash string) (*model.PatToken, error)
-	create       func(ctx context.Context, t *model.PatToken) error
-	getByID      func(ctx context.Context, id int64) (*model.PatToken, error)
-	revoke       func(ctx context.Context, id int64) error
+	findByHash    func(ctx context.Context, hash string) (*model.PatToken, error)
+	create        func(ctx context.Context, t *model.PatToken) error
+	getByID       func(ctx context.Context, id int64) (*model.PatToken, error)
+	revoke        func(ctx context.Context, id int64) error
 	touchLastUsed func(ctx context.Context, id int64) error
 }
 

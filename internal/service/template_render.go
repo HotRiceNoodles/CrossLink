@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	maxVariableValueBytes = 4 * 1024  // 4KB per variable value
-	maxSystemPromptBytes  = 8 * 1024  // 8KB rendered system prompt
+	maxVariableValueBytes = 4 * 1024 // 4KB per variable value
+	maxSystemPromptBytes  = 8 * 1024 // 8KB rendered system prompt
 )
 
 // reservedVarPattern matches variable names that look like they carry
@@ -31,7 +31,7 @@ type FewShotMessage struct {
 // VariableDef is one entry of a template's variables_schema.
 type VariableDef struct {
 	Name     string `json:"name"`
-	Type     string `json:"type"`     // "" | string | number | bool
+	Type     string `json:"type"` // "" | string | number | bool
 	Required bool   `json:"required"`
 	Default  any    `json:"default"`
 	Trusted  bool   `json:"trusted"`
@@ -40,7 +40,7 @@ type VariableDef struct {
 // RenderedContext is the output of RenderTemplate: the assembled system prompt
 // (with trusted variables interpolated) and the static few-shot examples.
 type RenderedContext struct {
-	SystemPrompt string          `json:"system_prompt"`
+	SystemPrompt string           `json:"system_prompt"`
 	FewShot      []FewShotMessage `json:"few_shot"`
 }
 

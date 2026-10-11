@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 const maxCacheResponseSize = 10 << 20 // 10MB max cached response

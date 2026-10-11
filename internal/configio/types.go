@@ -8,11 +8,11 @@ const BundleVersion = "1"
 
 // ExportBundle is the plaintext YAML payload encrypted inside a CLCFG file.
 type ExportBundle struct {
-	Version    string             `yaml:"version"`
-	ExportedAt time.Time          `yaml:"exported_at"`
-	Providers  []ProviderExport   `yaml:"providers,omitempty"`
-	Models     []ModelExport      `yaml:"models,omitempty"`
-	ErrorRules []ErrorRuleExport  `yaml:"error_rules,omitempty"`
+	Version    string            `yaml:"version"`
+	ExportedAt time.Time         `yaml:"exported_at"`
+	Providers  []ProviderExport  `yaml:"providers,omitempty"`
+	Models     []ModelExport     `yaml:"models,omitempty"`
+	ErrorRules []ErrorRuleExport `yaml:"error_rules,omitempty"`
 }
 
 // ProviderExport mirrors model.Provider for serialization. OrgID is deliberately
@@ -32,16 +32,16 @@ type ProviderExport struct {
 // ModelExport mirrors model.ProviderModel. ProviderName replaces ProviderID so
 // the association survives cross-instance import (ids are not stable across DBs).
 type ModelExport struct {
-	ProviderName    string         `yaml:"provider_name"`
-	ModelName       string         `yaml:"model_name"`
-	ProviderModel   string         `yaml:"provider_model"`
-	Weight          int            `yaml:"weight"`
-	Priority        int            `yaml:"priority"`
-	InputPrice      float64        `yaml:"input_price"`
-	OutputPrice     float64        `yaml:"output_price"`
-	Currency        string         `yaml:"currency"`
-	RoutingStrategy string         `yaml:"routing_strategy"`
-	Status          int16          `yaml:"status"`
+	ProviderName    string  `yaml:"provider_name"`
+	ModelName       string  `yaml:"model_name"`
+	ProviderModel   string  `yaml:"provider_model"`
+	Weight          int     `yaml:"weight"`
+	Priority        int     `yaml:"priority"`
+	InputPrice      float64 `yaml:"input_price"`
+	OutputPrice     float64 `yaml:"output_price"`
+	Currency        string  `yaml:"currency"`
+	RoutingStrategy string  `yaml:"routing_strategy"`
+	Status          int16   `yaml:"status"`
 }
 
 // ErrorRuleExport mirrors model.ErrorClassificationRule (global, no org_id).

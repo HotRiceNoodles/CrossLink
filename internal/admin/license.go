@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/license"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -33,11 +33,11 @@ func (h *LicenseHandler) Status(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"tier":        tier,
-		"edition":     edition,
-		"is_valid":    gate.IsValid(),
-		"fingerprint": gate.Fingerprint(),
-		"crypto_mode": h.cfg.Crypto.Mode,
+		"tier":               tier,
+		"edition":            edition,
+		"is_valid":           gate.IsValid(),
+		"fingerprint":        gate.Fingerprint(),
+		"crypto_mode":        h.cfg.Crypto.Mode,
 		"license_management": h.cfg.License.HeartbeatEnabled,
 	}
 

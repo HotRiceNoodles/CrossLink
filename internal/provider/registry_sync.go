@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/secret"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

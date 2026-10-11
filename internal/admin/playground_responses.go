@@ -10,13 +10,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/translator"
+	"github.com/gin-gonic/gin"
 )
 
 // PlaygroundResponsesRequest models the admin playground Responses request.
@@ -24,13 +24,13 @@ import (
 // 3B translates to internal OpenAI.
 type PlaygroundResponsesRequest struct {
 	Model              string          `json:"model"`
-	Input             json.RawMessage `json:"input"`
-	Instructions      string          `json:"instructions,omitempty"`
-	MaxOutputTokens   *int            `json:"max_output_tokens,omitempty"`
-	PreviousResponseID string         `json:"previous_response_id,omitempty"`
-	Stream            bool            `json:"stream,omitempty"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
+	Input              json.RawMessage `json:"input"`
+	Instructions       string          `json:"instructions,omitempty"`
+	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Stream             bool            `json:"stream,omitempty"`
+	Temperature        *float64        `json:"temperature,omitempty"`
+	TopP               *float64        `json:"top_p,omitempty"`
 }
 
 type pgResponsesRaw struct {

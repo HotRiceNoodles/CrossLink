@@ -228,11 +228,11 @@ func (h *PATReadHandler) Usage(c *gin.Context) {
 
 // Budget status thresholds.
 const (
-	budgetWarnRatio  = 0.8
-	budgetScopeKey   = "key"
-	budgetStatusExceeded  = "exceeded"
-	budgetStatusWarning   = "warning"
-	budgetStatusOK        = "ok"
+	budgetWarnRatio      = 0.8
+	budgetScopeKey       = "key"
+	budgetStatusExceeded = "exceeded"
+	budgetStatusWarning  = "warning"
+	budgetStatusOK       = "ok"
 )
 
 // patBudgetDTO is the field whitelist for /pat/budgets/status — no key

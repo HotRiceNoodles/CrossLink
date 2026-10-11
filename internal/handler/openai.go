@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
@@ -20,6 +19,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/pkg/token"
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/datatypes"
 )
@@ -34,8 +34,8 @@ type OpenAIHandler struct {
 	budget        *provider.RetryBudget
 	guardrailSvc  *guardrail.GuardrailService
 	classifier    *service.ErrorClassifier
-	guardRDB      *redis.Client // P3a: per-(provider,model) guardrail counters; nil = disabled
-	budgetSvc     *service.BudgetService // pre-request budget reservation (C5); nil = disabled
+	guardRDB      *redis.Client               // P3a: per-(provider,model) guardrail counters; nil = disabled
+	budgetSvc     *service.BudgetService      // pre-request budget reservation (C5); nil = disabled
 	calibration   *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
 }
 
@@ -96,15 +96,15 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	c.Set("usage_logged", true)
 	submitUsage(func() {
 		h.usageSvc.Log(context.Background(), &service.UsageEntry{
-			RouteType:      "openai",
-			ModelRequested: reqModel,
-			ProviderID:     providerID,
-			APIKeyID:       keyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			Currency:       currency,
-			StatusCode:     statusCode,
-			ErrorType:      "provider_error",
+			RouteType:          "openai",
+			ModelRequested:     reqModel,
+			ProviderID:         providerID,
+			APIKeyID:           keyID,
+			TeamID:             teamID,
+			OrgID:              orgID,
+			Currency:           currency,
+			StatusCode:         statusCode,
+			ErrorType:          "provider_error",
 			ErrorMessage:       det.Message,
 			UpstreamStatus:     det.UpstreamStatus,
 			UpstreamErrorCode:  det.Code,
@@ -112,12 +112,12 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			UpstreamErrorParam: det.Param,
 			ErrorStage:         det.Stage,
 			Attempts:           attempts,
-			LatencyMs:      time.Since(start).Milliseconds(),
-			FallbackCount:  result.FallbackCount,
-			RetryCount:     retryCount,
-			SessionID:      sessionID,
-			TemplateID:     templateID,
-				PriceMultiplier: priceMult,
+			LatencyMs:          time.Since(start).Milliseconds(),
+			FallbackCount:      result.FallbackCount,
+			RetryCount:         retryCount,
+			SessionID:          sessionID,
+			TemplateID:         templateID,
+			PriceMultiplier:    priceMult,
 		})
 	})
 }
@@ -131,7 +131,7 @@ func extractLastOpenAIUserMessage(messages []domain.OpenAIMessage) string {
 	return ""
 }
 
-const maxRequestBody = 10 << 20 // 10 MB
+const maxRequestBody = 10 << 20   // 10 MB
 const maxResponseBuffer = 1 << 20 // 1 MB buffer cap for content logging
 
 // estimateOpenAIInputTokens rough-estimates the input token count of an OpenAI
@@ -386,37 +386,37 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				TeamID:    teamID,
 				OrgID:     orgID,
 			})
-				if grErr != nil {
-					if h.guardrailSvc.IsFailOpen() {
-						slog.Warn("guardrail: response check failed, fail-open", "error", grErr)
-					} else {
-						slog.Error("guardrail: response check failed", "error", grErr)
-						c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
-						return
+			if grErr != nil {
+				if h.guardrailSvc.IsFailOpen() {
+					slog.Warn("guardrail: response check failed, fail-open", "error", grErr)
+				} else {
+					slog.Error("guardrail: response check failed", "error", grErr)
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
+					return
+				}
+			} else if grResult != nil && grResult.Blocked {
+				if grResult.Action == "block" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
+				}
+				if grResult.Action == "mask" && grResult.MaskedContent != "" {
+					c.Set("guardrail_triggered", true)
+					c.Set("guardrail_rule", grResult.RuleName)
+					for i := range resp.Choices {
+						resp.Choices[i].Message.Content = grResult.MaskedContent
 					}
-				} else if grResult != nil && grResult.Blocked {
-					if grResult.Action == "block" {
-						c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
-						return
-					}
-					if grResult.Action == "mask" && grResult.MaskedContent != "" {
-						c.Set("guardrail_triggered", true)
-						c.Set("guardrail_rule", grResult.RuleName)
-						for i := range resp.Choices {
-							resp.Choices[i].Message.Content = grResult.MaskedContent
-						}
-						respBody, _ = json.Marshal(resp)
-					}
-					if grResult.Action == "log" {
-						c.Set("guardrail_triggered", true)
-						c.Set("guardrail_rule", grResult.RuleName)
-					}
-				} else if grResult != nil && grResult.Action == "log" {
+					respBody, _ = json.Marshal(resp)
+				}
+				if grResult.Action == "log" {
 					c.Set("guardrail_triggered", true)
 					c.Set("guardrail_rule", grResult.RuleName)
 				}
+			} else if grResult != nil && grResult.Action == "log" {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grResult.RuleName)
 			}
 		}
+	}
 	setFallbackHeaders(c, route.ProviderModel, result.FallbackCount)
 	c.Header("Content-Type", "application/json")
 	c.Status(http.StatusOK)
@@ -425,9 +425,9 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	// Cache response for idempotency
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
 		h.idemCache.Set(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
-				StatusCode: http.StatusOK,
-				Body:       respBody,
-			})
+			StatusCode: http.StatusOK,
+			Body:       respBody,
+		})
 	}
 
 	inputTokens := resp.Usage.PromptTokens
@@ -446,19 +446,19 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			h.latencySvc.RecordLatency(context.Background(), pn, latency)
 		}
 		entry := &service.UsageEntry{
-			RouteType:      "openai",
-			ModelRequested: req.Model,
-			ModelUsed:      route.ProviderModel,
-			ProviderID:     route.ProviderRow.ID,
-			APIKeyID:       apiKeyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			InputTokens:    inputTokens,
-			OutputTokens:   outputTokens,
-			InputPrice:     route.InputPrice,
-			Currency:       route.Currency,
-			OutputPrice:    route.OutputPrice,
-			StatusCode:     http.StatusOK,
+			RouteType:       "openai",
+			ModelRequested:  req.Model,
+			ModelUsed:       route.ProviderModel,
+			ProviderID:      route.ProviderRow.ID,
+			APIKeyID:        apiKeyID,
+			TeamID:          teamID,
+			OrgID:           orgID,
+			InputTokens:     inputTokens,
+			OutputTokens:    outputTokens,
+			InputPrice:      route.InputPrice,
+			Currency:        route.Currency,
+			OutputPrice:     route.OutputPrice,
+			StatusCode:      http.StatusOK,
 			LatencyMs:       latency,
 			FallbackCount:   result.FallbackCount,
 			RetryCount:      totalRetries,
@@ -466,7 +466,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
 			SessionID:       sessionID,
 			TemplateID:      templateID,
-				PriceMultiplier: priceMult,
+			PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -841,19 +841,19 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			h.latencySvc.RecordLatency(context.Background(), pn, latency)
 		}
 		entry := &service.UsageEntry{
-			RouteType:      "openai",
-			ModelRequested: req.Model,
-			ModelUsed:      route.ProviderModel,
-			ProviderID:     route.ProviderRow.ID,
-			APIKeyID:       apiKeyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			InputTokens:    inputTokens,
-			OutputTokens:   outputTokens,
-			InputPrice:     route.InputPrice,
-			Currency:       route.Currency,
-			OutputPrice:    route.OutputPrice,
-			StatusCode:     http.StatusOK,
+			RouteType:       "openai",
+			ModelRequested:  req.Model,
+			ModelUsed:       route.ProviderModel,
+			ProviderID:      route.ProviderRow.ID,
+			APIKeyID:        apiKeyID,
+			TeamID:          teamID,
+			OrgID:           orgID,
+			InputTokens:     inputTokens,
+			OutputTokens:    outputTokens,
+			InputPrice:      route.InputPrice,
+			Currency:        route.Currency,
+			OutputPrice:     route.OutputPrice,
+			StatusCode:      http.StatusOK,
 			LatencyMs:       latency,
 			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
 			FallbackCount:   result.FallbackCount,
@@ -862,7 +862,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			CacheReadTokens: cacheReadTokens,
 			SessionID:       sessionID,
 			TemplateID:      templateID,
-				PriceMultiplier: priceMult,
+			PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -930,4 +930,3 @@ func firstTokenMsValue(start time.Time, firstTokenAt time.Time) int64 {
 	}
 	return firstTokenAt.Sub(start).Milliseconds()
 }
-

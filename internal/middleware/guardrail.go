@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/translator"
+	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 )
 
@@ -101,7 +101,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 		guardCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-			result, err := svc.Check(guardCtx, &guardrail.CheckRequest{
+		result, err := svc.Check(guardCtx, &guardrail.CheckRequest{
 			Content:   content,
 			Direction: guardrail.DirectionRequest,
 			Model:     probe.Model,
@@ -238,8 +238,8 @@ func extractImagePrompt(body []byte) string {
 // instructions + input (polymorphic: string, or array of message/function_call_output items).
 func extractResponsesInput(body []byte) string {
 	var req struct {
-		Input         json.RawMessage `json:"input"`
-		Instructions  string          `json:"instructions"`
+		Input        json.RawMessage `json:"input"`
+		Instructions string          `json:"instructions"`
 	}
 	if json.Unmarshal(body, &req) != nil {
 		return ""
@@ -298,7 +298,6 @@ func replaceResponsesInput(body []byte, maskedContent string) ([]byte, bool) {
 	result, err := json.Marshal(m)
 	return result, err == nil
 }
-
 
 // replaceContentInBody replaces text content in the request body with masked content.
 func replaceContentInBody(body []byte, maskedContent string, path string) ([]byte, bool) {

@@ -199,7 +199,7 @@ func translateToolChoice(raw json.RawMessage) any {
 		return "required"
 	case "tool":
 		return map[string]any{
-			"type": "function",
+			"type":     "function",
 			"function": map[string]any{"name": tc.Name},
 		}
 	default:

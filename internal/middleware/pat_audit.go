@@ -4,9 +4,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 // AuditLogger is the consumer-side interface of service.AuditService.
@@ -47,9 +47,9 @@ func PATAudit(auditSvc AuditLogger) gin.HandlerFunc {
 		uid, _ := userID.(int64)
 
 		auditSvc.Log(&model.AuditLog{
-			UserID:   uid,
-			Username: usernameToString(username),
-			Action:   "pat:request",
+			UserID:       uid,
+			Username:     usernameToString(username),
+			Action:       "pat:request",
 			ResourceType: "pat",
 			ResourceID:   strconv.FormatInt(id, 10),
 			Detail: service.AuditDetail(map[string]any{

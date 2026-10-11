@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	"github.com/google/uuid"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 )
 
@@ -111,25 +111,25 @@ type UsageEntry struct {
 	ErrorStage         string
 	// Attempts is the serialized fallback timeline; nil on clean single-attempt
 	// successes (error observability L2).
-	Attempts datatypes.JSON
-	UserMessage    string
-	ModelResponse  string
-	FallbackCount       int
-	RetryCount          int
-	GuardrailTriggered  bool
-	GuardrailRule       string
-	AgentType           string
-	SecurityEvents      datatypes.JSON
-	CacheHit            bool
-	ReasoningTokens     int
-	CacheReadTokens     int
-	SessionID           string
-	TemplateID      *int64 // prompt template that assembled this request (nil = none)
-	ImageCount      int
-	ImageSize       string
-	ImageQuality    string
-	PrecomputedCost float64
-	PriceMultiplier float64 // key's price multiplier (1.0 = no markup)
+	Attempts           datatypes.JSON
+	UserMessage        string
+	ModelResponse      string
+	FallbackCount      int
+	RetryCount         int
+	GuardrailTriggered bool
+	GuardrailRule      string
+	AgentType          string
+	SecurityEvents     datatypes.JSON
+	CacheHit           bool
+	ReasoningTokens    int
+	CacheReadTokens    int
+	SessionID          string
+	TemplateID         *int64 // prompt template that assembled this request (nil = none)
+	ImageCount         int
+	ImageSize          string
+	ImageQuality       string
+	PrecomputedCost    float64
+	PriceMultiplier    float64 // key's price multiplier (1.0 = no markup)
 	// Context quality analysis fields — nil = unanalyzed (cache-hit or analysis failure).
 	SystemTokens         *int
 	HistoryTokens        *int
@@ -156,18 +156,18 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 	}
 	upstreamCost := entry.cost()
 	log := &model.UsageLog{
-		RequestID:      uuid.New().String()[:8],
-		RouteType:      entry.RouteType,
-		ModelRequested: entry.ModelRequested,
-		ModelUsed:      entry.ModelUsed,
-		InputTokens:    entry.InputTokens,
-		OutputTokens:   entry.OutputTokens,
-		Cost:           upstreamCost,
-		BillableCost:   upstreamCost * mult,
-		Currency:       model.ValidCurrency(entry.Currency),
-		LatencyMs:      int(entry.LatencyMs),
-		StatusCode:     entry.StatusCode,
-		ErrorType:     entry.ErrorType,
+		RequestID:          uuid.New().String()[:8],
+		RouteType:          entry.RouteType,
+		ModelRequested:     entry.ModelRequested,
+		ModelUsed:          entry.ModelUsed,
+		InputTokens:        entry.InputTokens,
+		OutputTokens:       entry.OutputTokens,
+		Cost:               upstreamCost,
+		BillableCost:       upstreamCost * mult,
+		Currency:           model.ValidCurrency(entry.Currency),
+		LatencyMs:          int(entry.LatencyMs),
+		StatusCode:         entry.StatusCode,
+		ErrorType:          entry.ErrorType,
 		FallbackCount:      entry.FallbackCount,
 		RetryCount:         entry.RetryCount,
 		GuardrailTriggered: entry.GuardrailTriggered,

@@ -170,7 +170,7 @@ func TestStreamTranslator_ToolCallStreaming(t *testing.T) {
 
 	// Parse content_block_start data
 	var startData struct {
-		Index       int `json:"index"`
+		Index        int `json:"index"`
 		ContentBlock struct {
 			Type string `json:"type"`
 			ID   string `json:"id"`

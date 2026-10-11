@@ -42,8 +42,8 @@ const (
 
 	// Notifications (no ID, client to server or server to client)
 	NotificationInitialized      = "notifications/initialized"
-	NotificationToolsListChanged  = "notifications/tools/list_changed"
-	NotificationCancelled         = "notifications/cancelled"
+	NotificationToolsListChanged = "notifications/tools/list_changed"
+	NotificationCancelled        = "notifications/cancelled"
 )
 
 // serverNameRegex validates MCP server names used as URL path segments.

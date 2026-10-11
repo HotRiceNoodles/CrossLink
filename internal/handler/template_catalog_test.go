@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/crosslink/internal/model"
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
@@ -28,10 +28,10 @@ func TestTemplateCatalog_ListReturnsMetadataOnly(t *testing.T) {
 	db := setupCatalogDB(t)
 	require.NoError(t, db.Create(&model.PromptTemplate{
 		Name: "summarize", Description: "Summarize text",
-		SystemPrompt: "SECRET IP PROMPT — must not leak",
-		FewShot:      datatypes.JSON([]byte(`[{"role":"user","content":"secret example"}]`)),
+		SystemPrompt:    "SECRET IP PROMPT — must not leak",
+		FewShot:         datatypes.JSON([]byte(`[{"role":"user","content":"secret example"}]`)),
 		VariablesSchema: datatypes.JSON([]byte(`[{"name":"lang","type":"string","required":true},{"name":"max_words","type":"number","required":false,"default":200}]`)),
-		TargetFormat: "auto", Status: 1,
+		TargetFormat:    "auto", Status: 1,
 	}).Error)
 	require.NoError(t, db.Create(&model.PromptTemplate{
 		Name: "disabled-one", SystemPrompt: "x", TargetFormat: "auto", Status: 1,

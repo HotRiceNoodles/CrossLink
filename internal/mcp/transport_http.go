@@ -22,9 +22,9 @@ var blockedHeaders = map[string]bool{
 	// Auth headers are owned by the configured Authenticator (auth.Apply). Allowing
 	// them as custom headers would let a server's customHeaders override/strip the
 	// intended upstream authentication.
-	"authorization":  true,
+	"authorization":       true,
 	"proxy-authorization": true,
-	"cookie":         true,
+	"cookie":              true,
 }
 
 func isBlockedHeader(name string) bool {

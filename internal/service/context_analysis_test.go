@@ -219,10 +219,10 @@ func TestDefaultContextWindow(t *testing.T) {
 		"totally-unknown-model": 0, // 0 = unknown
 		// Provider models are stored with vendor casing (e.g. GLM-4.7-Flash,
 		// MiniMax-M2.7) — prefix match must be case-insensitive.
-		"GLM-4.7-Flash":   128000,
-		"GPT-4O-MINI":     128000,
-		"MiniMax-M2.7":    200000,
-		"DeepSeek-Chat":   64000,
+		"GLM-4.7-Flash": 128000,
+		"GPT-4O-MINI":   128000,
+		"MiniMax-M2.7":  200000,
+		"DeepSeek-Chat": 64000,
 	}
 	for name, want := range cases {
 		if got := DefaultContextWindow(name); got != want {
@@ -233,10 +233,10 @@ func TestDefaultContextWindow(t *testing.T) {
 
 func TestModelFamily_CaseInsensitive(t *testing.T) {
 	cases := map[string]string{
-		"GLM-4.7-Flash":  "glm",
-		"DeepSeek-Chat":  "deepseek",
-		"GPT-4O":         "gpt",
-		"Claude-Sonnet":  "claude",
+		"GLM-4.7-Flash": "glm",
+		"DeepSeek-Chat": "deepseek",
+		"GPT-4O":        "gpt",
+		"Claude-Sonnet": "claude",
 	}
 	for name, want := range cases {
 		if got := ModelFamily(name); got != want {

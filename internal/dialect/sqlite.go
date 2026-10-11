@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/flock"
 	sqlite "github.com/glebarez/sqlite"
+	"github.com/gofrs/flock"
 	"gorm.io/gorm"
 )
 
@@ -37,8 +37,8 @@ func (s *SQLiteDialect) PartitionSupport() PartitionSupport { return PartitionNo
 // Capabilities returns SQLite's feature support.
 func (s *SQLiteDialect) Capabilities() Capabilities {
 	return Capabilities{
-		PartialIndex:     true, // SQLite 3.9.0+
-		ConcurrentWrites: 1,    // Single writer
+		PartialIndex:     true,  // SQLite 3.9.0+
+		ConcurrentWrites: 1,     // Single writer
 		AdvisoryLock:     false, // Uses file lock instead
 	}
 }
@@ -92,7 +92,7 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 
 	// Experimental dialect: only the initial schema (000001) is applied.
 	// Only suitable for evaluation, not production.
-	slog.Warn("SQLite is an EXPERIMENTAL backend: only the initial schema (000001) "+
+	slog.Warn("SQLite is an EXPERIMENTAL backend: only the initial schema (000001) " +
 		"is applied; schema will be missing most tables. Use PostgreSQL (or Kingbase) for anything real.")
 
 	migrationFile := filepath.Join(s.MigrationDir(), "000001_init_schema.up.sql")

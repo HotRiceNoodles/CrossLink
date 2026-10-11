@@ -43,7 +43,7 @@ func thinkingBlockStart(index int) domain.SSEEvent {
 		"type":  "content_block_start",
 		"index": index,
 		"content_block": map[string]any{
-			"type": "thinking",
+			"type":     "thinking",
 			"thinking": "",
 		},
 	})
@@ -81,8 +81,8 @@ func toolUseArgumentsDelta(index int, argsChunk string) domain.SSEEvent {
 		"type":  "content_block_delta",
 		"index": index,
 		"delta": map[string]any{
-			"type":          "input_json_delta",
-			"partial_json":  argsChunk,
+			"type":         "input_json_delta",
+			"partial_json": argsChunk,
 		},
 	})
 	return domain.SSEEvent{Event: "content_block_delta", Data: data}

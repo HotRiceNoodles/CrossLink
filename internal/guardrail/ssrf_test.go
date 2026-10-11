@@ -72,12 +72,12 @@ func TestInternalAllowlist(t *testing.T) {
 		ip      string
 		allowed bool
 	}{
-		{"10.0.0.5", true},      // allowlisted VPC range
-		{"192.168.1.1", true},   // allowlisted
-		{"127.0.0.1", false},    // loopback never listed → blocked
+		{"10.0.0.5", true},         // allowlisted VPC range
+		{"192.168.1.1", true},      // allowlisted
+		{"127.0.0.1", false},       // loopback never listed → blocked
 		{"169.254.169.254", false}, // cloud metadata → blocked
-		{"172.16.0.1", false},   // private but not listed → blocked
-		{"8.8.8.8", false},      // public — not routed through AllowedInternal
+		{"172.16.0.1", false},      // private but not listed → blocked
+		{"8.8.8.8", false},         // public — not routed through AllowedInternal
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.ip)

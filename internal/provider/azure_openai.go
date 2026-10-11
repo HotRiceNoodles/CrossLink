@@ -29,9 +29,9 @@ type azureExtraConfig struct {
 
 func NewAzureOpenAIProvider(name, baseURL, apiKey string, extraConfig []byte, timeout time.Duration) (*AzureOpenAIProvider, error) {
 	p := &AzureOpenAIProvider{
-		name:       name,
-		endpoint:   strings.TrimRight(baseURL, "/"),
-		apiVersion: "2024-02-15-preview",
+		name:         name,
+		endpoint:     strings.TrimRight(baseURL, "/"),
+		apiVersion:   "2024-02-15-preview",
 		httpClient:   newDefaultClient(timeout),
 		streamClient: newStreamClient(),
 	}
@@ -175,12 +175,12 @@ func init() {
 	RegisterAdapter("azure_openai", func(p *model.Provider, timeout time.Duration) (Provider, error) {
 		return NewAzureOpenAIProvider(p.Name, p.BaseURL, p.APIKey, p.ExtraConfig, timeout)
 	}, &AdapterMeta{
-		DisplayName:   "Azure OpenAI",
-		Description:   "Microsoft Azure OpenAI Service",
+		DisplayName:    "Azure OpenAI",
+		Description:    "Microsoft Azure OpenAI Service",
 		AdapterVersion: "1",
-		NeedsBaseURL: true,
-		NeedsAPIKey:  true,
-		Capabilities: []string{"chat", "stream", "embeddings"},
+		NeedsBaseURL:   true,
+		NeedsAPIKey:    true,
+		Capabilities:   []string{"chat", "stream", "embeddings"},
 		ExtraFields: []AdapterField{
 			{Name: "deployment_name", Type: "text", Required: true, Label: "Deployment Name", Placeholder: "my-gpt4-deployment"},
 			{Name: "api_version", Type: "text", Label: "API Version", DefaultValue: "2024-02-15-preview"},

@@ -25,7 +25,7 @@ var (
 )
 
 const (
-	videoTaskKeyPrefix  = "cl:video:task:"
+	videoTaskKeyPrefix   = "cl:video:task:"
 	videoStatusKeyPrefix = "cl:video:status:"
 	videoBilledKeyPrefix = "cl:video:billed:"
 	videoTaskTTL         = 6 * time.Hour
@@ -35,17 +35,17 @@ const (
 
 // VideoSubmitParams holds the parameters for submitting a video task.
 type VideoSubmitParams struct {
-	UpstreamTaskID string
-	ProviderName   string
-	APIKey         string // plaintext; will be encrypted before storage
-	Model          string
-	OrgID          int64
-	APIKeyID       int64
-	TeamID         int64
-	Currency       string
+	UpstreamTaskID  string
+	ProviderName    string
+	APIKey          string // plaintext; will be encrypted before storage
+	Model           string
+	OrgID           int64
+	APIKeyID        int64
+	TeamID          int64
+	Currency        string
 	PriceMultiplier float64
-	InputPrice     float64
-	Prompt         string
+	InputPrice      float64
+	Prompt          string
 	// BudgetScopes: limits collected by BudgetCheck at submission; ensureBilled
 	// reports the final cost to each so budgets update at completion (within the
 	// poll interval) instead of waiting for the hourly calibration.
@@ -54,18 +54,18 @@ type VideoSubmitParams struct {
 
 // VideoTaskState holds the stored task state retrieved from Redis/memory.
 type VideoTaskState struct {
-	UpstreamTaskID string
-	ProviderName   string
-	APIKey         string // decrypted plaintext
-	Model          string
-	OrgID          int64
-	APIKeyID       int64
-	TeamID         int64
-	Currency       string
+	UpstreamTaskID  string
+	ProviderName    string
+	APIKey          string // decrypted plaintext
+	Model           string
+	OrgID           int64
+	APIKeyID        int64
+	TeamID          int64
+	Currency        string
 	PriceMultiplier float64
-	InputPrice     float64
-	BudgetScopes   []BudgetScope
-	CreatedAt      int64
+	InputPrice      float64
+	BudgetScopes    []BudgetScope
+	CreatedAt       int64
 }
 
 // VideoTaskService manages video task lifecycle across Redis (with sync.Map fallback).
@@ -153,18 +153,18 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 		// Fallback: store in memory (no encryption)
 		s.fallback.Store(gwTaskID, &fallbackEntry{
 			state: &VideoTaskState{
-				UpstreamTaskID: params.UpstreamTaskID,
-				ProviderName:   params.ProviderName,
-				APIKey:         params.APIKey,
-				Model:          params.Model,
-				OrgID:          params.OrgID,
-				APIKeyID:       params.APIKeyID,
-				TeamID:         params.TeamID,
-				Currency:       params.Currency,
+				UpstreamTaskID:  params.UpstreamTaskID,
+				ProviderName:    params.ProviderName,
+				APIKey:          params.APIKey,
+				Model:           params.Model,
+				OrgID:           params.OrgID,
+				APIKeyID:        params.APIKeyID,
+				TeamID:          params.TeamID,
+				Currency:        params.Currency,
 				PriceMultiplier: params.PriceMultiplier,
-				InputPrice:     params.InputPrice,
-				BudgetScopes:   params.BudgetScopes,
-				CreatedAt:      createdAt,
+				InputPrice:      params.InputPrice,
+				BudgetScopes:    params.BudgetScopes,
+				CreatedAt:       createdAt,
 			},
 			expiresAt: time.Now().Add(videoTaskTTL),
 		})
@@ -289,18 +289,18 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 		}
 
 		return &VideoTaskState{
-			UpstreamTaskID: m["upstream_task_id"],
-			ProviderName:   m["provider_name"],
-			APIKey:         plainKey,
-			Model:          m["model"],
-			OrgID:          orgID,
-			APIKeyID:       apiKeyID,
-			TeamID:         teamID,
-			Currency:       m["currency"],
+			UpstreamTaskID:  m["upstream_task_id"],
+			ProviderName:    m["provider_name"],
+			APIKey:          plainKey,
+			Model:           m["model"],
+			OrgID:           orgID,
+			APIKeyID:        apiKeyID,
+			TeamID:          teamID,
+			Currency:        m["currency"],
 			PriceMultiplier: priceMultiplier,
-			InputPrice:     inputPrice,
-			BudgetScopes:   budgetScopes,
-			CreatedAt:      createdAt,
+			InputPrice:      inputPrice,
+			BudgetScopes:    budgetScopes,
+			CreatedAt:       createdAt,
 		}, nil
 	}
 

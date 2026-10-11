@@ -39,8 +39,8 @@ func NewResponsesStreamBuilder(respID, model string) *ResponsesStreamBuilder {
 		respID = generateResponseID()
 	}
 	return &ResponsesStreamBuilder{
-		respID:   respID,
-		model:    model,
+		respID:    respID,
+		model:     model,
 		toolItems: map[int]*toolItem{},
 	}
 }
@@ -119,7 +119,7 @@ func (b *ResponsesStreamBuilder) Next(chunk *domain.OpenAIChunk) []domain.Respon
 			events = append(events, domain.ResponsesEvent{
 				Type: "response.function_call_arguments.delta",
 				Payload: map[string]any{
-					"type": "response.function_call_arguments.delta",
+					"type":    "response.function_call_arguments.delta",
 					"item_id": ti.id, "output_index": ti.outIndex,
 					"delta": tc.Function.Arguments,
 				},

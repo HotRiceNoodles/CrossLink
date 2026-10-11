@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/pkg/token"
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -223,9 +223,9 @@ func outputTokenReservation(maxTokens int) int {
 // input is polymorphic (string or array of message/function_call_output items).
 func estimateResponsesTokens(bodyBytes []byte) int {
 	var probe struct {
-		Input         json.RawMessage `json:"input"`
-		Instructions  string          `json:"instructions"`
-		MaxOutputTokens int           `json:"max_output_tokens"`
+		Input           json.RawMessage `json:"input"`
+		Instructions    string          `json:"instructions"`
+		MaxOutputTokens int             `json:"max_output_tokens"`
 	}
 	if json.Unmarshal(bodyBytes, &probe) != nil {
 		return 0
@@ -277,9 +277,9 @@ func isNonTokenEndpoint(path string) bool {
 
 func TPMLimit(rdb *redis.Client, tpm int, teamCache *TeamCache, orgCache *OrgCache, reservationAmount int, failClosed bool) gin.HandlerFunc {
 	return tpmLimit(rdb, staticRateLimit{config.RateLimitConfig{
-		TPM:          tpm,
-		Reservation:  reservationAmount,
-		FailClosed:   failClosed,
+		TPM:         tpm,
+		Reservation: reservationAmount,
+		FailClosed:  failClosed,
 	}}, teamCache, orgCache)
 }
 

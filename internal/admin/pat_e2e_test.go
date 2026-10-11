@@ -45,9 +45,9 @@ import (
 // --- mock PatTokenRepo: in-memory, real behavior ---
 
 type mockPatRepo struct {
-	mu     sync.Mutex
-	nextID int64
-	byHash map[string]*model.PatToken
+	mu      sync.Mutex
+	nextID  int64
+	byHash  map[string]*model.PatToken
 	touched []int64
 }
 

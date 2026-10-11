@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"fmt"
 
-	gmSm2 "github.com/tjfoc/gmsm/sm2"
 	"github.com/golang-jwt/jwt/v5"
+	gmSm2 "github.com/tjfoc/gmsm/sm2"
 )
 
 // SigningMethodSM2SM3 implements jwt.SigningMethod for SM2+SM3.

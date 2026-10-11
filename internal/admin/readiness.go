@@ -10,8 +10,8 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
-	"github.com/crosslink/internal/settings"
 	"github.com/crosslink/internal/secret"
+	"github.com/crosslink/internal/settings"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -238,8 +238,8 @@ func (r *ReadinessChecker) checkSetupStatus(inp *readinessInputs) ReadinessCheck
 
 func (r *ReadinessChecker) checkProviders(inp *readinessInputs) ReadinessCheck {
 	c := ReadinessCheck{
-		ID:        "providers_configured",
-		TitleKey:  "doctor.check.providers.title",
+		ID:           "providers_configured",
+		TitleKey:     "doctor.check.providers.title",
 		DetailParams: map[string]any{"provider_count": inp.providerCount},
 	}
 	if inp.providerCount == 0 {
@@ -256,8 +256,8 @@ func (r *ReadinessChecker) checkProviders(inp *readinessInputs) ReadinessCheck {
 
 func (r *ReadinessChecker) checkAPIKeys(inp *readinessInputs) ReadinessCheck {
 	c := ReadinessCheck{
-		ID:        "api_key_exists",
-		TitleKey:  "doctor.check.apiKey.title",
+		ID:           "api_key_exists",
+		TitleKey:     "doctor.check.apiKey.title",
 		DetailParams: map[string]any{"key_count": inp.apiKeyCount},
 	}
 	if inp.apiKeyCount == 0 {

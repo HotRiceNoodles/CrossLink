@@ -53,7 +53,7 @@ func TestGatewayService_Chat(t *testing.T) {
 			"claude-3": {{
 				ID: 1, ProviderModel: "test-model", Weight: 1, Status: 1,
 				InputPrice: 0.01, OutputPrice: 0.02,
-				Provider:   model.Provider{Name: "test", Status: 1, ID: 1},
+				Provider: model.Provider{Name: "test", Status: 1, ID: 1},
 			}},
 		},
 	}
@@ -116,7 +116,7 @@ func TestGatewayService_StreamChat(t *testing.T) {
 			"claude-3": {{
 				ID: 1, ProviderModel: "test-model", Weight: 1, Status: 1,
 				InputPrice: 0.01, OutputPrice: 0.02,
-				Provider:   model.Provider{Name: "test", Status: 1, ID: 1},
+				Provider: model.Provider{Name: "test", Status: 1, ID: 1},
 			}},
 		},
 	}

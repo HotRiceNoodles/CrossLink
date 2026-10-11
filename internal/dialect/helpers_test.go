@@ -157,12 +157,12 @@ func TestConditionalCount(t *testing.T) {
 	oceanbase := &OceanBaseDialect{MySQLDialect: mysql}
 
 	tests := []struct {
-		name         string
-		column       string
-		value        string
-		pgWant       string
-		sqliteWant   string
-		mysqlWant    string
+		name       string
+		column     string
+		value      string
+		pgWant     string
+		sqliteWant string
+		mysqlWant  string
 	}{
 		{
 			name:       "status column",

@@ -9,8 +9,8 @@ import (
 
 func TestResponsesToOpenAI_StringInput(t *testing.T) {
 	req := &domain.ResponsesRequest{
-		Model:    "gpt-4o",
-		Input:    json.RawMessage(`"hello"`),
+		Model:        "gpt-4o",
+		Input:        json.RawMessage(`"hello"`),
 		Instructions: "be brief",
 	}
 	out, err := ResponsesToOpenAI(req)

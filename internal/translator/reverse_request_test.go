@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func intPtr(v int) *int       { return &v }
+func intPtr(v int) *int           { return &v }
 func floatPtr(v float64) *float64 { return &v }
 
 func TestOpenAIToAnthropicRequest_BasicRequest(t *testing.T) {
@@ -136,10 +136,10 @@ func TestOpenAIToAnthropicRequest_Tools(t *testing.T) {
 
 func TestOpenAIToAnthropicRequest_ToolChoiceAuto(t *testing.T) {
 	req := &domain.OpenAIRequest{
-		Model:       "claude-sonnet-4-20250514",
-		MaxTokens:   intPtr(512),
-		ToolChoice:  "auto",
-		Messages:    []domain.OpenAIMessage{{Role: "user", Content: "Hi"}},
+		Model:      "claude-sonnet-4-20250514",
+		MaxTokens:  intPtr(512),
+		ToolChoice: "auto",
+		Messages:   []domain.OpenAIMessage{{Role: "user", Content: "Hi"}},
 	}
 	got, err := OpenAIToAnthropicRequest(req)
 	assert.NoError(t, err)
@@ -148,10 +148,10 @@ func TestOpenAIToAnthropicRequest_ToolChoiceAuto(t *testing.T) {
 
 func TestOpenAIToAnthropicRequest_ToolChoiceRequired(t *testing.T) {
 	req := &domain.OpenAIRequest{
-		Model:       "claude-sonnet-4-20250514",
-		MaxTokens:   intPtr(512),
-		ToolChoice:  "required",
-		Messages:    []domain.OpenAIMessage{{Role: "user", Content: "Hi"}},
+		Model:      "claude-sonnet-4-20250514",
+		MaxTokens:  intPtr(512),
+		ToolChoice: "required",
+		Messages:   []domain.OpenAIMessage{{Role: "user", Content: "Hi"}},
 	}
 	got, err := OpenAIToAnthropicRequest(req)
 	assert.NoError(t, err)

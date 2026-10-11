@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
+	"github.com/gin-gonic/gin"
 )
 
 // newProviderHandler creates a ProviderHandler with all mocks initialized.

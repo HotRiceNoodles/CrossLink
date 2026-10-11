@@ -23,12 +23,12 @@ type PromptTemplate struct {
 	Name            string         `gorm:"size:64;not null" json:"name"`
 	Description     string         `gorm:"size:512" json:"description,omitempty"`
 	SystemPrompt    string         `gorm:"type:text;not null;default:''" json:"system_prompt"`
-	VariablesSchema datatypes.JSON `json:"variables_schema,omitempty"` // [{name,type,required,default,trusted,desc}]
-	FewShot         datatypes.JSON `json:"few_shot,omitempty"`         // [{role,content}] static
-	ToolDefs        datatypes.JSON `json:"tool_defs,omitempty"`        // reserved (MVP empty)
+	VariablesSchema datatypes.JSON `json:"variables_schema,omitempty"`                           // [{name,type,required,default,trusted,desc}]
+	FewShot         datatypes.JSON `json:"few_shot,omitempty"`                                   // [{role,content}] static
+	ToolDefs        datatypes.JSON `json:"tool_defs,omitempty"`                                  // reserved (MVP empty)
 	TargetFormat    string         `gorm:"size:16;not null;default:'auto'" json:"target_format"` // auto|anthropic|openai
-	Status          int16          `gorm:"not null;default:1" json:"status"`                       // 1=active, 0=disabled
-	Version         int            `gorm:"not null;default:1" json:"-"` // MVP fixed 1; hidden to avoid implying versioning
+	Status          int16          `gorm:"not null;default:1" json:"status"`                     // 1=active, 0=disabled
+	Version         int            `gorm:"not null;default:1" json:"-"`                          // MVP fixed 1; hidden to avoid implying versioning
 	OrgID           *int64         `gorm:"index" json:"org_id,omitempty"`
 	CreatedAt       time.Time      `gorm:"not null" json:"created_at"`
 	UpdatedAt       time.Time      `gorm:"not null" json:"updated_at"`

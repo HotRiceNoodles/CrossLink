@@ -7,10 +7,10 @@ import (
 	"encoding/pem"
 	"fmt"
 
+	"github.com/golang-jwt/jwt/v5"
 	gmSm2 "github.com/tjfoc/gmsm/sm2"
 	"github.com/tjfoc/gmsm/sm3"
 	smx509 "github.com/tjfoc/gmsm/x509"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // hmacSM3 is the HMAC-SM3 signing method for Admin JWT in GM mode.

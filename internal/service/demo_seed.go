@@ -64,7 +64,7 @@ func EnsureDemoSeed(db *gorm.DB, driver, demoAPIKey string, cp crypto.CryptoProv
 				Name:        demoProviderName,
 				DisplayName: "Mock (Demo)",
 				AdapterType: "mock",
-				BaseURL:     "", // mock needs none
+				BaseURL:     "",     // mock needs none
 				APIKey:      "mock", // column is NOT NULL; mock adapter ignores it
 				Status:      1,
 			}

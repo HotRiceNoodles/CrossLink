@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
@@ -11,47 +10,48 @@ import (
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/settings"
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 // AdminHandlers holds all admin handler instances.
 type AdminHandlers struct {
-	Provider *ProviderHandler
-	Model    *ModelHandler
-	Key      *KeyHandler
-	Usage    *UsageHandler
-	System   *SystemHandler
-	Debug    *DebugHandler
-	License      *LicenseHandler
-	Preferences  *PreferencesHandler
-	ErrorRule    *ErrorRuleHandler
-	Routing      *RoutingHandler
-	Onboarding   *OnboardingHandler
-	Templates    *TemplateHandler
-	Readiness    *ReadinessHandler
-	Setup        *SetupHandler
-	Perms        gin.HandlerFunc
+	Provider    *ProviderHandler
+	Model       *ModelHandler
+	Key         *KeyHandler
+	Usage       *UsageHandler
+	System      *SystemHandler
+	Debug       *DebugHandler
+	License     *LicenseHandler
+	Preferences *PreferencesHandler
+	ErrorRule   *ErrorRuleHandler
+	Routing     *RoutingHandler
+	Onboarding  *OnboardingHandler
+	Templates   *TemplateHandler
+	Readiness   *ReadinessHandler
+	Setup       *SetupHandler
+	Perms       gin.HandlerFunc
 }
 
 // AdminDeps groups the dependencies required to construct admin handlers.
 type AdminDeps struct {
-	DB             *gorm.DB
-	RDB            *redis.Client
-	Repos          *repository.Repos
-	Svcs           *service.Services
-	Resolver       *router.Resolver
-	Registry       *provider.Registry
-	Health         *provider.HealthTracker
-	RetryBudget    *provider.RetryBudget
-	CacheSvc       *service.CacheService
-	SecretResolver *secret.SecretResolver
-	EncStore       *secret.EncryptedDBStore
-	DebugStore     *debug.Store
-	Crypto         crypto.CryptoProvider
-	Config         *config.Config
-	Settings       *settings.Provider // runtime DB-backed operational config
-	AuditSvc       *service.AuditService // set by commercial build; nil in Community
+	DB               *gorm.DB
+	RDB              *redis.Client
+	Repos            *repository.Repos
+	Svcs             *service.Services
+	Resolver         *router.Resolver
+	Registry         *provider.Registry
+	Health           *provider.HealthTracker
+	RetryBudget      *provider.RetryBudget
+	CacheSvc         *service.CacheService
+	SecretResolver   *secret.SecretResolver
+	EncStore         *secret.EncryptedDBStore
+	DebugStore       *debug.Store
+	Crypto           crypto.CryptoProvider
+	Config           *config.Config
+	Settings         *settings.Provider    // runtime DB-backed operational config
+	AuditSvc         *service.AuditService // set by commercial build; nil in Community
 	TemplateRegistry *service.TemplateRegistry
 	TemplateSync     *service.TemplateRegistrySync // nil when Redis absent
 }
@@ -71,7 +71,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.EncStore,
 			deps.AuditSvc,
 			deps.Svcs.UsageSvc,
-		deps.Svcs.LatencySvc,
+			deps.Svcs.LatencySvc,
 		),
 		Model: NewModelHandler(
 			deps.Repos.ProviderModelCRUDRepo,
@@ -101,10 +101,10 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.AuditSvc,
 			deps.Config.Server.Port,
 		),
-		License: NewLicenseHandler(deps.DB, deps.Config),
+		License:     NewLicenseHandler(deps.DB, deps.Config),
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
-		ErrorRule: NewErrorRuleHandler(deps.Repos.ErrorRuleRepo, deps.AuditSvc),
-		Routing:  NewRoutingHandler(deps.DB, deps.Repos.ProviderModelRepo),
+		ErrorRule:   NewErrorRuleHandler(deps.Repos.ErrorRuleRepo, deps.AuditSvc),
+		Routing:     NewRoutingHandler(deps.DB, deps.Repos.ProviderModelRepo),
 		Onboarding: NewOnboardingHandler(
 			deps.DB,
 			deps.EncStore,
@@ -118,7 +118,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Templates: NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
 		Readiness: NewReadinessHandler(readiness),
 		Setup:     NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
-		Perms:   GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
+		Perms:     GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
 	}
 	// Runtime settings provider (may be nil in handler-level tests). Wired
 	// via setter to keep NewSystemHandler's signature stable for the

@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 // ErrorRuleHandler manages the platform-level error_classification_rules table that
@@ -87,13 +87,13 @@ func (h *ErrorRuleHandler) Update(c *gin.Context) {
 	}
 
 	var input struct {
-		MatchField     *string  `json:"match_field"`
-		Pattern        *string  `json:"pattern"`
-		Classification *string  `json:"classification"`
-		ProviderType   *string  `json:"provider_type"`
-		Scope          *string  `json:"scope"`
-		Priority       *int     `json:"priority"`
-		Enabled        *bool    `json:"enabled"`
+		MatchField     *string `json:"match_field"`
+		Pattern        *string `json:"pattern"`
+		Classification *string `json:"classification"`
+		ProviderType   *string `json:"provider_type"`
+		Scope          *string `json:"scope"`
+		Priority       *int    `json:"priority"`
+		Enabled        *bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())

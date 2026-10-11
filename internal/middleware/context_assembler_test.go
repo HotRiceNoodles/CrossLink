@@ -11,8 +11,8 @@ import (
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"

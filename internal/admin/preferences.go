@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 var validModules = map[string]bool{
@@ -23,11 +23,11 @@ var validTemplates = map[string]bool{
 }
 
 var validPreferenceKeys = map[string]bool{
-	"overview_screen":    true,
-	"theme":              true,
-	"language":           true,
-	"sidebar_collapsed":  true,
-	"default_provider":   true,
+	"overview_screen":   true,
+	"theme":             true,
+	"language":          true,
+	"sidebar_collapsed": true,
+	"default_provider":  true,
 }
 
 type PreferencesHandler struct {

@@ -28,8 +28,8 @@ var (
 
 const (
 	PatTokenPrefix = "clpat_"
-	patExpiry    = 90 * 24 * time.Hour
-	PatHashAlgo  = "sha256"
+	patExpiry      = 90 * 24 * time.Hour
+	PatHashAlgo    = "sha256"
 )
 
 // PatTokenRepo is the repository dependency of PatService.

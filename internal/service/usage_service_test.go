@@ -42,7 +42,7 @@ func TestUsageEntry_CostCalculation(t *testing.T) {
 func TestBuildUsageLog(t *testing.T) {
 	tplID := int64(7)
 	tests := []struct {
-		name string
+		name  string
 		entry UsageEntry
 		check func(t *testing.T, log *model.UsageLog)
 	}{

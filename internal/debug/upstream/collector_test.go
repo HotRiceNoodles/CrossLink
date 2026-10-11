@@ -57,8 +57,8 @@ func TestCollector_ByteBudgetEnforcement(t *testing.T) {
 	// First call: just under the limit
 	body := make([]byte, UpstreamTotalLimit-1)
 	c.Add(UpstreamCall{
-		Provider:  "first",
-		ReqBody:   body,
+		Provider:   "first",
+		ReqBody:    body,
 		StatusCode: 200,
 	})
 	calls := c.Calls()

@@ -45,10 +45,10 @@ type usageQuotaCalls struct {
 }
 
 type usageResponse struct {
-	APIKey usageAPIKey       `json:"api_key"`
-	Budget usageQuotaFloat   `json:"budget"`
-	Calls  usageQuotaCalls   `json:"calls"`
-	Limits map[string]int    `json:"limits"`
+	APIKey usageAPIKey     `json:"api_key"`
+	Budget usageQuotaFloat `json:"budget"`
+	Calls  usageQuotaCalls `json:"calls"`
+	Limits map[string]int  `json:"limits"`
 }
 
 // GetUsage returns the caller's own real-time quota status.

@@ -18,8 +18,8 @@ func TestReverseStreamTranslator_CacheReadInputTokens(t *testing.T) {
 			"id":    "msg_cache_test",
 			"model": "claude-sonnet-4-20250514",
 			"usage": map[string]any{
-				"input_tokens":               100,
-				"cache_read_input_tokens":    45,
+				"input_tokens":                100,
+				"cache_read_input_tokens":     45,
 				"cache_creation_input_tokens": 10,
 			},
 		},
@@ -32,7 +32,7 @@ func TestReverseStreamTranslator_CacheReadInputTokens(t *testing.T) {
 	// message_delta should propagate cache via PromptTokensDetails and carry
 	// cache_creation for billing
 	deltaData, _ := json.Marshal(map[string]any{
-		"type": "message_delta",
+		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{"output_tokens": 30},
 	})

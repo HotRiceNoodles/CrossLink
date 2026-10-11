@@ -3,19 +3,19 @@ package model
 import "time"
 
 type BudgetRecommendation struct {
-	ID               int64     `gorm:"primaryKey" json:"id"`
-	OrgID            *int64    `gorm:"index" json:"org_id,omitempty"`
-	TargetType       string    `gorm:"size:16;not null" json:"target_type"`
-	TargetID         int64     `gorm:"not null" json:"target_id"`
-	Period           string    `gorm:"size:16;not null;default:'monthly'" json:"period"`
-	RecommendedBudget float64  `gorm:"type:decimal(12,2);not null" json:"recommended_budget"`
-	CurrentBudget    float64   `gorm:"type:decimal(12,2);not null;default:0" json:"current_budget"`
-	AvgPeriodSpend   float64   `gorm:"type:decimal(12,2);not null;default:0" json:"avg_period_spend"`
-	GrowthRate       float64   `gorm:"type:decimal(8,4);not null;default:0" json:"growth_rate"`
-	Confidence       float64   `gorm:"type:decimal(5,2);not null;default:0" json:"confidence"`
-	Reasoning        string    `gorm:"type:text;not null;default:''" json:"reasoning"`
-	Currency         string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
-	CreatedAt        time.Time `gorm:"not null" json:"created_at"`
+	ID                int64     `gorm:"primaryKey" json:"id"`
+	OrgID             *int64    `gorm:"index" json:"org_id,omitempty"`
+	TargetType        string    `gorm:"size:16;not null" json:"target_type"`
+	TargetID          int64     `gorm:"not null" json:"target_id"`
+	Period            string    `gorm:"size:16;not null;default:'monthly'" json:"period"`
+	RecommendedBudget float64   `gorm:"type:decimal(12,2);not null" json:"recommended_budget"`
+	CurrentBudget     float64   `gorm:"type:decimal(12,2);not null;default:0" json:"current_budget"`
+	AvgPeriodSpend    float64   `gorm:"type:decimal(12,2);not null;default:0" json:"avg_period_spend"`
+	GrowthRate        float64   `gorm:"type:decimal(8,4);not null;default:0" json:"growth_rate"`
+	Confidence        float64   `gorm:"type:decimal(5,2);not null;default:0" json:"confidence"`
+	Reasoning         string    `gorm:"type:text;not null;default:''" json:"reasoning"`
+	Currency          string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
+	CreatedAt         time.Time `gorm:"not null" json:"created_at"`
 }
 
 func (BudgetRecommendation) TableName() string { return "budget_recommendations" }

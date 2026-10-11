@@ -111,7 +111,8 @@ func TestExtractLastOpenAIUserMessage(t *testing.T) {
 	}
 }
 
-func TestMapProviderErrorStatus(t *testing.T) {	tests := []struct {
+func TestMapProviderErrorStatus(t *testing.T) {
+	tests := []struct {
 		name string
 		err  error
 		want int

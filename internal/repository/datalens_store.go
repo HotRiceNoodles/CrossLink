@@ -28,7 +28,7 @@ type Filter struct {
 
 // TimeRange specifies the query time window.
 type TimeRange struct {
-	Type   string     `json:"type"`            // "preset", "relative", "absolute"
+	Type   string     `json:"type"`             // "preset", "relative", "absolute"
 	Preset string     `json:"preset,omitempty"` // "last_7d", "last_30d", "last_90d", "this_month", "last_month"
 	Start  *time.Time `json:"start,omitempty"`
 	End    *time.Time `json:"end,omitempty"`
@@ -59,7 +59,7 @@ type QueryParams struct {
 type ColumnMeta struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
-	Type   string `json:"type"`            // "dimension", "time", "metric"
+	Type   string `json:"type"`             // "dimension", "time", "metric"
 	Format string `json:"format,omitempty"` // "number", "currency", "ms", "percent"
 }
 
@@ -183,13 +183,13 @@ var allowedOperators = map[string]bool{
 // Cost metrics use conditional aggregation on the primary currency;
 // non-cost metrics aggregate all currency rows.
 type metricDef struct {
-	Expr            string        // SQL expression template — may contain {currency} placeholder
-	IsCost          bool          // true if this metric needs currency filtering
-	Label           string        // human-readable label
-	Format          string        // format hint for the column metadata
-	IsEnterprise    bool          // true if this metric requires Enterprise tier
-	NeedsComparison bool          // true if this metric needs a period-over-period comparison query
-	ComparisonMetric string       // base metric to query for comparison (e.g. "cost")
+	Expr             string        // SQL expression template — may contain {currency} placeholder
+	IsCost           bool          // true if this metric needs currency filtering
+	Label            string        // human-readable label
+	Format           string        // format hint for the column metadata
+	IsEnterprise     bool          // true if this metric requires Enterprise tier
+	NeedsComparison  bool          // true if this metric needs a period-over-period comparison query
+	ComparisonMetric string        // base metric to query for comparison (e.g. "cost")
 	ComparisonShift  time.Duration // how far back to shift for the comparison period; 0 = use current range duration
 }
 
@@ -449,25 +449,25 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		})
 	}
 
-		// 6. Build WHERE clause.
-		var whereConds []string
-		var whereArgs []any
+	// 6. Build WHERE clause.
+	var whereConds []string
+	var whereArgs []any
 
-		// OrgID == 0 (super admin, no org context) = unscoped global view.
-		if params.OrgID > 0 {
-			whereConds = append(whereConds, "org_id = ?")
-			whereArgs = append(whereArgs, params.OrgID)
-		}
+	// OrgID == 0 (super admin, no org context) = unscoped global view.
+	if params.OrgID > 0 {
+		whereConds = append(whereConds, "org_id = ?")
+		whereArgs = append(whereArgs, params.OrgID)
+	}
 
-		// Filter by agg_level to avoid summing across all 7 aggregation levels.
-		whereConds = append(whereConds, "agg_level = ?")
-		whereArgs = append(whereArgs, aggLevel)
+	// Filter by agg_level to avoid summing across all 7 aggregation levels.
+	whereConds = append(whereConds, "agg_level = ?")
+	whereArgs = append(whereArgs, aggLevel)
 
-		whereConds = append(whereConds, bucketCol+" >= ?")
-		whereArgs = append(whereArgs, rangeStart)
+	whereConds = append(whereConds, bucketCol+" >= ?")
+	whereArgs = append(whereArgs, rangeStart)
 
-		whereConds = append(whereConds, bucketCol+" < ?")
-		whereArgs = append(whereArgs, rangeEnd)
+	whereConds = append(whereConds, bucketCol+" < ?")
+	whereArgs = append(whereArgs, rangeEnd)
 
 	for _, f := range params.Filters {
 		col, ok := dimensionColumnMap[f.Dimension]
@@ -796,9 +796,9 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 ) error {
 	// Collect comparison metrics that were actually requested.
 	type comparisonSpec struct {
-		metricKey        string
-		baseMetric       string
-		shift            time.Duration
+		metricKey  string
+		baseMetric string
+		shift      time.Duration
 	}
 	var comparisons []comparisonSpec
 	for _, m := range params.Metrics {

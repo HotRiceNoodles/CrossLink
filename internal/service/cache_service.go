@@ -90,13 +90,13 @@ func NewCacheService(rdb *redis.Client, db *gorm.DB, cfg config.CacheConfig) *Ca
 	return s
 }
 
-func (s *CacheService) IsEnabled() bool              { return s.enabled.Load() }
-func (s *CacheService) SetEnabled(v bool)             { s.enabled.Store(v) }
-func (s *CacheService) DefaultTTL() time.Duration     { return time.Duration(s.defaultTTL.Load()) }
-func (s *CacheService) SetDefaultTTL(d time.Duration) { s.defaultTTL.Store(int64(d)) }
-func (s *CacheService) EmbeddingsTTL() time.Duration  { return time.Duration(s.embeddingsTTL.Load()) }
+func (s *CacheService) IsEnabled() bool                  { return s.enabled.Load() }
+func (s *CacheService) SetEnabled(v bool)                { s.enabled.Store(v) }
+func (s *CacheService) DefaultTTL() time.Duration        { return time.Duration(s.defaultTTL.Load()) }
+func (s *CacheService) SetDefaultTTL(d time.Duration)    { s.defaultTTL.Store(int64(d)) }
+func (s *CacheService) EmbeddingsTTL() time.Duration     { return time.Duration(s.embeddingsTTL.Load()) }
 func (s *CacheService) SetEmbeddingsTTL(d time.Duration) { s.embeddingsTTL.Store(int64(d)) }
-func (s *CacheService) MaxBodySize() int              { return s.maxBodySize }
+func (s *CacheService) MaxBodySize() int                 { return s.maxBodySize }
 
 func (s *CacheService) GetTTLForEndpoint(path string) time.Duration {
 	if strings.Contains(path, "/embeddings") {

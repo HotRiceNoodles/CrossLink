@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -47,19 +47,19 @@ func (h *KeyHandler) checkKeyOwnership(c *gin.Context, key *model.APIKey) bool {
 
 func (h *KeyHandler) Create(c *gin.Context) {
 	var input struct {
-		Name            string   `json:"name" binding:"required,max=64"`
-		Email           string   `json:"email" binding:"omitempty,email"`
-		Lang            string   `json:"lang"`
-		AllowedModels   []string `json:"allowed_models"`
-		AllowedRoutes   []string `json:"allowed_routes"`
-		TPMLimit        int      `json:"tpm_limit"`
-		RPMLimit        int      `json:"rpm_limit"`
-		MaxBudget       float64  `json:"max_budget"`
-		BudgetPeriod    string   `json:"budget_period"`
-		MaxCalls        int      `json:"max_calls"`
-		CallPeriod      string   `json:"call_period"`
+		Name            string     `json:"name" binding:"required,max=64"`
+		Email           string     `json:"email" binding:"omitempty,email"`
+		Lang            string     `json:"lang"`
+		AllowedModels   []string   `json:"allowed_models"`
+		AllowedRoutes   []string   `json:"allowed_routes"`
+		TPMLimit        int        `json:"tpm_limit"`
+		RPMLimit        int        `json:"rpm_limit"`
+		MaxBudget       float64    `json:"max_budget"`
+		BudgetPeriod    string     `json:"budget_period"`
+		MaxCalls        int        `json:"max_calls"`
+		CallPeriod      string     `json:"call_period"`
 		ExpiresAt       *time.Time `json:"expires_at"`
-		PriceMultiplier *float64 `json:"price_multiplier"`
+		PriceMultiplier *float64   `json:"price_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())

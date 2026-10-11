@@ -187,7 +187,7 @@ func OpenAIToResponses(resp *domain.OpenAIResponse, model string) *domain.Respon
 		Object: "response",
 		Status: "completed",
 		Model:  model,
-		Usage: ResponsesUsageFromOpenAI(resp.Usage),
+		Usage:  ResponsesUsageFromOpenAI(resp.Usage),
 	}
 	if len(resp.Choices) == 0 {
 		return out

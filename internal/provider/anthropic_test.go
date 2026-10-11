@@ -79,7 +79,7 @@ func TestAnthropicProvider_Chat_ProviderError(t *testing.T) {
 func TestAnthropicProvider_Chat_UsesStoredKey(t *testing.T) {
 	anthropicResp := map[string]any{
 		"id": "msg_1", "type": "message", "role": "assistant",
-		"content": []any{map[string]any{"type": "text", "text": "ok"}},
+		"content":     []any{map[string]any{"type": "text", "text": "ok"}},
 		"stop_reason": "end_turn",
 		"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
 	}
@@ -191,7 +191,7 @@ func TestAnthropicProvider_ExtraConfig_APIVersion(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": "msg_1", "type": "message", "role": "assistant",
-			"content": []any{map[string]any{"type": "text", "text": "ok"}},
+			"content":     []any{map[string]any{"type": "text", "text": "ok"}},
 			"stop_reason": "end_turn",
 			"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
 		})

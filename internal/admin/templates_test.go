@@ -7,8 +7,8 @@ import (
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -29,7 +29,7 @@ func TestTemplateHandler_CreatePreviewDelete(t *testing.T) {
 
 	// Create
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/templates", gin.H{
-		"name": "summarize",
+		"name":          "summarize",
 		"system_prompt": "Summarize in {{lang}}, max {{n}} words.",
 		"variables_schema": []gin.H{
 			{"name": "lang", "trusted": true},

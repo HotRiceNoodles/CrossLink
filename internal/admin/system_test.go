@@ -32,9 +32,9 @@ func TestLoadResilienceConfig_NewKeysDefaultAndOverridden(t *testing.T) {
 	assert.Equal(t, 1800, rc.PersistentCooldown)
 	assert.Equal(t, 5, rc.RetryAfterMin)
 	assert.Equal(t, 300, rc.RetryAfterMax)
-	assert.Equal(t, 15, rc.CircuitBreakerDuration)      // lowered base (fast-recovery plan)
-	assert.Equal(t, 300, rc.CircuitBreakerMaxDuration)  // escalation cap
-	assert.Equal(t, 1, rc.CircuitProbeEnabled)          // prober on by default
+	assert.Equal(t, 15, rc.CircuitBreakerDuration)     // lowered base (fast-recovery plan)
+	assert.Equal(t, 300, rc.CircuitBreakerMaxDuration) // escalation cap
+	assert.Equal(t, 1, rc.CircuitProbeEnabled)         // prober on by default
 	assert.Equal(t, 10, rc.CircuitProbeInterval)
 
 	// Overriding persistent_cooldown is picked up.

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/debug"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 type DebugHandler struct {
@@ -102,19 +102,19 @@ type upstreamCallSummary struct {
 }
 
 type debugEntryDetail struct {
-	Seq           int64               `json:"seq"`
-	ID            string              `json:"id"`
-	Timestamp     string              `json:"timestamp"`
-	Duration      int64               `json:"duration_ms"`
-	Method        string              `json:"method"`
-	Path          string              `json:"path"`
-	Stream        bool                `json:"stream"`
-	Truncated     bool                `json:"truncated"`
-	ReqHeaders    map[string][]string `json:"req_headers"`
-	ReqBody       string              `json:"req_body"`
-	RespStatus    int                 `json:"resp_status"`
-	RespHeaders   map[string][]string `json:"resp_headers"`
-	RespBody      string              `json:"resp_body"`
+	Seq           int64                 `json:"seq"`
+	ID            string                `json:"id"`
+	Timestamp     string                `json:"timestamp"`
+	Duration      int64                 `json:"duration_ms"`
+	Method        string                `json:"method"`
+	Path          string                `json:"path"`
+	Stream        bool                  `json:"stream"`
+	Truncated     bool                  `json:"truncated"`
+	ReqHeaders    map[string][]string   `json:"req_headers"`
+	ReqBody       string                `json:"req_body"`
+	RespStatus    int                   `json:"resp_status"`
+	RespHeaders   map[string][]string   `json:"resp_headers"`
+	RespBody      string                `json:"resp_body"`
 	UpstreamCalls []upstreamCallSummary `json:"upstream_calls"`
 }
 
@@ -255,8 +255,8 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	for k, v := range input.Overrides {
 		body[k] = v
 	}
-	delete(body, "x_context")  // defensive: ContextAssembler already ran before Debug
-	delete(body, "stream")     // replay as non-streaming (MVP doesn't proxy SSE)
+	delete(body, "x_context") // defensive: ContextAssembler already ran before Debug
+	delete(body, "stream")    // replay as non-streaming (MVP doesn't proxy SSE)
 
 	newBody, err := json.Marshal(body)
 	if err != nil {

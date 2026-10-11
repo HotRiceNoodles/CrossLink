@@ -29,8 +29,8 @@ func TestSystemConfig_GetDefaults(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Settings map[string]any               `json:"settings"`
-			Meta     map[string]settings.APIMeta   `json:"meta"`
+			Settings map[string]any              `json:"settings"`
+			Meta     map[string]settings.APIMeta `json:"meta"`
 		} `json:"data"`
 	}
 	decodeResponse(t, w, &resp)
@@ -54,8 +54,8 @@ func TestSystemConfig_UpdateAppliesAndHotReloads(t *testing.T) {
 	db := h.db
 
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{
-		"smtp_host":     "smtp.example.com",
-		"smtp_port":     465,
+		"smtp_host":      "smtp.example.com",
+		"smtp_port":      465,
 		"rate_limit_rpm": 600,
 	})
 	h.UpdateConfig(c)
@@ -131,7 +131,7 @@ func TestSystemConfig_SensitiveWriteOnly(t *testing.T) {
 	h.GetConfig(c2)
 	var resp struct {
 		Data struct {
-			Settings map[string]any             `json:"settings"`
+			Settings map[string]any              `json:"settings"`
 			Meta     map[string]settings.APIMeta `json:"meta"`
 		} `json:"data"`
 	}
@@ -150,8 +150,8 @@ func TestSystemConfig_SensitiveWriteOnly(t *testing.T) {
 func TestSystemConfig_RestartRequiredEcho(t *testing.T) {
 	h, _ := newSystemConfigHandlerForTest(t)
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{
-		"mcp_enabled":        true,
-		"mcp_max_servers":    9,
+		"mcp_enabled":                 true,
+		"mcp_max_servers":             9,
 		"guardrail_alert_concurrency": 16,
 	})
 	h.UpdateConfig(c)

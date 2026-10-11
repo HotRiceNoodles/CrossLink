@@ -1,8 +1,8 @@
 package middleware
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/model"
+	"github.com/gin-gonic/gin"
 )
 
 // OrgResolve extracts org_id from context (set by JWTAuthMiddleware for admin path)

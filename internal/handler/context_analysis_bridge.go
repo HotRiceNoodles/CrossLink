@@ -15,11 +15,11 @@ import (
 type contextAnalysisInput struct {
 	anthropicReq   *domain.AnthropicRequest
 	openaiReq      *domain.OpenAIRequest
-	maxContext     *int  // from primary route at request time (nil = unknown)
+	maxContext     *int // from primary route at request time (nil = unknown)
 	maxTokens      int
-	modelUsed      string // actual serving model (fallback-aware)
+	modelUsed      string                                    // actual serving model (fallback-aware)
 	observeFn      func(model string, actual, estimated int) // nil = no calibration
-	inputFromUpstr bool   // true only when inputTokens is real upstream usage
+	inputFromUpstr bool                                      // true only when inputTokens is real upstream usage
 	inputTokens    int
 }
 

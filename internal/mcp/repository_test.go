@@ -15,7 +15,7 @@ import (
 
 var (
 	testDB      *gorm.DB
-	testCtx     = context.Background()
+	testCtx                     = context.Background()
 	testDialect dialect.Dialect = &dialect.SQLiteDialect{}
 )
 
@@ -87,7 +87,7 @@ func createTestTables(db *gorm.DB) error {
 			CREATE INDEX IF NOT EXISTS idx_mcp_tool_call_logs_team_id ON mcp_tool_call_logs(team_id);
 			CREATE INDEX IF NOT EXISTS idx_mcp_tool_call_logs_created_at ON mcp_tool_call_logs(created_at);
 		`).Error
-	}
+}
 
 func TestMCPRepo_LogToolCall(t *testing.T) {
 	repo := NewMCPRepo(testDB, testDialect)

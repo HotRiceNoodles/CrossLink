@@ -35,8 +35,8 @@ type ProviderError struct {
 	// Param is the upstream error.param (OpenAI convention): the request
 	// field the upstream rejected, e.g. "max_tokens". The most direct
 	// locator for diagnosing a 400 (error observability L1.5).
-	Param       string
-	RetryAfter  time.Duration
+	Param      string
+	RetryAfter time.Duration
 }
 
 func (e *ProviderError) Error() string {

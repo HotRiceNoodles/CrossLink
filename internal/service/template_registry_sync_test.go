@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosslink/internal/model"
 	miniredis "github.com/alicebob/miniredis/v2"
+	"github.com/crosslink/internal/model"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

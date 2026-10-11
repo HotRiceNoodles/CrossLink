@@ -14,21 +14,21 @@ type Entry struct {
 	// It is NOT the client request_id (Entry.ID) — request_id may legitimately
 	// repeat across requests when a client reuses X-Request-ID, so it must not
 	// be used as a lookup key. Seq is the only safe identity for retrieval.
-	Seq         int64
-	ID          string
-	OrgID       int64
-	Timestamp   time.Time
-	Duration    time.Duration
-	Method      string
-	Path        string
-	Model       string
-	Stream      bool
-	Truncated   bool
-	ReqHeaders  http.Header
-	ReqBody     []byte
-	RespStatus  int
-	RespHeaders http.Header
-	RespBody    []byte
+	Seq          int64
+	ID           string
+	OrgID        int64
+	Timestamp    time.Time
+	Duration     time.Duration
+	Method       string
+	Path         string
+	Model        string
+	Stream       bool
+	Truncated    bool
+	ReqHeaders   http.Header
+	ReqBody      []byte
+	RespStatus   int
+	RespHeaders  http.Header
+	RespBody     []byte
 	InputTokens  int
 	OutputTokens int
 

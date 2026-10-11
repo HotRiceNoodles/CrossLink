@@ -43,10 +43,10 @@ var communityActions = map[string]bool{
 	"system:view":   true,
 	"system:update": true,
 	// Prompt templates (context engineering) — community-core feature.
-	"template:list":     true,
-	"template:create":   true,
-	"template:update":   true,
-	"template:delete":   true,
+	"template:list":   true,
+	"template:create": true,
+	"template:update": true,
+	"template:delete": true,
 	// Guardrail CRUD (keyword/length/credential_detection engines) — community-core
 	// feature. Pro-only engines (PII/injection/moderation) and guardrail_alert:*
 	// remain Pro-gated.
@@ -65,11 +65,11 @@ var communityActions = map[string]bool{
 
 // proExtraActions defines additional actions available to the Pro tier (on top of Community).
 var proExtraActions = map[string]bool{
-	"debug:list":                  true,
-	"debug:clear":                 true,
-	"key:rotate":                  true,
-	"key:hashes":                  true,
-	"usage:export":                true,
+	"debug:list":   true,
+	"debug:clear":  true,
+	"key:rotate":   true,
+	"key:hashes":   true,
+	"usage:export": true,
 	// Capability alias admin CRUD is Pro-gated end-to-end: the resolver, repo,
 	// and admin handler all live in the commercial overlay, which is only built
 	// into Pro/Enterprise. Runtime usage is additionally gated via the alias
@@ -101,34 +101,34 @@ var proExtraActions = map[string]bool{
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).
 var enterpriseExtraActions = map[string]bool{
-	"team:list":           true,
-	"team:create":         true,
-	"team:update":         true,
-	"team:delete":         true,
-	"team:manage_members": true,
-	"user:list":           true,
-	"user:create":         true,
-	"user:update":         true,
-	"user:delete":         true,
-	"audit:list":          true,
-	"audit:export":        true,
-	"budget:manage":       true,
-	"insight:manage":      true,
+	"team:list":                   true,
+	"team:create":                 true,
+	"team:update":                 true,
+	"team:delete":                 true,
+	"team:manage_members":         true,
+	"user:list":                   true,
+	"user:create":                 true,
+	"user:update":                 true,
+	"user:delete":                 true,
+	"audit:list":                  true,
+	"audit:export":                true,
+	"budget:manage":               true,
+	"insight:manage":              true,
 	"provider_guard_alert:list":   true,
 	"provider_guard_alert:create": true,
 	"provider_guard_alert:update": true,
 	"provider_guard_alert:delete": true,
-	"org:list":            true,
-	"org:create":          true,
-	"org:update":          true,
-	"org:delete":          true,
-	"org:manage_members":  true,
-	"org:view_billing":    true,
-	"org:manage_billing":  true,
-	"role:list":           true,
-	"role:create":         true,
-	"role:update":         true,
-	"role:delete":         true,
+	"org:list":                    true,
+	"org:create":                  true,
+	"org:update":                  true,
+	"org:delete":                  true,
+	"org:manage_members":          true,
+	"org:view_billing":            true,
+	"org:manage_billing":          true,
+	"role:list":                   true,
+	"role:create":                 true,
+	"role:update":                 true,
+	"role:delete":                 true,
 }
 
 // TierActionSet maps each tier name to its fully enumerated set of allowed actions.

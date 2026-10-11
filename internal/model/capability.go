@@ -24,7 +24,7 @@ type CapabilityMember struct {
 	CapabilityID int64     `gorm:"not null;index;uniqueIndex:idx_cm_cap_model,priority:1" json:"capability_id"`
 	ModelName    string    `gorm:"size:128;not null;uniqueIndex:idx_cm_cap_model,priority:2" json:"model_name"`
 	QualityScore int       `gorm:"not null;default:0" json:"quality_score"` // higher = preferred
-	Status       int16     `gorm:"not null" json:"status"` // 1=active, 0=disabled (see Capability.Status comment)
+	Status       int16     `gorm:"not null" json:"status"`                  // 1=active, 0=disabled (see Capability.Status comment)
 	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
 }

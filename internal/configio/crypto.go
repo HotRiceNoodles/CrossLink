@@ -24,14 +24,14 @@ import (
 // compatibility is via the magic version byte. magic is used as AEAD additional
 // data for format identification — only well-formed CLCFGv1 inputs decrypt.
 const (
-	magicV1     = "CLCFGv1\n"
-	saltLen     = 16
-	nonceLen    = 24
-	headerLen   = len(magicV1) + saltLen + nonceLen
-	scryptN     = 1 << 17
-	scryptR     = 8
-	scryptP     = 1
-	keyLen      = 32 // XChaCha20-Poly1305 key
+	magicV1   = "CLCFGv1\n"
+	saltLen   = 16
+	nonceLen  = 24
+	headerLen = len(magicV1) + saltLen + nonceLen
+	scryptN   = 1 << 17
+	scryptR   = 8
+	scryptP   = 1
+	keyLen    = 32 // XChaCha20-Poly1305 key
 )
 
 // ErrInvalidPassphrase is returned by Decrypt when the password is wrong or the

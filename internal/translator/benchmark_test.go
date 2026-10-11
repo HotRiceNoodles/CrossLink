@@ -8,7 +8,6 @@ import (
 	"github.com/crosslink/internal/domain"
 )
 
-
 // --- Anthropic -> OpenAI request benchmark ---
 
 func BenchmarkAnthropicToOpenAI(b *testing.B) {

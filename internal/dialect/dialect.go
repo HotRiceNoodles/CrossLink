@@ -15,24 +15,24 @@ type Dialect interface {
 	Name() string // "postgres", "mysql", "sqlite"
 
 	// Migration
-	MigrationDir() string                             // e.g. "migrations/postgres"
-	RunMigrations(ctx context.Context) error           // PG/MySQL: golang-migrate; SQLite: direct SQL
-	AcquireMigrationLock() (func(), error)             // returns release function
+	MigrationDir() string                    // e.g. "migrations/postgres"
+	RunMigrations(ctx context.Context) error // PG/MySQL: golang-migrate; SQLite: direct SQL
+	AcquireMigrationLock() (func(), error)   // returns release function
 
 	// Partitioning
 	PartitionSupport() PartitionSupport
 	EnsureMonthlyPartitions(ctx context.Context, db *gorm.DB, table string, months int) error
 
 	// SQL helpers for cross-database query construction.
-	DateTrunc(granularity string, column string) string  // "day"|"hour" → SQL expression
-	DateFormat(column string, format string) string      // "%Y-%m" style → SQL expression
-	ILike(column string, param string) string            // case-insensitive LIKE
-	JSONMergePatch(column string, jsonExpr string) string // JSON merge/patch
-	ConditionalCount(column string, value string) string // PG: FILTER(WHERE), others: SUM(CASE)
-	ConditionalSum(condition string) string              // PG: SUM(1) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
+	DateTrunc(granularity string, column string) string       // "day"|"hour" → SQL expression
+	DateFormat(column string, format string) string           // "%Y-%m" style → SQL expression
+	ILike(column string, param string) string                 // case-insensitive LIKE
+	JSONMergePatch(column string, jsonExpr string) string     // JSON merge/patch
+	ConditionalCount(column string, value string) string      // PG: FILTER(WHERE), others: SUM(CASE)
+	ConditionalSum(condition string) string                   // PG: SUM(1) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
 	ConditionalSumCol(column string, condition string) string // SUM(COALESCE(col,0)) under cond — PG: FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN COALESCE(col,0) ELSE 0 END)
-	ConditionalCountWhere(condition string) string       // COUNT of rows matching cond — PG: COUNT(*) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
-	CastFloat(expr string) string                       // PG: ::float, others: CAST(AS DOUBLE)
+	ConditionalCountWhere(condition string) string            // COUNT of rows matching cond — PG: COUNT(*) FILTER (WHERE cond), others: SUM(CASE WHEN cond THEN 1 ELSE 0 END)
+	CastFloat(expr string) string                             // PG: ::float, others: CAST(AS DOUBLE)
 
 	// Lifecycle
 	Capabilities() Capabilities
@@ -60,8 +60,8 @@ type PoolConfig struct {
 type PartitionSupport int
 
 const (
-	PartitionNone    PartitionSupport = iota // SQLite — plain tables + archival
-	PartitionNative                          // PostgreSQL, MySQL — native RANGE partitioning
+	PartitionNone   PartitionSupport = iota // SQLite — plain tables + archival
+	PartitionNative                         // PostgreSQL, MySQL — native RANGE partitioning
 )
 
 // DBConfig is the database-agnostic config passed to dialect implementations.

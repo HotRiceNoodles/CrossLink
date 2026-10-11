@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 // mockPatSvc implements PatSvc for testing.
@@ -270,7 +270,7 @@ func (m *patHandlerTestRepo) Create(ctx context.Context, t *model.PatToken) erro
 func (m *patHandlerTestRepo) GetByID(ctx context.Context, id int64) (*model.PatToken, error) {
 	return nil, service.ErrPatTokenNotFound
 }
-func (m *patHandlerTestRepo) Revoke(ctx context.Context, id int64) error { return nil }
+func (m *patHandlerTestRepo) Revoke(ctx context.Context, id int64) error        { return nil }
 func (m *patHandlerTestRepo) TouchLastUsed(ctx context.Context, id int64) error { return nil }
 
 // --- List tests ---

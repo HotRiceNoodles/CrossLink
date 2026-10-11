@@ -11,9 +11,9 @@ import (
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
+	"go.opentelemetry.io/otel"
 	otelattr "go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -24,13 +24,13 @@ type RouteResolver interface {
 
 // FallbackAttempt records a single provider attempt during fallback.
 type FallbackAttempt struct {
-	ProviderName string
+	ProviderName  string
 	ProviderModel string
-	ErrorType    provider.ErrorType
-	Error        error
-	LatencyMs    int64
-	Success      bool
-	Persistent   bool // true if classified as a persistent (quota/billing) failure
+	ErrorType     provider.ErrorType
+	Error         error
+	LatencyMs     int64
+	Success       bool
+	Persistent    bool // true if classified as a persistent (quota/billing) failure
 	// UpstreamStatus is the provider's HTTP status when the error carried one
 	// (0 = network/timeout/cancel, no upstream response). Persisted in the
 	// usage log's attempts timeline (error observability L2).
@@ -43,8 +43,8 @@ type FallbackResult struct {
 	StreamCh      <-chan domain.SSEChunk // stream: SSE channel
 	Route         *router.RouteResult    // the successful route
 	Attempts      []FallbackAttempt
-	FallbackCount int     // 0 = first attempt succeeded
-	FinalError    error   // non-nil if all failed
+	FallbackCount int   // 0 = first attempt succeeded
+	FinalError    error // non-nil if all failed
 }
 
 // FallbackEngine executes provider calls with fallback logic.
@@ -163,13 +163,13 @@ func (e *FallbackEngine) ExecuteNonStream(
 
 		if err != nil {
 			attempt := FallbackAttempt{
-				ProviderName:  name,
-				ProviderModel: model,
-				ErrorType:     classified.ErrorType,
-				Error:         err,
-				LatencyMs:     latency,
-				Success:       false,
-				Persistent:    classified.Persistent,
+				ProviderName:   name,
+				ProviderModel:  model,
+				ErrorType:      classified.ErrorType,
+				Error:          err,
+				LatencyMs:      latency,
+				Success:        false,
+				Persistent:     classified.Persistent,
 				UpstreamStatus: upstreamStatusOf(err),
 			}
 			result.Attempts = append(result.Attempts, attempt)
@@ -324,12 +324,12 @@ func (e *FallbackEngine) ExecuteStream(
 		ch, classified, err := e.attemptStream(ctx, route, i, maxAttempts, connectFn)
 		if err != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				ProviderName:  name,
-				ProviderModel: model,
-				ErrorType:     classified.ErrorType,
-				Error:         err,
-				Success:       false,
-				Persistent:    classified.Persistent,
+				ProviderName:   name,
+				ProviderModel:  model,
+				ErrorType:      classified.ErrorType,
+				Error:          err,
+				Success:        false,
+				Persistent:     classified.Persistent,
 				UpstreamStatus: upstreamStatusOf(err),
 			})
 

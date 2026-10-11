@@ -29,9 +29,9 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 	finishReason := stopReasonToFinishReason(resp.StopReason)
 
 	return &domain.OpenAIResponse{
-		ID:      resp.ID,
-		Object:  "chat.completion",
-		Model:   resp.Model,
+		ID:     resp.ID,
+		Object: "chat.completion",
+		Model:  resp.Model,
 		Choices: []domain.OpenAIChoice{
 			{
 				Index: 0,

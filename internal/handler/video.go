@@ -234,18 +234,18 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		}
 	}
 	gwTaskID, err := h.taskSvc.SubmitTask(c.Request.Context(), service.VideoSubmitParams{
-		UpstreamTaskID: task.TaskID,
-		ProviderName:   winningRoute.Provider.Name(),
-		APIKey:         winningRoute.ProviderRow.APIKey,
-		Model:          task.Model,
-		OrgID:          orgID,
-		APIKeyID:       apiKeyID,
-		TeamID:         teamID,
-		Currency:       winningRoute.Currency,
+		UpstreamTaskID:  task.TaskID,
+		ProviderName:    winningRoute.Provider.Name(),
+		APIKey:          winningRoute.ProviderRow.APIKey,
+		Model:           task.Model,
+		OrgID:           orgID,
+		APIKeyID:        apiKeyID,
+		TeamID:          teamID,
+		Currency:        winningRoute.Currency,
 		PriceMultiplier: readPriceMultiplier(c),
-		InputPrice:     inputPrice,
-		Prompt:         truncateStr(req.Prompt, 200),
-		BudgetScopes:   budgetScopes,
+		InputPrice:      inputPrice,
+		Prompt:          truncateStr(req.Prompt, 200),
+		BudgetScopes:    budgetScopes,
 	})
 	if err != nil {
 		slog.Error("failed to store video task", "error", err)

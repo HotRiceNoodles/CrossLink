@@ -153,4 +153,3 @@ func TestPostgresLifecycle_IdempotentMigrations(t *testing.T) {
 
 	t.Log("OK: PostgreSQL idempotent migrations work correctly")
 }
-

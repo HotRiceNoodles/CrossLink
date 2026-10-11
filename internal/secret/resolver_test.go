@@ -9,9 +9,9 @@ import (
 
 // mockStore is a test SecretStore that returns a fixed value.
 type mockStore struct {
-	name     string
-	value    string
-	err      error
+	name      string
+	value     string
+	err       error
 	callCount atomic.Int32
 }
 

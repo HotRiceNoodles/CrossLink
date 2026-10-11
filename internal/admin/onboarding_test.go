@@ -130,10 +130,10 @@ func TestOnboarding_Commit_HappyPath(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	var resp struct {
 		Data struct {
-			ProviderID int64  `json:"provider_id"`
+			ProviderID int64   `json:"provider_id"`
 			ModelIDs   []int64 `json:"model_ids"`
-			Key        string `json:"key"`
-			KeyPrefix  string `json:"key_prefix"`
+			Key        string  `json:"key"`
+			KeyPrefix  string  `json:"key_prefix"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

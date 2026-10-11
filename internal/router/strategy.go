@@ -56,16 +56,16 @@ func IsValidStrategy(name StrategyName, gate GateChecker) bool {
 }
 
 type RouteCandidate struct {
-	Provider      provider.Provider
-	ProviderModel string
-	ProviderRow   *model.Provider
-	InputPrice    float64
-	OutputPrice   float64
-	Currency      string
-	Weight        int
-	Priority      int
-	ModelID       int64
-	ModelName     string
+	Provider       provider.Provider
+	ProviderModel  string
+	ProviderRow    *model.Provider
+	InputPrice     float64
+	OutputPrice    float64
+	Currency       string
+	Weight         int
+	Priority       int
+	ModelID        int64
+	ModelName      string
 	AvgLatencyMs   float64
 	CanaryPercent  int
 	ActiveRequests int64
@@ -143,13 +143,13 @@ type FallbackConfig struct {
 
 // extraConfig holds all fields parsed from a model's ExtraConfig JSON.
 type extraConfig struct {
-	CanaryPercent  int            `json:"canary_percent"`
-	NumRetries     int            `json:"num_retries"`
-	BackoffType    string         `json:"backoff_type"`
-	InitialMs      int            `json:"initial_ms"`
-	MaxBackoffMs   int            `json:"max_backoff_ms"`
-	FallbackModels []string       `json:"fallback_models"`
-	Fallback       FallbackConfig `json:"fallback"`
+	CanaryPercent  int                            `json:"canary_percent"`
+	NumRetries     int                            `json:"num_retries"`
+	BackoffType    string                         `json:"backoff_type"`
+	InitialMs      int                            `json:"initial_ms"`
+	MaxBackoffMs   int                            `json:"max_backoff_ms"`
+	FallbackModels []string                       `json:"fallback_models"`
+	Fallback       FallbackConfig                 `json:"fallback"`
 	Guardrails     guardrail.ModelGuardrailConfig `json:"guardrails"`
 	// P3a provider guardrails (opt-in, 0 = disabled). Read by the dispatch
 	// path (handler callFn) via AcquireDispatchGuard.

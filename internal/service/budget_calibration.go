@@ -218,7 +218,6 @@ func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context) error {
 func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, scope string, targetID int64, pk, period string, spent, budget float64) {
 	key := fmt.Sprintf("budget:%s:%d:%s", scope, targetID, pk)
 
-
 	current, err := s.rdb.Get(ctx, key).Float64()
 	if err != nil {
 		// Key doesn't exist yet — set the authoritative value

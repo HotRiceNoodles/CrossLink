@@ -51,7 +51,6 @@ var (
 	guardrailBlocksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cl_guardrail_blocks_total",
 	}, []string{"type", "model", "action"})
-
 )
 
 // RecordProviderFailure increments the provider failure counter.
