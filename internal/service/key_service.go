@@ -263,6 +263,12 @@ func (s *KeyService) Delete(ctx context.Context, id int64) error {
 		if err := tx.Where("api_key_id = ?", id).Delete(&model.APIKeyHash{}).Error; err != nil {
 			return err
 		}
+		// Free the key_hash unique slot BEFORE soft-deleting: the tombstone row
+		// would otherwise block re-importing the same raw key forever.
+		if err := tx.Model(&model.APIKey{}).Where("id = ?", id).
+			Update("key_hash", fmt.Sprintf("deleted-%d", id)).Error; err != nil {
+			return err
+		}
 		return tx.Delete(&model.APIKey{}, id).Error
 	}); err != nil {
 		return err
@@ -284,6 +290,14 @@ func (s *KeyService) Rotate(ctx context.Context, apiKeyID int64, gracePeriod tim
 	keyHash := s.crypto.HashHex([]byte(rawKey))
 	prefix := rawKey[:7]
 
+	// Imported (equal-value) keys must never get a grace rotation: the old
+	// hash string IS the vendor credential, and the operator revokes it at the
+	// vendor platform in the same action window. Enforced here in the service
+	// layer so every caller (zero-grace Regenerate, Pro grace-rotate API) is
+	// covered, not just the wizard UI.
+	if key.KeySource == model.KeySourceImported {
+		gracePeriod = 0
+	}
 	graceUntil := time.Now().Add(gracePeriod)
 	if gracePeriod == 0 {
 		graceUntil = time.Now()
@@ -368,7 +382,8 @@ func (s *KeyService) ListHashes(ctx context.Context, apiKeyID int64) ([]model.AP
 type ImportKeyItem struct {
 	Key           string   `json:"key"`
 	Name          string   `json:"name"`
-	Vendor        string   `json:"vendor"`
+	Vendor        string   `json:"vendor"`   // optional provenance only (rotation checklist: which platform to revoke at); no runtime meaning
+	Protocol      string   `json:"protocol"` // optional route restriction: "openai" (/v1/chat/completions), "anthropic" (/v1/messages), "" = both
 	TeamID        int64    `json:"team_id"`
 	AllowedModels []string `json:"allowed_models"`
 }
@@ -403,6 +418,14 @@ var validImportVendors = map[string]bool{
 	"openai": true, "anthropic": true, "gemini": true, "azure": true, "other": true,
 }
 
+// validImportProtocols maps the wizard's protocol choice to the key's
+// AllowedRoutes values (same route types RequireRoute checks).
+var validImportProtocols = map[string][]string{
+	"openai":    {"openai"},
+	"anthropic": {"anthropic"},
+	"":          nil, // no restriction — both /v1/chat/completions and /v1/messages
+}
+
 // ValidateImportedKey enforces the floor validation for imported raw keys:
 // 16-200 printable ASCII chars, no spaces. (Gateway cl- keys are 51 chars.)
 func ValidateImportedKey(rawKey string) error {
@@ -420,13 +443,40 @@ func ValidateImportedKey(rawKey string) error {
 	return nil
 }
 
+// purgeSoftDeletedKeyByHash removes a soft-deleted api_keys row that still
+// holds the key_hash unique slot (rows deleted before Delete() started
+// freeing the slot). The row's hash records are already gone (Delete removes
+// them) and every FK on api_keys is CASCADE or SET NULL, so a hard delete is
+// safe and lets the same raw key be re-imported.
+func (s *KeyService) purgeSoftDeletedKeyByHash(ctx context.Context, keyHash string) error {
+	var dead model.APIKey
+	err := s.db.WithContext(ctx).Unscoped().Where("key_hash = ?", keyHash).First(&dead).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !dead.DeletedAt.Valid {
+		return nil // live row — handled by the duplicate checks, not here
+	}
+	return s.db.WithContext(ctx).Unscoped().Delete(&model.APIKey{}, dead.ID).Error
+}
+
 func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []ImportKeyResult {
 	results := make([]ImportKeyResult, 0, len(input.Items))
 	for i, item := range input.Items {
 		res := ImportKeyResult{Index: i}
-		if !validImportVendors[item.Vendor] {
+		if item.Vendor != "" && !validImportVendors[item.Vendor] {
 			res.Status = ImportStatusInvalid
 			res.Reason = "vendor must be one of openai, anthropic, gemini, azure, other"
+			results = append(results, res)
+			continue
+		}
+		routes, ok := validImportProtocols[item.Protocol]
+		if !ok {
+			res.Status = ImportStatusInvalid
+			res.Reason = "protocol must be one of openai, anthropic, or empty"
 			results = append(results, res)
 			continue
 		}
@@ -437,7 +487,11 @@ func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []Impor
 			continue
 		}
 		// Duplicate pre-check: registering the same string twice is almost
-		// certainly a re-run of the migration wizard, not a new key.
+		// certainly a re-run of the migration wizard, not a new key. The
+		// key_hash unique index covers ALL hash rows, so after the
+		// active-key lookup misses we must still check for rows the JOIN
+		// hides (disabled keys, rotated-away legacy hashes) — otherwise the
+		// INSERT below dies on the unique constraint.
 		keyHash := s.crypto.HashHex([]byte(item.Key))
 		if existing, err := s.hashRepo.GetKeyByHash(ctx, keyHash); err == nil {
 			res.Status = ImportStatusDuplicate
@@ -450,15 +504,40 @@ func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []Impor
 			res.Reason = "duplicate check failed"
 			results = append(results, res)
 			continue
+		} else if any, err := s.hashRepo.FindAnyByHash(ctx, keyHash); err == nil {
+			res.Status = ImportStatusDuplicate
+			res.ExistingKeyID = any.APIKeyID
+			res.Reason = "key hash already registered (its key is disabled or was rotated away)"
+			results = append(results, res)
+			continue
+		} else if !errors.Is(err, repository.ErrHashNotFound) {
+			res.Status = ImportStatusFailed
+			res.Reason = "duplicate check failed"
+			results = append(results, res)
+			continue
+		}
+		// Legacy tombstones: keys deleted before Delete() freed the
+		// api_keys.key_hash slot leave a soft-deleted row that still violates
+		// the unique index on INSERT. Purge it so re-import works.
+		if err := s.purgeSoftDeletedKeyByHash(ctx, keyHash); err != nil {
+			res.Status = ImportStatusFailed
+			res.Reason = "a deleted key still holds this hash and could not be purged"
+			results = append(results, res)
+			continue
 		}
 		name := item.Name
 		if name == "" {
-			name = fmt.Sprintf("imported-%s-%s", item.Vendor, item.Key[:7])
+			if item.Vendor != "" {
+				name = fmt.Sprintf("imported-%s-%s", item.Vendor, item.Key[:7])
+			} else {
+				name = fmt.Sprintf("imported-%s", item.Key[:7])
+			}
 		}
 		res.Name = name
 		// Optional model allowlist: verify every selected model exists in the
-		// registry so the imported key is not dead on arrival.
-		if missing := s.missingModels(ctx, item.AllowedModels); len(missing) > 0 {
+		// registry (org-scoped, mirroring FindByModelName) so the imported key
+		// is not dead on arrival.
+		if missing := s.missingModels(ctx, item.AllowedModels, input.OrgID); len(missing) > 0 {
 			res.Status = ImportStatusModelMissing
 			res.MissingModels = missing
 			results = append(results, res)
@@ -467,6 +546,7 @@ func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []Impor
 		created, err := s.Create(ctx, &CreateKeyInput{
 			Name:          name,
 			AllowedModels: item.AllowedModels,
+			AllowedRoutes: routes,
 			RawKey:        item.Key,
 			Vendor:        item.Vendor,
 			CreatedByID:   input.CreatedByID,
@@ -474,8 +554,25 @@ func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []Impor
 			OrgID:         input.OrgID,
 		})
 		if err != nil {
-			res.Status = ImportStatusFailed
-			res.Reason = "create key failed"
+			// Backstop for the concurrent-import race: if the row appeared
+			// between the pre-check and this INSERT (unique constraint on either
+			// api_key_hashes.key_hash or api_keys.key_hash), report duplicate
+			// instead of a generic failure.
+			if any, ferr := s.hashRepo.FindAnyByHash(ctx, keyHash); ferr == nil {
+				res.Status = ImportStatusDuplicate
+				res.ExistingKeyID = any.APIKeyID
+				res.Reason = "key already registered (concurrent import)"
+			} else {
+				var holder model.APIKey
+				if herr := s.db.WithContext(ctx).Unscoped().Where("key_hash = ?", keyHash).First(&holder).Error; herr == nil {
+					res.Status = ImportStatusDuplicate
+					res.ExistingKeyID = holder.ID
+					res.Reason = "key already registered (concurrent import)"
+				} else {
+					res.Status = ImportStatusFailed
+					res.Reason = "create key failed"
+				}
+			}
 			results = append(results, res)
 			continue
 		}
@@ -487,17 +584,24 @@ func (s *KeyService) Import(ctx context.Context, input *ImportKeysInput) []Impor
 	return results
 }
 
-// missingModels returns the subset of names with no active provider_models row.
-// Best-effort: a lookup error does not block the import.
-func (s *KeyService) missingModels(ctx context.Context, names []string) []string {
+// missingModels returns the subset of names with no active provider_models row
+// visible to the given org (global providers or the org's own; orgID 0 sees
+// everything, mirroring FindByModelName). Best-effort: a lookup error does not
+// block the import.
+func (s *KeyService) missingModels(ctx context.Context, names []string, orgID int64) []string {
 	if len(names) == 0 {
 		return nil
 	}
 	var missing []string
 	for _, name := range names {
+		q := s.db.WithContext(ctx).Table("provider_models").
+			Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.deleted_at IS NULL").
+			Where("provider_models.model_name = ? AND provider_models.status = 1", name)
+		if orgID != 0 {
+			q = q.Where("providers.org_id IS NULL OR providers.org_id = ?", orgID)
+		}
 		var count int64
-		if err := s.db.WithContext(ctx).Table("provider_models").
-			Where("model_name = ? AND status = 1", name).Count(&count).Error; err != nil {
+		if err := q.Count(&count).Error; err != nil {
 			continue
 		}
 		if count == 0 {

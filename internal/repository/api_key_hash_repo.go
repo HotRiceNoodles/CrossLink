@@ -33,6 +33,22 @@ func (r *APIKeyHashRepo) GetByHash(ctx context.Context, hash string) (*model.API
 	return &h, nil
 }
 
+// FindAnyByHash looks up a hash row with no grace or key-status filtering.
+// The key_hash unique index covers ALL rows (including hashes of disabled
+// keys and expired post-rotation legacy hashes), so duplicate pre-checks must
+// use this — not GetByHash/GetKeyByHash — to match the constraint's scope.
+func (r *APIKeyHashRepo) FindAnyByHash(ctx context.Context, hash string) (*model.APIKeyHash, error) {
+	var h model.APIKeyHash
+	err := r.db.WithContext(ctx).Where("key_hash = ?", hash).First(&h).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrHashNotFound
+		}
+		return nil, err
+	}
+	return &h, nil
+}
+
 func (r *APIKeyHashRepo) GetKeyByHash(ctx context.Context, hash string) (*model.APIKey, error) {
 	var key model.APIKey
 	err := r.db.WithContext(ctx).
