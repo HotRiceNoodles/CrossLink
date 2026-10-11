@@ -146,6 +146,13 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 					s.markExpiredDisabled(ctx, &key, keyHash)
 					return nil, ErrKeyExpired
 				}
+				if key.Status != 1 {
+					// Key was disabled after this entry was cached (the DB path
+					// filters status = 1). Drop the stale entry and behave like
+					// the DB lookup would have.
+					s.invalidateCache(ctx, keyHash)
+					return nil, repository.ErrKeyNotFound
+				}
 				return &key, nil
 			}
 		}
@@ -311,7 +318,11 @@ func (s *KeyService) Rotate(ctx context.Context, apiKeyID int64, gracePeriod tim
 
 func (s *KeyService) invalidateCache(ctx context.Context, keyHash string) {
 	if s.rdb != nil && keyHash != "" {
-		s.rdb.Del(ctx, authCachePrefix+keyHash)
+		if err := s.rdb.Del(ctx, authCachePrefix+keyHash).Err(); err != nil {
+			// A failed delete leaves a stale auth-cache entry live for up to
+			// authCacheTTL — surface it instead of failing silently.
+			slog.Warn("auth cache invalidation failed", "error", err)
+		}
 	}
 }
 

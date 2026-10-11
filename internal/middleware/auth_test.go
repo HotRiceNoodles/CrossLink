@@ -266,6 +266,7 @@ func TestAuthIPBindingDenies(t *testing.T) {
 	validKey := &model.APIKey{
 		ID:        42,
 		KeyPrefix: "sk-test",
+		Status:    1,
 	}
 	keySvc, _ := newKeyServiceWithCachedKey(t, "secret-key-123", validKey)
 
@@ -322,6 +323,7 @@ func TestAuthIPBindingNoopAllows(t *testing.T) {
 	validKey := &model.APIKey{
 		ID:        42,
 		KeyPrefix: "sk-test",
+		Status:    1,
 	}
 	keySvc, _ := newKeyServiceWithCachedKey(t, "secret-key-123", validKey)
 
