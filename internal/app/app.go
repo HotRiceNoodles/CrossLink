@@ -281,9 +281,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	anthropicHandler.SetCalibration(calibSvc)
 	openaiHandler.SetCalibration(calibSvc)
 
-	usageWorkers := worker.NewPool(15, 1000)
+	usageWorkers := worker.NewPool("usage", cfg.Usage.Workers, cfg.Usage.QueueSize, cfg.Usage.OverflowCap)
 	handler.SetUsageWorkers(usageWorkers)
 	modelsHandler := handler.NewModelsHandler(db)
+
+	// Whole-stream duration cap for SSE (0 = uncapped; see server.stream_max_duration)
+	service.SetStreamMaxDuration(cfg.Server.StreamMaxDuration)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
