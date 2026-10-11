@@ -128,10 +128,21 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 	}
 
 	ch := make(chan domain.SSEChunk, 64)
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
+		defer close(done)
 		defer resp.Body.Close()
-		p.readAnthropicSSE(resp.Body, ch)
+		p.readAnthropicSSE(ctx, resp.Body, ch)
+	}()
+	// Close the body when the context cancels to unblock a scanner blocked in
+	// Read; exits on done so normal completion does not leak the goroutine.
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
+		resp.Body.Close()
 	}()
 
 	return ch, nil
@@ -143,7 +154,7 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("anthropic-version", p.apiVersion)
 }
 
-func (p *AnthropicProvider) readAnthropicSSE(body io.Reader, ch chan<- domain.SSEChunk) {
+func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk) {
 	buf := pool.GetScannerBuffer()
 	defer pool.PutScannerBuffer(buf)
 
@@ -169,7 +180,9 @@ func (p *AnthropicProvider) readAnthropicSSE(body io.Reader, ch chan<- domain.SS
 			data := []byte(strings.TrimPrefix(line, "data: "))
 			chunks := t.TranslateEvent(eventType, data)
 			for _, chunk := range chunks {
-				ch <- chunk
+				if !sendSSEChunk(ctx, ch, chunk) {
+					return
+				}
 			}
 			eventType = ""
 		}

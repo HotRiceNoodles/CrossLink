@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -93,7 +94,7 @@ func (p *AzureOpenAIProvider) Embeddings(ctx context.Context, req *domain.Embedd
 	}
 
 	var embeddingsResp domain.EmbeddingsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&embeddingsResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&embeddingsResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -162,10 +163,21 @@ func (p *AzureOpenAIProvider) StreamChat(ctx context.Context, req *domain.OpenAI
 	}
 
 	ch := make(chan domain.SSEChunk, 64)
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
+		defer close(done)
 		defer resp.Body.Close()
-		readSSEStream(resp.Body, ch)
+		readSSEStream(ctx, resp.Body, ch)
+	}()
+	// Close the body when the context cancels to unblock a scanner blocked in
+	// Read; exits on done so normal completion does not leak the goroutine.
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
+		resp.Body.Close()
 	}()
 
 	return ch, nil

@@ -38,6 +38,10 @@ type pgResponsesRaw struct {
 	status int
 }
 
+// maxUpstreamResponseRead caps upstream Responses body reads (matches the
+// provider package's response-size cap).
+const maxUpstreamResponseRead = 50 << 20 // 50 MB
+
 // pgRouteSupportsResponses mirrors the gateway dispatch: 3A requires BOTH the
 // config flag and the ResponsesProvider interface.
 func pgRouteSupportsResponses(r *router.RouteResult) bool {
@@ -123,7 +127,7 @@ func (h *PlaygroundHandler) responsesNonStream(c *gin.Context, rawBody []byte, r
 					return err
 				}
 				defer rc.Close()
-				buf, err := io.ReadAll(rc)
+				buf, err := io.ReadAll(io.LimitReader(rc, maxUpstreamResponseRead))
 				if err != nil {
 					return err
 				}
@@ -230,6 +234,9 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		return
 	}
 	route := res.Route
+	if res.CancelStream != nil {
+		defer res.CancelStream()
+	}
 	h.writeStreamHeader(c)
 	pgWriteEvents(c, builder.Start())
 	var lastUsage domain.OpenAIUsage

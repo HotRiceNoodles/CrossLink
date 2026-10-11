@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/debug/upstream"
@@ -41,11 +42,21 @@ type FallbackAttempt struct {
 type FallbackResult struct {
 	Response      any                    // non-stream: successful response
 	StreamCh      <-chan domain.SSEChunk // stream: SSE channel
+	CancelStream  func()                 // releases the whole-stream deadline timer; nil unless StreamMaxDuration > 0
 	Route         *router.RouteResult    // the successful route
 	Attempts      []FallbackAttempt
 	FallbackCount int   // 0 = first attempt succeeded
 	FinalError    error // non-nil if all failed
 }
+
+// streamMaxDuration caps the total duration of one SSE stream when > 0
+// (0 = uncapped, the default). Package-level because engines are constructed
+// per request; wired from server config once at startup via
+// SetStreamMaxDuration.
+var streamMaxDuration atomic.Int64 // nanoseconds; 0 = disabled
+
+// SetStreamMaxDuration configures the whole-stream cap (<= 0 disables it).
+func SetStreamMaxDuration(d time.Duration) { streamMaxDuration.Store(int64(d)) }
 
 // FallbackEngine executes provider calls with fallback logic.
 type FallbackEngine struct {
@@ -321,7 +332,7 @@ func (e *FallbackEngine) ExecuteStream(
 			continue
 		}
 
-		ch, classified, err := e.attemptStream(ctx, route, i, maxAttempts, connectFn)
+		ch, cancelStream, classified, err := e.attemptStream(ctx, route, i, maxAttempts, connectFn)
 		if err != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				ProviderName:   name,
@@ -375,6 +386,7 @@ func (e *FallbackEngine) ExecuteStream(
 			Success:       true,
 		})
 		result.StreamCh = ch
+		result.CancelStream = cancelStream
 		result.Route = route
 		result.FallbackCount = i
 		return result
@@ -392,17 +404,25 @@ func (e *FallbackEngine) attemptStream(
 	route *router.RouteResult,
 	attempt, maxAttempts int,
 	connectFn func(context.Context, *router.RouteResult) (<-chan domain.SSEChunk, error),
-) (ch <-chan domain.SSEChunk, classified ClassifiedError, err error) {
+) (ch <-chan domain.SSEChunk, cancelStream context.CancelFunc, classified ClassifiedError, err error) {
 	name := route.Provider.Name()
 	model := route.ProviderModel
 	if e.health != nil {
 		defer e.health.ClearProbe(name, model)
 	}
 
-	connectCtx, connectCancel := perProviderCtx(ctx, attempt, maxAttempts)
-	// Use detached context for SSE reading so canceling connectCtx
-	// after the HTTP handshake does not kill the response body mid-stream.
-	streamCtx := context.WithoutCancel(connectCtx)
+	// The stream ctx derives from the request ctx so client disconnects
+	// propagate to the upstream read. It previously derived from the
+	// per-provider connect ctx via context.WithoutCancel, which detached the
+	// disconnect signal AND every deadline — leaking the reader goroutine and
+	// the upstream connection on disconnects. The connect timeout no longer
+	// wraps the stream: the handshake is bounded by the transport's
+	// ResponseHeaderTimeout, and canceling a per-attempt ctx after the
+	// handshake would kill the response body mid-stream.
+	streamCtx := ctx
+	if d := time.Duration(streamMaxDuration.Load()); d > 0 {
+		streamCtx, cancelStream = context.WithTimeout(ctx, d)
+	}
 	if attempt > 0 {
 		streamCtx = upstream.WithFallback(streamCtx, true)
 	}
@@ -417,15 +437,17 @@ func (e *FallbackEngine) attemptStream(
 	)
 	defer span.End()
 	ch, err = connectFn(streamCtx, route)
-	connectCancel()
 	if err != nil {
+		if cancelStream != nil {
+			cancelStream()
+		}
 		span.SetStatus(codes.Error, err.Error())
-		return nil, e.classify(route, err), err
+		return nil, nil, e.classify(route, err), err
 	}
 	if e.health != nil {
 		e.health.RecordSuccessModel(name, model)
 	}
-	return ch, ClassifiedError{}, nil
+	return ch, cancelStream, ClassifiedError{}, nil
 }
 
 // shouldRetry checks if the error type is in the retry-on list.

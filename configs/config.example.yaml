@@ -2,9 +2,20 @@ server:
   port: 8080
   read_timeout: 30s
   write_timeout: 120s
+  # stream_max_duration: 10m  # Cap on total SSE stream duration to upstream (0/unset = uncapped).
+                             # Client disconnects always propagate regardless; this only bounds
+                             # runaway streams whose client stays connected.
   # trusted_proxies:       # Reverse proxy IPs trusted for X-Forwarded-For
   #   - "127.0.0.1"        # (ClientIP / rate limiting / CORS). Empty = trust none.
                           # Only list known proxy IPs — spoofable header otherwise.
+
+usage:                      # Async usage-logging pool (tasks carry billing data).
+  workers: 15               # Concurrent DB writers.
+  queue_size: 1000          # Buffered queue depth. Full queue → overflow, not drop.
+  overflow_cap: 200         # Extra detached tasks allowed when the queue is full.
+                            # Dropped only when this is exhausted too (alert on
+                            # cl_worker_tasks_dropped_total).
+
 
 database:
   driver: postgres          # postgres | kingbasees | mysql | oceanbase | sqlite

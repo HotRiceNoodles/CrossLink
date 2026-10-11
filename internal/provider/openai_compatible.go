@@ -148,21 +148,39 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 	}
 
 	ch := make(chan domain.SSEChunk, 64)
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
+		defer close(done)
 		defer resp.Body.Close()
-		// Close body when context cancels to unblock scanner
-		go func() {
-			<-ctx.Done()
-			resp.Body.Close()
-		}()
-		readSSEStream(resp.Body, ch)
+		readSSEStream(ctx, resp.Body, ch)
+	}()
+	// Close the body when the context cancels to unblock a scanner blocked in
+	// Read. Exits on done as well, so a stream that completes normally does
+	// not leak this goroutine.
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
+		resp.Body.Close()
 	}()
 
 	return ch, nil
 }
 
-func readSSEStream(body io.Reader, ch chan<- domain.SSEChunk) {
+// sendSSEChunk sends one chunk, aborting when the context is cancelled (the
+// consumer stopped reading). Returns false when the caller should stop.
+func sendSSEChunk(ctx context.Context, ch chan<- domain.SSEChunk, chunk domain.SSEChunk) bool {
+	select {
+	case ch <- chunk:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk) {
 	buf := pool.GetScannerBuffer()
 	defer pool.PutScannerBuffer(buf)
 
@@ -180,7 +198,7 @@ func readSSEStream(body io.Reader, ch chan<- domain.SSEChunk) {
 			data := strings.TrimPrefix(line, "data: ")
 
 			if data == "[DONE]" {
-				ch <- domain.SSEChunk{Done: true}
+				sendSSEChunk(ctx, ch, domain.SSEChunk{Done: true})
 				return
 			}
 
@@ -194,7 +212,9 @@ func readSSEStream(body io.Reader, ch chan<- domain.SSEChunk) {
 				continue
 			}
 
-			ch <- domain.SSEChunk{Chunk: &chunk}
+			if !sendSSEChunk(ctx, ch, domain.SSEChunk{Chunk: &chunk}) {
+				return
+			}
 		}
 	}
 

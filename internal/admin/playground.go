@@ -366,6 +366,9 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 	c.Set("provider", pn)
 	c.Set("input_price", result.Route.InputPrice)
 	c.Set("output_price", result.Route.OutputPrice)
+	if result.CancelStream != nil {
+		defer result.CancelStream()
+	}
 
 	var inputTokens, outputTokens int
 	var outputEstimate int

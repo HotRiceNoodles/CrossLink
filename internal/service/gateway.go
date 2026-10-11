@@ -276,6 +276,9 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 
 	ch := result.StreamCh
 	route := result.Route
+	if result.CancelStream != nil {
+		defer result.CancelStream()
+	}
 
 	// Surface the winning route + fallback count before any event is read, so callers
 	// can set response headers that depend on the chosen route.

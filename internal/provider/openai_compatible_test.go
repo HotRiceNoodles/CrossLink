@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -150,4 +152,70 @@ func TestOpenAICompatible_StreamChat_ProviderError(t *testing.T) {
 	p := NewOpenAICompatible("test", server.URL, 10*time.Second)
 	_, err := p.StreamChat(context.Background(), &domain.OpenAIRequest{Stream: true}, "key")
 	assert.Error(t, err)
+}
+
+func TestOpenAICompatible_StreamChat_CancelStopsProducer(t *testing.T) {
+	// Upstream sends one chunk, then hangs until the gateway aborts the
+	// request. Cancelling the stream ctx must release the upstream connection
+	// and stop the producer goroutine.
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+		close(released)
+	}))
+	defer server.Close()
+
+	p := NewOpenAICompatible("test", server.URL, 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := p.StreamChat(ctx, &domain.OpenAIRequest{Model: "m", Stream: true}, "key")
+	require.NoError(t, err)
+
+	<-ch // read one chunk, then simulate a client disconnect
+	cancel()
+
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream connection not released after ctx cancel")
+	}
+	select {
+	case _, ok := <-ch:
+		assert.False(t, ok, "channel should be closed after cancel")
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer goroutine did not exit after cancel")
+	}
+}
+
+func TestOpenAICompatible_StreamChat_NoGoroutineLeakOnCompletion(t *testing.T) {
+	// A stream that completes normally must not leave the ctx-done watchdog
+	// goroutine behind (regression: it used to block on a never-cancelled ctx).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	p := NewOpenAICompatible("test", server.URL, 10*time.Second)
+	req := &domain.OpenAIRequest{Model: "m", Stream: true}
+
+	before := runtime.NumGoroutine()
+	for i := 0; i < 25; i++ {
+		ch, err := p.StreamChat(context.Background(), req, "key")
+		require.NoError(t, err)
+		for range ch {
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before+2,
+		"watchdog goroutines leaked across completed streams")
 }

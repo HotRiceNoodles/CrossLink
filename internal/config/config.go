@@ -34,6 +34,16 @@ type Config struct {
 	DataLens       DataLensConfig       `mapstructure:"datalens"`
 	Captcha        CaptchaConfig        `mapstructure:"captcha"`
 	Demo           DemoConfig           `mapstructure:"demo"`
+	Usage          UsageConfig          `mapstructure:"usage"`
+}
+
+// UsageConfig sizes the async usage-logging worker pool. Tasks carry billing
+// data: when both the queue and the overflow allowance are exhausted, tasks
+// are dropped (counted by cl_worker_tasks_dropped_total).
+type UsageConfig struct {
+	Workers     int `mapstructure:"workers"`      // concurrent DB writers
+	QueueSize   int `mapstructure:"queue_size"`   // buffered queue depth
+	OverflowCap int `mapstructure:"overflow_cap"` // extra detached tasks allowed when the queue is full
 }
 
 type ServerConfig struct {
@@ -41,6 +51,11 @@ type ServerConfig struct {
 	ReadTimeout    time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout   time.Duration `mapstructure:"write_timeout"`
 	TrustedProxies []string      `mapstructure:"trusted_proxies"`
+	// StreamMaxDuration caps the total duration of one SSE stream to the
+	// upstream provider (0 = uncapped). Client disconnects always propagate
+	// regardless of this value; the cap only bounds runaway streams whose
+	// client stays connected.
+	StreamMaxDuration time.Duration `mapstructure:"stream_max_duration"`
 }
 
 type DatabaseConfig struct {
@@ -437,6 +452,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.read_timeout", "30s")
 	v.SetDefault("server.write_timeout", "120s")
+
+	v.SetDefault("usage.workers", 15)
+	v.SetDefault("usage.queue_size", 1000)
+	v.SetDefault("usage.overflow_cap", 200)
 
 	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.host", "localhost")

@@ -575,3 +575,49 @@ func TestExpandFallbackRoutes_ResolveError(t *testing.T) {
 		t.Fatalf("expected 1 route (resolve error ignored), got %d", len(result))
 	}
 }
+
+func TestExecuteStream_StreamMaxDurationAppliesDeadline(t *testing.T) {
+	SetStreamMaxDuration(5 * time.Second)
+	defer SetStreamMaxDuration(0)
+
+	engine := NewFallbackEngine(nil, router.FallbackConfig{})
+	routes := makeRoutes("a")
+
+	var hasDeadline bool
+	result := engine.ExecuteStream(context.Background(), routes,
+		func(ctx context.Context, _ *router.RouteResult) (<-chan domain.SSEChunk, error) {
+			_, hasDeadline = ctx.Deadline()
+			ch := make(chan domain.SSEChunk, 1)
+			close(ch)
+			return ch, nil
+		})
+
+	if !hasDeadline {
+		t.Fatal("stream ctx should carry a deadline when StreamMaxDuration is set")
+	}
+	if result.CancelStream == nil {
+		t.Fatal("result.CancelStream should be non-nil when StreamMaxDuration is set")
+	}
+	result.CancelStream()
+}
+
+func TestExecuteStream_NoDeadlineWhenUncapped(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{})
+	routes := makeRoutes("a")
+
+	var hasDeadline bool
+	result := engine.ExecuteStream(context.Background(), routes,
+		func(ctx context.Context, _ *router.RouteResult) (<-chan domain.SSEChunk, error) {
+			_, hasDeadline = ctx.Deadline()
+			ch := make(chan domain.SSEChunk, 1)
+			close(ch)
+			return ch, nil
+		})
+
+	if hasDeadline {
+		t.Fatal("stream ctx should have no deadline when StreamMaxDuration is unset")
+	}
+	if result.CancelStream != nil {
+		t.Fatal("result.CancelStream should be nil when StreamMaxDuration is unset")
+	}
+}
