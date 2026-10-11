@@ -32,11 +32,25 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 
 			_, hasPrecomputedCost := c.Get("cost")
 
-			// Report call count usage — independent of cost calculation.
-			// Handlers set skip_call_count for paths that must not consume the
-			// call limit: video status polling, idempotent replays, and
-			// requests rejected before any upstream work.
-			if _, skip := c.Get("skip_call_count"); !skip && apiKey.MaxCalls > 0 {
+			// Call-count reconciliation. Calls are counted atomically at
+			// admission (ReserveCall in BudgetCheck); here we only refund
+			// paths that must not consume the limit: video status polling,
+			// idempotent replays, and requests rejected before any upstream
+			// work (skip_call_count). Keys that somehow arrive without an
+			// admission reservation fall back to the legacy post-completion
+			// count.
+			_, skip := c.Get("skip_call_count")
+			if reserved, _ := c.Get("call_reserved"); reserved == true {
+				if skip {
+					if pkv, ok := c.Get("call_reserved_pk"); ok {
+						if pk, _ := pkv.(string); pk != "" {
+							callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+							budgetSvc.RefundCall(callCtx, fmt.Sprintf("%d", apiKey.ID), pk)
+							callCancel()
+						}
+					}
+				}
+			} else if !skip && apiKey.MaxCalls > 0 {
 				callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				budgetSvc.ReportCallUsage(callCtx, fmt.Sprintf("%d", apiKey.ID), apiKey.CallPeriod)
 				callCancel()
@@ -121,8 +135,10 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 				}
 			}
 
-			// 3. Org-level reporting
-			if orgCache != nil && cost > 0 {
+			// 3. Org-level reporting. No cost>0 gate: a failed request (cost=0)
+			// must still run applyBudgetDelta so its reservation is refunded,
+			// matching the key/team scopes above.
+			if orgCache != nil {
 				if orgID := c.GetInt64("org_id"); orgID != 0 {
 					orgPd, _ := c.Get("org_budget_period")
 					if orgPeriod, ok := orgPd.(string); ok && orgPeriod != "" {
@@ -143,12 +159,14 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 }
 
 // applyBudgetDelta reconciles one budget counter. If a reservation was made for
-// this scope, adjust by (cost - reserved); otherwise report the full cost (the
-// legacy path for requests that did not reserve, e.g. estimate was zero).
+// this scope, adjust by (cost - reserved) against the period key recorded at
+// reserve time (a request crossing a UTC period boundary must refund the
+// counter it reserved, not the freshly-computed one); otherwise report the full
+// cost (the legacy path for requests that did not reserve, e.g. estimate was zero).
 func applyBudgetDelta(budgetSvc service.BudgetServiceInterface, ctx context.Context, scope, targetID, period string, cost float64, reservations *service.BudgetReservations) {
 	if reservations != nil {
 		if reserved, ok := reservations.Reserved[scope]; ok {
-			budgetSvc.AdjustBudget(ctx, scope, targetID, period, cost-reserved)
+			budgetSvc.AdjustBudgetKeyed(ctx, scope, targetID, period, reservations.PeriodKeys[scope], cost-reserved)
 			return
 		}
 	}

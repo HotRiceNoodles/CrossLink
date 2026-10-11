@@ -49,7 +49,12 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 		}
 
 		if apiKey.MaxCalls > 0 {
-			current, exceeded := budgetSvc.CheckCallLimit(
+			// Atomic INCR-and-check at admission: the previous GET-based check
+			// let N concurrent requests all pass before any of them completed
+			// and incremented. Rejected requests are rolled back inside the
+			// Lua script. The reservation is refunded post-completion for
+			// paths that must not consume the call limit (skip_call_count).
+			current, exceeded, pk := budgetSvc.ReserveCall(
 				c.Request.Context(), fmt.Sprintf("%d", apiKey.ID),
 				apiKey.CallPeriod, apiKey.MaxCalls,
 			)
@@ -62,6 +67,8 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 				c.Abort()
 				return
 			}
+			c.Set("call_reserved", true)
+			c.Set("call_reserved_pk", pk)
 		}
 
 		if apiKey.TeamID != nil && *apiKey.TeamID > 0 {

@@ -30,9 +30,15 @@ func (m *mockBudgetSvc) CheckBudget(_ context.Context, _, _, _ string, _ float64
 }
 func (m *mockBudgetSvc) ReportUsage(_ context.Context, _, _, _ string, _ float64)  {}
 func (m *mockBudgetSvc) AdjustBudget(_ context.Context, _, _, _ string, _ float64) {}
+func (m *mockBudgetSvc) AdjustBudgetKeyed(_ context.Context, _, _, _, _ string, _ float64) {
+}
 func (m *mockBudgetSvc) CheckCallLimit(_ context.Context, _, _ string, _ int) (int, bool) {
 	return m.callsUsed, m.callsExceeded
 }
+func (m *mockBudgetSvc) ReserveCall(_ context.Context, _, _ string, _ int) (int, bool, string) {
+	return m.callsUsed, m.callsExceeded, "2026-01-01"
+}
+func (m *mockBudgetSvc) RefundCall(_ context.Context, _, _ string)                {}
 func (m *mockBudgetSvc) ReportCallUsage(_ context.Context, _, _ string) {}
 
 func newUsageCtx(key *model.APIKey) (*gin.Context, *httptest.ResponseRecorder) {

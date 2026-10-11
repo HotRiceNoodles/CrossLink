@@ -27,10 +27,17 @@ var incrExpireScript = redis.NewScript(`
 	return count
 `)
 
-// incrByExpireScript atomically increments by N and sets TTL only on first increment.
+// incrByExpireScript atomically increments by N and sets TTL only on first
+// increment. A negative delta on a missing/expired key is a no-op: settlement
+// refunds must not resurrect an expired counter with a negative value (which
+// would grant free headroom in the new window).
 var incrByExpireScript = redis.NewScript(`
-	local count = redis.call('INCRBY', KEYS[1], ARGV[1])
-	if count == tonumber(ARGV[1]) then
+	local delta = tonumber(ARGV[1])
+	if delta < 0 and redis.call('EXISTS', KEYS[1]) == 0 then
+		return 0
+	end
+	local count = redis.call('INCRBY', KEYS[1], delta)
+	if count == delta then
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
 	end
 	return count
@@ -469,6 +476,7 @@ func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 			// Key level: adjust from reservation to actual usage
 			if key != "" {
 				if delta := total - keyRes; delta != 0 {
+					RecordTPMSettlementCorrection(delta)
 					if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, delta, int(time.Minute.Seconds())).Result(); err != nil {
 						slog.Warn("report tokens redis atomic incrby failed", "key", key, "error", err)
 					}

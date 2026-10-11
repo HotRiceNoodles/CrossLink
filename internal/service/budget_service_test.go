@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -126,5 +127,124 @@ func TestReserveForRequest_ZeroEstimateNoop(t *testing.T) {
 	}
 	if len(res.Reserved) != 0 {
 		t.Errorf("expected empty reservations, got %v", res.Reserved)
+	}
+}
+
+// TestReserveCall_ConcurrentAdmission verifies the atomic INCR-and-check: of N
+// concurrent admissions against a maxCalls limit, at most maxCalls succeed and
+// the counter reflects exactly the admitted requests (regression for the
+// GET-based check-then-act that let concurrent bursts all pass).
+func TestReserveCall_ConcurrentAdmission(t *testing.T) {
+	rdb, _ := newBudgetTestRedis(t)
+	s := NewBudgetService(rdb)
+	ctx := context.Background()
+
+	const maxCalls = 10
+	const concurrency = 50
+	var mu sync.Mutex
+	granted := 0
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, exceeded, _ := s.ReserveCall(ctx, "42", "daily", maxCalls)
+			mu.Lock()
+			defer mu.Unlock()
+			if !exceeded {
+				granted++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if granted != maxCalls {
+		t.Fatalf("expected exactly %d admitted, got %d", maxCalls, granted)
+	}
+	// Rejected admissions must have rolled back — the counter sits at maxCalls.
+	current, exceeded := s.CheckCallLimit(ctx, "42", "daily", maxCalls)
+	if current != maxCalls {
+		t.Fatalf("expected counter at %d after burst, got %d", maxCalls, current)
+	}
+	if !exceeded {
+		t.Fatal("counter should now report exceeded")
+	}
+}
+
+// TestRefundCall_UsesReservedPeriodKey verifies the refund lands on the exact
+// counter named by the returned period key, not a freshly-derived one.
+func TestRefundCall_UsesReservedPeriodKey(t *testing.T) {
+	rdb, mr := newBudgetTestRedis(t)
+	s := NewBudgetService(rdb)
+	ctx := context.Background()
+
+	_, _, pk := s.ReserveCall(ctx, "7", "daily", 10)
+	if pk == "" {
+		t.Fatal("expected non-empty period key")
+	}
+	s.RefundCall(ctx, "7", pk)
+
+	key := "calls:key:7:" + pk
+	if got, _ := mr.Get(key); got != "0" {
+		t.Fatalf("expected refunded counter 0, got %v", got)
+	}
+}
+
+// TestAdjustBudgetKeyed_LandsOnReservedPeriodKey verifies a refund keyed with
+// the reservation-time period key adjusts that counter, even when it differs
+// from the current period (simulating a UTC-midnight crossing).
+func TestAdjustBudgetKeyed_LandsOnReservedPeriodKey(t *testing.T) {
+	rdb, mr := newBudgetTestRedis(t)
+	s := NewBudgetService(rdb)
+	ctx := context.Background()
+
+	// Reservation made "yesterday": period key fixed, counter holds the reserve.
+	oldPK := "2000-01-01"
+	s.AdjustBudgetKeyed(ctx, "key", "1", "daily", oldPK, 5.0)
+	if got, _ := mr.Get("budget:key:1:" + oldPK); got != "5" {
+		t.Fatalf("expected old-period counter 5, got %v", got)
+	}
+
+	// Settlement happens "today": the -5 refund must land on the old counter.
+	s.AdjustBudgetKeyed(ctx, "key", "1", "daily", oldPK, -5.0)
+	if got, _ := mr.Get("budget:key:1:" + oldPK); got != "0" {
+		t.Fatalf("expected old-period counter refunded to 0, got %v", got)
+	}
+	if mr.Exists("budget:key:1:" + PeriodKey("daily")) {
+		t.Fatal("refund must not create/adjust the current-period counter")
+	}
+}
+
+// TestReserveBudget_BoundaryExactSpendAllowed locks in the unified boundary
+// semantics: a request may spend its exact remaining budget (spent == limit is
+// allowed; only spent > limit is rejected), consistent with the TPM and
+// call-limit scripts.
+func TestReserveBudget_BoundaryExactSpendAllowed(t *testing.T) {
+	rdb, _ := newBudgetTestRedis(t)
+	s := NewBudgetService(rdb)
+	ctx := context.Background()
+
+	// Pre-seed spent=9.5 on a $10 budget; reserve exactly 5 -> 10 == limit.
+	s.ReportUsage(ctx, "key", "1", "monthly", 9.5)
+	_, _, exceeded := s.ReserveBudget(ctx, "key", "1", "monthly", 0.5, 10.0)
+	if exceeded {
+		t.Fatal("reserve landing exactly on the limit must be allowed")
+	}
+	if got := s.GetCurrentSpent(ctx, "key", "1", "monthly"); got != 10.0 {
+		t.Fatalf("expected spent 10 after exact reserve, got %v", got)
+	}
+
+	// CheckBudget agrees: spent == limit is not exceeded.
+	if _, _, exceeded := s.CheckBudget(ctx, "key", "1", "monthly", 10.0); exceeded {
+		t.Fatal("CheckBudget must not report exceeded at spent == limit")
+	}
+
+	// Anything beyond is still rejected and rolled back.
+	if _, _, exceeded := s.ReserveBudget(ctx, "key", "1", "monthly", 0.01, 10.0); !exceeded {
+		t.Fatal("reserve beyond the limit must be rejected")
+	}
+	if got := s.GetCurrentSpent(ctx, "key", "1", "monthly"); got != 10.0 {
+		t.Fatalf("rejected reserve must roll back, got %v", got)
 	}
 }

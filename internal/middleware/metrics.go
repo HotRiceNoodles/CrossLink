@@ -51,7 +51,20 @@ var (
 	guardrailBlocksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cl_guardrail_blocks_total",
 	}, []string{"type", "model", "action"})
+
+	tpmSettlementCorrection = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "cl_tpm_settlement_correction_tokens",
+		Help: "Per-request key-level TPM settlement delta (actual - reserved). " +
+			"Positive values quantify how far concurrent output exceeded the " +
+			"half-cap reservation under the deliberate under-reservation policy.",
+		Buckets: []float64{0, 128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536},
+	})
 )
+
+// RecordTPMSettlementCorrection observes one key-level TPM settlement delta.
+func RecordTPMSettlementCorrection(delta int) {
+	tpmSettlementCorrection.Observe(float64(delta))
+}
 
 // RecordProviderFailure increments the provider failure counter.
 func RecordProviderFailure(provider, errorType string) {

@@ -9,7 +9,15 @@ type BudgetServiceInterface interface {
 	CheckBudget(ctx context.Context, scope, targetID, period string, budgetLimit float64) (spent, limit float64, exceeded bool)
 	ReportUsage(ctx context.Context, scope, targetID, period string, cost float64)
 	AdjustBudget(ctx context.Context, scope, targetID, period string, delta float64)
+	// AdjustBudgetKeyed adjusts with an explicit period key (resolved at
+	// reservation time) so refunds land in the period they were reserved
+	// against; falls back to deriving the key when empty.
+	AdjustBudgetKeyed(ctx context.Context, scope, targetID, period, periodKey string, delta float64)
 	CheckCallLimit(ctx context.Context, keyID, period string, maxCalls int) (current int, exceeded bool)
+	// ReserveCall atomically counts one call at admission and reports the
+	// period key used, so a later RefundCall targets the same counter.
+	ReserveCall(ctx context.Context, keyID, period string, maxCalls int) (current int, exceeded bool, periodKey string)
+	RefundCall(ctx context.Context, keyID, periodKey string)
 	ReportCallUsage(ctx context.Context, keyID, period string)
 }
 
@@ -27,6 +35,11 @@ type BudgetScope struct {
 // instead of adding the full actual cost on top of the reservation.
 type BudgetReservations struct {
 	Reserved map[string]float64 // scope -> reserved amount
+	// PeriodKeys records the period key each counter was reserved against,
+	// resolved once at reserve time. Settlement and refunds use it so a
+	// request that crosses a UTC period boundary reconciles the counter it
+	// actually reserved, not the (new) one computed at settlement time.
+	PeriodKeys map[string]string // scope -> period key
 }
 
 // BudgetAlertServiceInterface decouples middleware from BudgetAlertService implementation.
