@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +16,8 @@ import (
 const maxRequestBodySize = 10 << 20 // 10MB
 
 type Handler struct {
-	svc *MCPService
+	svc   *MCPService
+	guard *guardrail.GuardrailService
 }
 
 func NewHandler(svc *MCPService) *Handler {
@@ -42,6 +44,14 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return
 		}
+		// Content guardrail: inspect (and possibly mask) the call arguments
+		// before anything is forwarded upstream.
+		if gerr := h.checkToolCallParams(c, &req); gerr != nil {
+			resp := JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: gerr}
+			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("guardrail: %s", gerr.Message))
+			c.JSON(http.StatusOK, resp)
+			return
+		}
 	}
 
 	start := time.Now()
@@ -61,6 +71,10 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 			outputSize = len(b)
 		}
 	}
+
+	// Content guardrail: inspect (and possibly mask) the tool result before
+	// it is returned to the client.
+	h.checkToolCallResult(c, &req, resp)
 
 	h.logToolCallAsync(c, serverName, &req, duration, outputSize, nil)
 	c.JSON(http.StatusOK, resp)
@@ -154,6 +168,22 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 			c.Writer.Flush()
 			return
 		}
+		// Content guardrail: inspect (and possibly mask) the call arguments
+		// before anything is forwarded upstream.
+		if gerr := h.checkToolCallParams(c, &req); gerr != nil {
+			if b, merr := json.Marshal(JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: gerr}); merr == nil {
+				c.Header("Content-Type", "text/event-stream")
+				c.Status(http.StatusOK)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", b)
+				c.Writer.Flush()
+				return
+			}
+			c.Header("Content-Type", "text/event-stream")
+			c.Status(http.StatusOK)
+			fmt.Fprintf(c.Writer, "event: error\ndata: {\"error\":\"blocked by guardrail\"}\n\n")
+			c.Writer.Flush()
+			return
+		}
 	}
 
 	resp, err := h.svc.ForwardRequest(c.Request.Context(), serverName, &req)
@@ -165,6 +195,10 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 		c.Writer.Flush()
 		return
 	}
+
+	// Content guardrail: inspect (and possibly mask) the tool result before
+	// it is returned to the client.
+	h.checkToolCallResult(c, &req, resp)
 
 	respBytes, _ := json.Marshal(resp)
 	c.Header("Content-Type", "text/event-stream")
