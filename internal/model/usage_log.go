@@ -47,6 +47,9 @@ type UsageLog struct {
 	RetryCount         int            `gorm:"not null;default:0" json:"retry_count"`
 	GuardrailTriggered bool           `gorm:"not null;default:false" json:"guardrail_triggered"`
 	GuardrailRule      string         `gorm:"size:255" json:"guardrail_rule,omitempty"`
+	// GuardrailTruncated marks partial-coverage checks: content exceeded the
+	// 500K-rune inspection limit and only its prefix was inspected.
+	GuardrailTruncated bool           `gorm:"not null;default:false" json:"guardrail_truncated"`
 	CacheHit           bool           `gorm:"not null;default:false" json:"cache_hit"`
 	AgentType          string         `gorm:"size:32" json:"agent_type,omitempty"`
 	SecurityEvents     datatypes.JSON `gorm:"default:'[]'" json:"security_events,omitempty"`

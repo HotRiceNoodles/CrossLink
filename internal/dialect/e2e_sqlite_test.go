@@ -51,8 +51,8 @@ func TestSQLiteE2E_FullServerPath(t *testing.T) {
 
 	// Verify schema_migrations version
 	var version string
-	db.Raw("SELECT version FROM schema_migrations LIMIT 1").Scan(&version)
-	assert.Equal(t, "1", version)
+	db.Raw("SELECT version FROM schema_migrations ORDER BY version LIMIT 1").Scan(&version)
+	assert.Equal(t, "000001", version)
 
 	// Verify capabilities
 	cap := d.Capabilities()

@@ -187,11 +187,17 @@ func TestSQLiteDialect_RunMigrations(t *testing.T) {
 		t.Fatalf("RunMigrations: %v", err)
 	}
 
-	// Verify schema_migrations table
+	// Verify schema_migrations table: full chain applied, init recorded as
+	// the file version (legacy marker "1" is mapped on upgrade).
 	var version string
-	db.Raw("SELECT version FROM schema_migrations LIMIT 1").Scan(&version)
-	if version != "1" {
-		t.Errorf("version = %q, want %q", version, "1")
+	db.Raw("SELECT version FROM schema_migrations ORDER BY version LIMIT 1").Scan(&version)
+	if version != "000001" {
+		t.Errorf("first version = %q, want %q", version, "000001")
+	}
+	var versions int64
+	db.Raw("SELECT count(*) FROM schema_migrations").Scan(&versions)
+	if versions < 2 {
+		t.Errorf("expected the full chain (>1 version), got %d", versions)
 	}
 
 	// Verify key tables exist (spot check)

@@ -118,6 +118,7 @@ type UsageEntry struct {
 	RetryCount         int
 	GuardrailTriggered bool
 	GuardrailRule      string
+	GuardrailTruncated bool
 	AgentType          string
 	SecurityEvents     datatypes.JSON
 	CacheHit           bool
@@ -172,6 +173,7 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		RetryCount:         entry.RetryCount,
 		GuardrailTriggered: entry.GuardrailTriggered,
 		GuardrailRule:      entry.GuardrailRule,
+		GuardrailTruncated: entry.GuardrailTruncated,
 		CacheHit:           entry.CacheHit,
 		AgentType:          entry.AgentType,
 		SecurityEvents:     entry.SecurityEvents,

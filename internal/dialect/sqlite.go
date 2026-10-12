@@ -83,41 +83,95 @@ func (s *SQLiteDialect) InitDB() (*gorm.DB, error) {
 	return db, nil
 }
 
-// RunMigrations reads the SQLite migration file, splits it into individual statements,
-// executes each in a transaction, and records the version in schema_migrations.
+// RunMigrations applies the SQLite migration files in order, one version at
+// a time, recording each applied version in schema_migrations. Previously
+// this only executed 000001 (experimental), which left usage_logs without
+// every column the current model writes — the chain is now applied in full
+// so fresh installs and upgrades converge on the same schema the regression
+// tests verify (internal/dialect/usage_*_migration_test.go).
 func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 	if s.db == nil {
 		return fmt.Errorf("InitDB must be called before RunMigrations")
 	}
 
-	// Experimental dialect: only the initial schema (000001) is applied.
-	// Only suitable for evaluation, not production.
-	slog.Warn("SQLite is an EXPERIMENTAL backend: only the initial schema (000001) " +
-		"is applied; schema will be missing most tables. Use PostgreSQL (or Kingbase) for anything real.")
+	slog.Warn("SQLite is an EXPERIMENTAL backend; the full migration chain is " +
+		"applied, but PostgreSQL (or Kingbase) remains the recommended backend.")
 
-	migrationFile := filepath.Join(s.MigrationDir(), "000001_init_schema.up.sql")
-	sqlBytes, err := os.ReadFile(migrationFile)
+	entries, err := os.ReadDir(s.MigrationDir())
 	if err != nil {
-		return fmt.Errorf("read sqlite migration: %w", err)
+		return fmt.Errorf("read sqlite migration dir: %w", err)
+	}
+	if err := s.db.Exec("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, dirty BOOLEAN)").Error; err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+	var applied = map[string]bool{}
+	rows, err := s.db.Raw("SELECT version FROM schema_migrations").Rows()
+	if err != nil {
+		return fmt.Errorf("read schema_migrations: %w", err)
+	}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan schema_migrations: %w", err)
+		}
+		applied[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate schema_migrations: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close schema_migrations cursor: %w", err)
 	}
 
-	// Split into individual statements and execute in a transaction
-	statements := splitSQL(string(sqlBytes))
-	tx := s.db.Begin()
-	for i, stmt := range statements {
-		if stmt == "" {
+	// Legacy databases recorded the init schema as version '1'; map that to
+	// the file version "000001" so it is not re-applied.
+	if applied["1"] {
+		applied["000001"] = true
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".up.sql") {
 			continue
 		}
-		if err := tx.Exec(stmt).Error; err != nil {
-			tx.Rollback()
-			return fmt.Errorf("statement %d: %w\n%s", i, err, truncate(stmt, 200))
+		version := strings.SplitN(name, "_", 2)[0]
+		if len(version) != 6 {
+			return fmt.Errorf("unexpected sqlite migration filename: %s", name)
 		}
+		if applied[version] {
+			continue
+		}
+		sqlBytes, err := os.ReadFile(filepath.Join(s.MigrationDir(), name))
+		if err != nil {
+			return fmt.Errorf("read sqlite migration %s: %w", name, err)
+		}
+		tx := s.db.Begin()
+		if err := tx.Error; err != nil {
+			return fmt.Errorf("begin %s: %w", name, err)
+		}
+		for i, stmt := range splitSQL(string(sqlBytes)) {
+			if stmt == "" {
+				continue
+			}
+			if err := tx.Exec(stmt).Error; err != nil {
+				tx.Rollback()
+				return fmt.Errorf("%s statement %d: %w\n%s", name, i, err, truncate(stmt, 200))
+			}
+		}
+		if err := tx.Exec("INSERT INTO schema_migrations VALUES (?, false)", version).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record %s: %w", name, err)
+		}
+		// A failed COMMIT (disk full, I/O error) leaves the schema AND the
+		// version marker uncommitted — surfacing it as an error is the only
+		// honest outcome; ignoring it would report success on an empty schema.
+		if err := tx.Commit().Error; err != nil {
+			return fmt.Errorf("commit %s: %w", name, err)
+		}
+		slog.Info("sqlite migration applied", "version", version)
 	}
-	tx.Commit()
-
-	// Record version in schema_migrations
-	s.db.Exec("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, dirty BOOLEAN)")
-	s.db.Exec("INSERT OR IGNORE INTO schema_migrations VALUES ('1', false)")
 
 	slog.Info("database migrated successfully", "driver", s.Name())
 	return nil

@@ -32,8 +32,8 @@ func TestSQLiteLifecycle_FullWorkflow(t *testing.T) {
 
 	// Step 3: Verify schema_migrations
 	var version string
-	db.Raw("SELECT version FROM schema_migrations LIMIT 1").Scan(&version)
-	assert.Equal(t, "1", version)
+	db.Raw("SELECT version FROM schema_migrations ORDER BY version LIMIT 1").Scan(&version)
+	assert.Equal(t, "000001", version)
 
 	// Step 4: Verify all expected tables exist
 	expectedTables := []string{

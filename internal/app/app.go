@@ -488,6 +488,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.POST("/guardrails", middleware.RequireAction(permCache, "guardrail:create"), guardrailHandler.Create)
 		adminGroup.PUT("/guardrails/:id", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.Update)
 		adminGroup.DELETE("/guardrails/:id", middleware.RequireAction(permCache, "guardrail:delete"), guardrailHandler.Delete)
+		// M3-A versioning: history (sanitized) + rollback-as-new-version, same
+		// RBAC actions as rule list/update.
+		adminGroup.GET("/guardrails/versions", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.Versions)
+		adminGroup.POST("/guardrails/:id/rollback", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.Rollback)
 		adminGroup.POST("/guardrails/:id/test", middleware.RequireAction(permCache, "guardrail:test"), guardrailHandler.Test)
 		adminGroup.GET("/guardrails/stats", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.Stats)
 		adminGroup.GET("/guardrails/config", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.GetConfig)
