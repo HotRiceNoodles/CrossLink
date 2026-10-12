@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,7 +83,7 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 	}
 
 	if _, err := guardrail.CreateEngine(input.Type, input.Config); err != nil {
-		errorResp(c, http.StatusBadRequest, ErrInvalidConfig, "invalid config")
+		errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config: %v", err))
 		return
 	}
 
@@ -125,14 +126,14 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 	if orgID := GetOrgID(c); orgID != 0 {
 		rule.OrgID = &orgID
 	}
-	if err := h.db.WithContext(c.Request.Context()).Create(rule).Error; err != nil {
+	if err := versionedCreate(c, h.db, rule); err != nil {
 		internalErr(c, err, "create guardrail rule failed")
 		return
 	}
 
-	h.svc.InvalidateCache()
+	h.svc.NotifyRulesChanged(c.Request.Context()) // local invalidate first, then best-effort broadcast (commit already succeeded above)
 	if h.auditSvc != nil {
-		h.auditSvc.LogFromContext(c, "guardrail:create", "guardrail", fmt.Sprintf("%d", rule.ID), rule.Name, service.AuditDetail(map[string]any{"after": map[string]any{"name": rule.Name, "type": rule.Type}}))
+		h.auditSvc.LogFromContext(c, "guardrail:create", "guardrail", fmt.Sprintf("%d", rule.ID), rule.Name, service.AuditDetail(map[string]any{"after": map[string]any{"name": rule.Name, "type": rule.Type, "version": rule.Version}}))
 	}
 	c.JSON(http.StatusCreated, gin.H{"data": sanitizeRule(*rule)})
 }
@@ -192,7 +193,7 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 			configToValidate = json.RawMessage(rule.Config)
 		}
 		if _, err := guardrail.CreateEngine(*input.Type, configToValidate); err != nil {
-			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, "invalid config for new type")
+			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config for new type: %v", err))
 			return
 		}
 		rule.Type = *input.Type
@@ -209,7 +210,7 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.Config != nil {
 		if _, err := guardrail.CreateEngine(rule.Type, input.Config); err != nil {
-			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, "invalid config")
+			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config: %v", err))
 			return
 		}
 		rule.Config = datatypes.JSON(input.Config)
@@ -232,12 +233,15 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 		rule.ModelFilter = input.ModelFilter
 	}
 
-	if err := h.db.WithContext(c.Request.Context()).Save(&rule).Error; err != nil {
+	if err := versionedUpdate(c, h.db, &rule, nil); err == errVersionConflict {
+		c.JSON(http.StatusConflict, gin.H{"error": "version conflict: rule changed concurrently, reload and retry", "error_code": "version_conflict"})
+		return
+	} else if err != nil {
 		internalErr(c, err, "update guardrail rule failed")
 		return
 	}
 
-	h.svc.InvalidateCache()
+	h.svc.NotifyRulesChanged(c.Request.Context()) // local invalidate first, then best-effort broadcast (commit already succeeded above)
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"name": rule.Name, "type": rule.Type, "direction": rule.Direction, "enabled": rule.Enabled, "severity": rule.Severity, "action": rule.Action}}))
 	}
@@ -259,11 +263,14 @@ func (h *GuardrailHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if err := h.db.WithContext(c.Request.Context()).Delete(&guardrail.GuardrailRule{}, id).Error; err != nil {
+	if err := versionedDelete(c, h.db, &rule); err == errVersionConflict {
+		c.JSON(http.StatusConflict, gin.H{"error": "version conflict: rule changed concurrently, reload and retry", "error_code": "version_conflict"})
+		return
+	} else if err != nil {
 		internalErr(c, err, "delete guardrail rule failed")
 		return
 	}
-	h.svc.InvalidateCache()
+	h.svc.NotifyRulesChanged(c.Request.Context()) // local invalidate first, then best-effort broadcast (commit already succeeded above)
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "guardrail:delete", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"before": map[string]any{"name": rule.Name, "type": rule.Type}}))
 	}
@@ -348,58 +355,148 @@ func (h *GuardrailHandler) Stats(c *gin.Context) {
 func (h *GuardrailHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"enabled":   h.svc.IsEnabled(),
-			"log_only":  h.svc.IsLogOnly(),
-			"fail_open": h.svc.IsFailOpen(),
+			"enabled":                  h.svc.IsEnabled(),
+			"log_only":                 h.svc.IsLogOnly(),
+			"fail_open":                h.svc.IsFailOpen(),
+			"stream_mode":              h.svc.StreamMode(),
+			"stream_strict_max_runes":  h.svc.StrictMaxRunes(),
+			"stream_strict_max_bytes":  h.svc.StrictMaxBytes(),
+			"stream_strict_max_events": h.svc.StrictMaxEvents(),
+			"request_budget_ms":        h.svc.RequestBudgetMs(),
+			"response_budget_ms":       h.svc.ResponseBudgetMs(),
+			"oversize_action":          h.svc.OversizeAction(),
+			"engine_error_action":      h.svc.EngineErrorAction(),
+			"strict_coverage":          h.svc.StrictCoverage(),
 		},
 	})
 }
 
 func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 	var input struct {
-		Enabled  *bool `json:"enabled"`
-		LogOnly  *bool `json:"log_only"`
-		FailOpen *bool `json:"fail_open"`
+		Enabled               *bool   `json:"enabled"`
+		LogOnly               *bool   `json:"log_only"`
+		FailOpen              *bool   `json:"fail_open"`
+		StreamMode            *string `json:"stream_mode"`
+		StreamStrictMaxRunes  *int    `json:"stream_strict_max_runes"`
+		StreamStrictMaxBytes  *int    `json:"stream_strict_max_bytes"`
+		StreamStrictMaxEvents *int    `json:"stream_strict_max_events"`
+		RequestBudgetMs       *int    `json:"request_budget_ms"`
+		ResponseBudgetMs      *int    `json:"response_budget_ms"`
+		OversizeAction        *string `json:"oversize_action"`
+		EngineErrorAction     *string `json:"engine_error_action"`
+		StrictCoverage        *bool   `json:"strict_coverage"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	before := map[string]any{"enabled": h.svc.IsEnabled(), "log_only": h.svc.IsLogOnly(), "fail_open": h.svc.IsFailOpen()}
+	before := map[string]any{
+		"enabled": h.svc.IsEnabled(), "log_only": h.svc.IsLogOnly(), "fail_open": h.svc.IsFailOpen(),
+		"stream_mode": h.svc.StreamMode(), "oversize_action": h.svc.OversizeAction(),
+		"engine_error_action": h.svc.EngineErrorAction(), "strict_coverage": h.svc.StrictCoverage(),
+	}
 
+	// Validate EVERYTHING first and stage the writes: an invalid field must
+	// reject the whole request without partially persisting the others
+	// (atomicity — no half-applied safety configuration).
+	staged := make(map[string]string)
 	if input.Enabled != nil {
-		if err := h.db.WithContext(c.Request.Context()).Save(&model.SystemSetting{Key: "guardrails_enabled", Value: boolToStr(*input.Enabled)}).Error; err != nil {
-			internalErr(c, err, "save guardrails_enabled failed")
-			return
-		}
-		h.svc.SetEnabled(*input.Enabled)
+		staged["guardrails_enabled"] = boolToStr(*input.Enabled)
 	}
 	if input.LogOnly != nil {
-		if err := h.db.WithContext(c.Request.Context()).Save(&model.SystemSetting{Key: "guardrails_log_only", Value: boolToStr(*input.LogOnly)}).Error; err != nil {
-			internalErr(c, err, "save guardrails_log_only failed")
-			return
-		}
-		h.svc.SetLogOnly(*input.LogOnly)
+		staged["guardrails_log_only"] = boolToStr(*input.LogOnly)
 	}
 	if input.FailOpen != nil {
-		if err := h.db.WithContext(c.Request.Context()).Save(&model.SystemSetting{Key: "guardrails_fail_open", Value: boolToStr(*input.FailOpen)}).Error; err != nil {
-			internalErr(c, err, "save guardrails_fail_open failed")
+		staged["guardrails_fail_open"] = boolToStr(*input.FailOpen)
+	}
+	if input.StreamMode != nil {
+		if *input.StreamMode != "window" && *input.StreamMode != "strict" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "stream_mode must be \"window\" or \"strict\""})
 			return
 		}
-		h.svc.SetFailOpen(*input.FailOpen)
+		staged["guardrails_stream_mode"] = *input.StreamMode
+	}
+	positiveFields := []struct {
+		setting string
+		value   *int
+	}{
+		{"guardrails_stream_strict_max_runes", input.StreamStrictMaxRunes},
+		{"guardrails_stream_strict_max_bytes", input.StreamStrictMaxBytes},
+		{"guardrails_stream_strict_max_events", input.StreamStrictMaxEvents},
+		{"guardrails_request_budget_ms", input.RequestBudgetMs},
+		{"guardrails_response_budget_ms", input.ResponseBudgetMs},
+	}
+	for _, f := range positiveFields {
+		if f.value == nil {
+			continue
+		}
+		if *f.value <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": f.setting + " must be positive"})
+			return
+		}
+		staged[f.setting] = strconv.Itoa(*f.value)
+	}
+	if input.OversizeAction != nil {
+		if *input.OversizeAction != "truncate" && *input.OversizeAction != "reject" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "oversize_action must be \"truncate\" or \"reject\""})
+			return
+		}
+		staged["guardrails_oversize_action"] = *input.OversizeAction
+	}
+	if input.EngineErrorAction != nil {
+		if *input.EngineErrorAction != "skip" && *input.EngineErrorAction != "block" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "engine_error_action must be \"skip\" or \"block\""})
+			return
+		}
+		staged["guardrails_engine_error_action"] = *input.EngineErrorAction
+	}
+	if input.StrictCoverage != nil {
+		staged["guardrails_strict_coverage"] = boolToStr(*input.StrictCoverage)
 	}
 
-	after := map[string]any{"enabled": h.svc.IsEnabled(), "log_only": h.svc.IsLogOnly(), "fail_open": h.svc.IsFailOpen()}
+	// Commit atomically: all staged settings or none.
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		for key, value := range staged {
+			if err := tx.Save(&model.SystemSetting{Key: key, Value: value}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		internalErr(c, err, "save guardrail config failed")
+		return
+	}
+
+	// Runtime state is refreshed only after a successful commit.
+	h.svc.RefreshSettings(c.Request.Context())
+	// broadcast after the local refresh (commit already succeeded above) so other
+	// instances drop stale rules/settings; their convergence is TTL-bounded, not atomic.
+	h.svc.NotifyRulesChanged(c.Request.Context())
+
+	after := map[string]any{
+		"enabled": h.svc.IsEnabled(), "log_only": h.svc.IsLogOnly(), "fail_open": h.svc.IsFailOpen(),
+		"stream_mode": h.svc.StreamMode(), "oversize_action": h.svc.OversizeAction(),
+		"engine_error_action": h.svc.EngineErrorAction(), "strict_coverage": h.svc.StrictCoverage(),
+	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"before": before, "after": after}))
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"enabled":   h.svc.IsEnabled(),
-			"log_only":  h.svc.IsLogOnly(),
-			"fail_open": h.svc.IsFailOpen(),
+			"enabled":                  h.svc.IsEnabled(),
+			"log_only":                 h.svc.IsLogOnly(),
+			"fail_open":                h.svc.IsFailOpen(),
+			"stream_mode":              h.svc.StreamMode(),
+			"stream_strict_max_runes":  h.svc.StrictMaxRunes(),
+			"stream_strict_max_bytes":  h.svc.StrictMaxBytes(),
+			"stream_strict_max_events": h.svc.StrictMaxEvents(),
+			"request_budget_ms":        h.svc.RequestBudgetMs(),
+			"response_budget_ms":       h.svc.ResponseBudgetMs(),
+			"oversize_action":          h.svc.OversizeAction(),
+			"engine_error_action":      h.svc.EngineErrorAction(),
+			"strict_coverage":          h.svc.StrictCoverage(),
 		},
 	})
 }
