@@ -31,7 +31,8 @@ func setupSeedDB(t *testing.T) *gorm.DB {
 		action TEXT DEFAULT 'block',
 		model_filter TEXT,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		version INTEGER NOT NULL DEFAULT 1
 	)`).Error)
 	return db
 }

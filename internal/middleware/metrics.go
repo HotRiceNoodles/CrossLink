@@ -44,13 +44,10 @@ var (
 		Help: "Current number of cached response entries",
 	}, []string{"model"})
 
-	guardrailChecksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "cl_guardrail_checks_total",
-	}, []string{"type", "direction", "result"})
-
-	guardrailBlocksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "cl_guardrail_blocks_total",
-	}, []string{"type", "model", "action"})
+	// cl_guardrail_checks_total / cl_guardrail_blocks_total were declared here
+	// with zero callers (dead metrics, exported 0 forever). They now live in
+	// internal/guardrail/metrics.go, registered and incremented next to the
+	// detection path; blocks dropped the `model` label for cardinality safety.
 
 	tpmSettlementCorrection = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "cl_tpm_settlement_correction_tokens",
@@ -89,16 +86,6 @@ func RecordCacheSize(n float64) {
 // RecordCacheSizeByModel updates the per-model cache size gauge.
 func RecordCacheSizeByModel(model string, n float64) {
 	cacheSizeGauge.WithLabelValues(model).Set(n)
-}
-
-// RecordGuardrailCheck increments guardrail check counter.
-func RecordGuardrailCheck(engineType, direction, result string) {
-	guardrailChecksTotal.WithLabelValues(engineType, direction, result).Inc()
-}
-
-// RecordGuardrailBlock increments guardrail block counter.
-func RecordGuardrailBlock(engineType, model, action string) {
-	guardrailBlocksTotal.WithLabelValues(engineType, model, action).Inc()
 }
 
 // Metrics returns a gin middleware that records request-level Prometheus metrics.

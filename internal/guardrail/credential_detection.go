@@ -207,12 +207,33 @@ func (e *credentialDetectionEngine) Check(_ context.Context, content string, _ D
 		return &GuardrailResult{Blocked: false}, nil
 	}
 
+	// Field spans are computed against the ORIGINAL content: offsets in the
+	// preprocessed string (which appends decoded variants) do not map back to
+	// caller fields. Matches visible only in decoded variants still block,
+	// but cannot be masked in place — the whole-string MaskedContent covers
+	// them for legacy consumers.
+	var spans []Span
+	for _, p := range e.activePatterns {
+		for _, loc := range p.re.FindAllStringIndex(content, -1) {
+			match := content[loc[0]:loc[1]]
+			if p.Confidence == "medium" && !validateMediumConfidenceMatch(match) {
+				continue
+			}
+			spans = append(spans, Span{
+				Start:       loc[0],
+				End:         loc[1],
+				Replacement: maskCredential(match, e.maskKeepPrefix, e.maskKeepSuffix, e.maskChar),
+			})
+		}
+	}
+
 	return &GuardrailResult{
 		Blocked:        hasBlockingMatch,
 		RuleName:       e.name,
 		Reason:         fmt.Sprintf("credentials detected: %s", strings.Join(reasons, ", ")),
 		Severity:       highestSeverity,
 		MaskedContent:  allMasked,
+		MaskedSpans:    spans,
 		ContentSnippet: truncateCred(reasons[0], 80),
 	}, nil
 }

@@ -24,6 +24,20 @@ type GuardrailResult struct {
 	Severity       string `json:"severity"`
 	MaskedContent  string `json:"masked_content,omitempty"`
 	ContentSnippet string `json:"content_snippet,omitempty"`
+	// MaskedSpans are replacements relative to the content passed to Check.
+	// Engines that can locate their matches should fill these instead of (or in
+	// addition to) the whole-string MaskedContent, so callers that know the
+	// field layout of the content can mask each field in place without
+	// collapsing structure (roles, arrays, media blocks).
+	MaskedSpans []Span `json:"masked_spans,omitempty"`
+}
+
+// Span is one masked region of checked content: [Start, End) are byte offsets
+// relative to the content given to the engine, Replacement is what replaces it.
+type Span struct {
+	Start       int    `json:"start"`
+	End         int    `json:"end"`
+	Replacement string `json:"replacement"`
 }
 
 type GuardrailEngine interface {
@@ -46,11 +60,53 @@ type GuardrailRule struct {
 	Severity    string         `gorm:"size:20;default:'medium'" json:"severity"`
 	Action      string         `gorm:"size:20;default:'block'" json:"action"`
 	ModelFilter *string        `gorm:"type:text" json:"model_filter"`
-	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt   time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	// Version is the per-rule monotonic version maintained by the versioned
+	// write path (create/update/delete/rollback). Rows predating that path
+	// start at 1 via the rule-versions migrations, which also snapshot them
+	// into guardrail_rule_versions (change_kind='migrate').
+	Version   int64     `gorm:"not null;default:1" json:"version"`
+	CreatedAt time.Time `gorm:"not null;default:now()" json:"created_at"`
+	UpdatedAt time.Time `gorm:"not null;default:now()" json:"updated_at"`
 }
 
 func (GuardrailRule) TableName() string { return "guardrail_rules" }
+
+// GuardrailRuleVersion is one append-only history row: the full snapshot of a
+// rule as of a version. Writes are INSERT-only (create/update/delete/rollback
+// plus the one-time 'migrate' backfill); no code path updates or deletes
+// rows. Config may contain sensitive values — every READ path goes through
+// the admin sanitizers; raw Config is consumed only by the rollback write
+// path, which carries the same permissions and org scoping as rule updates.
+type GuardrailRuleVersion struct {
+	ID          int64          `gorm:"primaryKey" json:"id"`
+	RuleID      int64          `gorm:"index;uniqueIndex:uq_rule_versions,priority:1" json:"rule_id"`
+	Version     int64          `gorm:"uniqueIndex:uq_rule_versions,priority:2" json:"version"`
+	OrgID       *int64         `gorm:"index" json:"org_id,omitempty"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Type        string         `gorm:"size:50;not null" json:"type"`
+	Direction   string         `gorm:"size:10;not null" json:"direction"`
+	Enabled     bool           `json:"enabled"`
+	Config      datatypes.JSON `json:"config"`
+	Severity    string         `gorm:"size:20" json:"severity"`
+	Action      string         `gorm:"size:20" json:"action"`
+	ModelFilter *string        `gorm:"type:text" json:"model_filter"`
+	// ChangeKind: create | update | delete | rollback | migrate
+	ChangeKind string    `gorm:"size:20;not null" json:"change_kind"`
+	Actor      string    `gorm:"size:64;not null;default:''" json:"actor"`
+	CreatedAt  time.Time `gorm:"not null;default:now()" json:"created_at"`
+}
+
+func (GuardrailRuleVersion) TableName() string { return "guardrail_rule_versions" }
+
+// MatchedRule attributes one participating rule in a check decision: the
+// rule's ID, the version of the cached copy that actually produced the
+// decision, and the action applied. Only ids/versions/actions — nothing
+// content-bearing — so it is safe for events, alert logs and audit output.
+type MatchedRule struct {
+	RuleID  int64  `json:"rule_id"`
+	Version int64  `json:"version"`
+	Action  string `json:"action"`
+}
 
 type CheckRequest struct {
 	Content   string
@@ -67,6 +123,18 @@ type CheckResponse struct {
 	Reason        string `json:"reason,omitempty"`
 	MaskedContent string `json:"masked_content,omitempty"`
 	Action        string `json:"action,omitempty"`
+	// MaskedSpans carries the composed span replacements (byte offsets into
+	// the checked content) so protocol-aware callers can mask fields in place.
+	MaskedSpans []Span `json:"masked_spans,omitempty"`
+	// Truncated reports that the checked content exceeded maxCheckContent and
+	// only its prefix was inspected. A pass with Truncated=true is partial
+	// coverage, never a clean pass.
+	Truncated bool `json:"truncated,omitempty"`
+	// Matched attributes every rule that actually participated in the
+	// decision (evaluated and matched, up to and including the rule that
+	// produced the blocking return) as (rule_id, version, action). Rules
+	// evaluated after the blocking return did not participate and are absent.
+	Matched []MatchedRule `json:"matched,omitempty"`
 }
 
 type GuardrailEvent struct {
@@ -81,8 +149,17 @@ type GuardrailEvent struct {
 	ContentPreview string
 	APIKeyID       int64
 	TeamID         int64
+	OrgID          int64 // tenant attribution; 0 = unattributed (admin/internal)
 	Timestamp      time.Time
 	AgentType      string // from CheckContext, set by agent_fingerprint engine
+	// RuleVersion is the version of THIS event's rule — the cached copy that
+	// produced the result (per-instance view; propagation is TTL/broadcast
+	// bounded, never claimed globally atomic).
+	RuleVersion int64 `json:"rule_version,omitempty"`
+	// Matched, when set on a decision event, carries the full participating
+	// (rule_id, version, action) list so a single record attributes every
+	// contributing rule — never the last hit smeared across all rules.
+	Matched []MatchedRule `json:"matched,omitempty"`
 }
 
 type EventHandler func(ctx context.Context, event GuardrailEvent)

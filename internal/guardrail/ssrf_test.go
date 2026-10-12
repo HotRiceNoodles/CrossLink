@@ -100,22 +100,25 @@ func TestInternalAllowlist(t *testing.T) {
 }
 
 // TestSSRFSafeDialer_AllowlistPasses confirms an allowlisted internal address
-// clears the SSRF check (it then fails at the actual connect, not with
-// "restricted").
+// clears the SSRF check. Use a local ephemeral listener instead of assuming
+// an arbitrary private network address has no listener.
 func TestSSRFSafeDialer_AllowlistPasses(t *testing.T) {
-	if err := SetInternalAllowlist([]string{"10.0.0.0/8"}); err != nil {
+	if err := SetInternalAllowlist([]string{"127.0.0.0/8"}); err != nil {
 		t.Fatalf("SetInternalAllowlist: %v", err)
 	}
 	t.Cleanup(func() { _ = SetInternalAllowlist(nil) })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
 
 	dial := NewSSRFSafeDialer(500 * time.Millisecond)
-	_, err := dial(context.Background(), "tcp", "10.255.255.1:80") // non-routable → connect timeout/refused
-	if err == nil {
-		t.Fatal("expected a connect error (no listener), not nil")
+	conn, err := dial(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("allowlisted loopback should connect: %v", err)
 	}
-	if strings.Contains(err.Error(), "restricted") {
-		t.Fatalf("allowlisted 10.x should not be blocked as restricted, got %v", err)
-	}
+	defer conn.Close()
 }
 
 // TestSSRFSafeTLSDialer_BlocksInternal is the TLS counterpart.
