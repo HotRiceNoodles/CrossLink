@@ -34,16 +34,30 @@ func TestReadBody_CachesBody(t *testing.T) {
 func TestReadBody_ExceedsMaxSize(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	// Full chain with a downstream sentinel: an oversized body must abort
+	// with 413 BEFORE any downstream handler runs — never silently truncated
+	// and never forwarded.
+	forwarded := false
+	r := gin.New()
+	r.Use(ReadBody(10))
+	r.POST("/", func(c *gin.Context) {
+		forwarded = true
+		c.Status(http.StatusNoContent)
+	})
+
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
 	body := strings.Repeat("x", 100)
-	c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 
-	ReadBody(10)(c)
-
-	got := GetBodyBytes(c)
-	if len(got) != 10 {
-		t.Errorf("GetBodyBytes() len = %d, want 10", len(got))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for oversized body, got code=%d", w.Code)
+	}
+	if forwarded {
+		t.Error("oversized body was forwarded to a downstream handler")
+	}
+	if got := GetBodyBytes(&gin.Context{Request: httptest.NewRequest(http.MethodPost, "/", nil)}); got != nil {
+		// sanity: GetBodyBytes with no cached body stays nil
+		t.Errorf("GetBodyBytes() = %d bytes, want nil", len(got))
 	}
 }
 

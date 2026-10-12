@@ -276,6 +276,15 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			idemKeyID = key.ID
 		}
 		if cached, ok := h.idemCache.Get(c.Request.Context(), idemKeyID, idemKey); ok {
+			// Re-check the replayed body against the CURRENT response policy —
+			// a cached response must never bypass updated guardrail rules. A
+			// policy rejection REPLIES with an error: an idempotent replay must
+			// never re-execute the (possibly side-effecting) operation.
+			if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model) {
+				c.Set("skip_call_count", true) // rejected before any upstream work
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+				return
+			}
 			c.Set("skip_call_count", true) // idempotent replay: no new upstream work
 			safeHeaders := map[string]bool{"Content-Type": true, "X-Request-Id": true, "X-RateLimit-Limit": true, "X-RateLimit-Remaining": true, "X-RateLimit-Reset": true}
 			for k, v := range cached.Headers {
@@ -381,15 +390,56 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 
 	// Response-side guardrail check
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		var respParts []string
-		for _, ch := range resp.Choices {
-			if text := domain.ContentText(ch.Message.Content); text != "" {
-				respParts = append(respParts, text)
+		// Join checkable fragments (per-choice content, reasoning, tool-call
+		// arguments) with offsets so span masks apply in place.
+		var joined strings.Builder
+		type fragTarget struct {
+			choice  int
+			toolIdx int // -1 = message content / reasoning
+			kind    int // 0=content, 1=tool arguments, 2=reasoning
+			start   int
+			end     int
+		}
+		var targets []fragTarget
+		for ci := range resp.Choices {
+			msg := &resp.Choices[ci].Message
+			if text := domain.ContentText(msg.Content); text != "" {
+				if joined.Len() > 0 {
+					joined.WriteString("\n")
+				}
+				s := joined.Len()
+				joined.WriteString(text)
+				targets = append(targets, fragTarget{choice: ci, toolIdx: -1, kind: 0, start: s, end: joined.Len()})
+			}
+			if msg.ReasoningContent != "" {
+				if joined.Len() > 0 {
+					joined.WriteString("\n")
+				}
+				s := joined.Len()
+				joined.WriteString(msg.ReasoningContent)
+				targets = append(targets, fragTarget{choice: ci, toolIdx: -1, kind: 2, start: s, end: joined.Len()})
+			}
+			for ti := range msg.ToolCalls {
+				args := msg.ToolCalls[ti].Function.Arguments
+				if args == "" {
+					continue
+				}
+				// Canonical form: JSON escapes decoded for detection (the
+				// tool itself decodes them when parsing arguments).
+				canonical := canonicalArgsJSON(args)
+				if joined.Len() > 0 {
+					joined.WriteString("\n")
+				}
+				s := joined.Len()
+				joined.WriteString(canonical)
+				targets = append(targets, fragTarget{choice: ci, toolIdx: ti, kind: 1, start: s, end: joined.Len()})
 			}
 		}
-		respText := strings.Join(respParts, "\n")
+		respText := joined.String()
 		if respText != "" {
-			grResult, grErr := h.guardrailSvc.Check(c.Request.Context(), &guardrail.CheckRequest{
+			grCtx, grCancel := responseCheckCtx(c, h.guardrailSvc)
+			defer grCancel()
+			grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{
 				Content:   respText,
 				Direction: guardrail.DirectionResponse,
 				Model:     req.Model,
@@ -405,22 +455,55 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 					c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
 					return
 				}
-			} else if grResult != nil && grResult.Blocked {
+			}
+			// Partial coverage is observable on every non-stream path: the
+			// checked output exceeded the inspection limit and only its
+			// prefix was scanned (usage_logs / security events pick this up).
+			if grResult != nil && grResult.Truncated {
+				c.Set("guardrail_truncated", true)
+			}
+			if grErr == nil && grResult != nil && grResult.Blocked {
 				if grResult.Action == "block" {
 					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
 					return
 				}
-				if grResult.Action == "mask" && grResult.MaskedContent != "" {
-					c.Set("guardrail_triggered", true)
-					c.Set("guardrail_rule", grResult.RuleName)
-					for i := range resp.Choices {
-						resp.Choices[i].Message.Content = grResult.MaskedContent
-					}
-					respBody, _ = json.Marshal(resp)
-				}
 				if grResult.Action == "log" {
 					c.Set("guardrail_triggered", true)
 					c.Set("guardrail_rule", grResult.RuleName)
+				}
+			} else if grResult != nil && grResult.Action == "mask" {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grResult.RuleName)
+				if len(grResult.MaskedSpans) > 0 {
+					for _, t := range targets {
+						masked := maskJoinedRange(respText, grResult.MaskedSpans, t.start, t.end)
+						if masked == nil {
+							continue
+						}
+						msg := &resp.Choices[t.choice].Message
+						switch t.kind {
+						case 0:
+							msg.Content = *masked
+						case 2:
+							msg.ReasoningContent = *masked
+						case 1:
+							if !json.Valid([]byte(*masked)) {
+								// Masked tool arguments no longer valid JSON —
+								// refuse to emit unmasked arguments.
+								c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+								return
+							}
+							msg.ToolCalls[t.toolIdx].Function.Arguments = *masked
+						}
+					}
+					respBody, _ = json.Marshal(resp)
+				} else if grResult.MaskedContent != "" {
+					// Legacy whole-string mask cannot be mapped back to fields
+					// without collapsing structure (and leaving tool arguments
+					// unmasked). Refuse to emit: controlled rejection.
+					slog.Warn("guardrail: response mask without spans cannot be applied field-safely, blocking", "rule", grResult.RuleName)
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
 				}
 			} else if grResult != nil && grResult.Action == "log" {
 				c.Set("guardrail_triggered", true)
@@ -487,6 +570,11 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		if v, ok := c.Get("guardrail_rule"); ok {
 			if s, _ := v.(string); s != "" {
 				entry.GuardrailRule = s
+			}
+		}
+		if v, ok := c.Get("guardrail_truncated"); ok {
+			if b, _ := v.(bool); b {
+				entry.GuardrailTruncated = true
 			}
 		}
 		if v, ok := c.Get("agent_type"); ok {
@@ -905,6 +993,11 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		if v, ok := c.Get("guardrail_rule"); ok {
 			if s, _ := v.(string); s != "" {
 				entry.GuardrailRule = s
+			}
+		}
+		if v, ok := c.Get("guardrail_truncated"); ok {
+			if b, _ := v.(bool); b {
+				entry.GuardrailTruncated = true
 			}
 		}
 		if v, ok := c.Get("agent_type"); ok {

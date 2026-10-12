@@ -208,6 +208,15 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				idemKeyID = key.ID
 			}
 			if cached, ok := h.idemCache.Get(c.Request.Context(), idemKeyID, idemKey); ok {
+				// Re-check the replayed body against the CURRENT response
+				// policy — a cached response must never bypass updated rules. A
+				// policy rejection REPLIES with an error: an idempotent replay
+				// must never re-execute the (possibly side-effecting) operation.
+				if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model) {
+					c.Set("skip_call_count", true) // rejected before any upstream work
+					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
+				}
 				c.Set("skip_call_count", true) // idempotent replay: no new upstream work
 				safeHeaders := map[string]bool{"Content-Type": true, "X-Request-Id": true, "X-RateLimit-Limit": true, "X-RateLimit-Remaining": true, "X-RateLimit-Reset": true}
 				for k, v := range cached.Headers {
@@ -262,15 +271,39 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	// Response-side guardrail check
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		var respTexts []string
-		for _, block := range result.Response.Content {
-			if block.Type == "text" {
-				respTexts = append(respTexts, block.Text)
+		// Join checkable fragments (text, thinking, tool_use input) with
+		// per-block offsets so span masks can be applied in place.
+		var joined strings.Builder
+		type blockRange struct{ start, end int }
+		ranges := make([]blockRange, len(result.Response.Content))
+		for bi := range result.Response.Content {
+			block := &result.Response.Content[bi]
+			var frag string
+			switch block.Type {
+			case "text", "thinking":
+				frag = block.Text
+			case "tool_use":
+				if len(block.Input) > 0 {
+					// Canonical form: JSON escapes decoded for detection
+					// (the tool decodes them when parsing input).
+					frag = canonicalArgsJSON(string(block.Input))
+				}
 			}
+			if frag == "" {
+				continue
+			}
+			if joined.Len() > 0 {
+				joined.WriteString("\n")
+			}
+			ranges[bi].start = joined.Len()
+			joined.WriteString(frag)
+			ranges[bi].end = joined.Len()
 		}
-		respText := strings.Join(respTexts, "\n")
+		respText := joined.String()
 		if respText != "" {
-			grResult, grErr := h.guardrailSvc.Check(c.Request.Context(), &guardrail.CheckRequest{
+			grCtx, grCancel := responseCheckCtx(c, h.guardrailSvc)
+			defer grCancel()
+			grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{
 				Content:   respText,
 				Direction: guardrail.DirectionResponse,
 				Model:     req.Model,
@@ -286,20 +319,58 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 					c.JSON(http.StatusServiceUnavailable, gin.H{"type": "error", "error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
 					return
 				}
-			} else if grResult != nil && grResult.Blocked {
+			}
+			// Partial coverage is observable on every non-stream path: the
+			// checked output exceeded the inspection limit and only its
+			// prefix was scanned (usage_logs / security events pick this up).
+			if grResult != nil && grResult.Truncated {
+				c.Set("guardrail_truncated", true)
+			}
+			if grErr == nil && grResult != nil && grResult.Blocked {
 				if grResult.Action == "block" {
 					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
 					return
 				}
-				if grResult.Action == "mask" && grResult.MaskedContent != "" {
-					c.Set("guardrail_triggered", true)
-					c.Set("guardrail_rule", grResult.RuleName)
-					result.Response.Content = []domain.ContentBlock{{Type: "text", Text: grResult.MaskedContent}}
-					respBody, _ = json.Marshal(result.Response)
-				}
 				if grResult.Action == "log" {
 					c.Set("guardrail_triggered", true)
 					c.Set("guardrail_rule", grResult.RuleName)
+				}
+			} else if grResult != nil && grResult.Action == "mask" {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grResult.RuleName)
+				if len(grResult.MaskedSpans) > 0 {
+					// In-place per-block masking preserves structure.
+					for bi := range result.Response.Content {
+						r := ranges[bi]
+						if r.end <= r.start {
+							continue
+						}
+						masked := maskJoinedRange(respText, grResult.MaskedSpans, r.start, r.end)
+						if masked == nil {
+							continue
+						}
+						block := &result.Response.Content[bi]
+						switch block.Type {
+						case "text", "thinking":
+							block.Text = *masked
+						case "tool_use":
+							if !json.Valid([]byte(*masked)) {
+								// Masked tool input is no longer valid JSON —
+								// refuse to emit unmasked input.
+								c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+								return
+							}
+							block.Input = json.RawMessage(*masked)
+						}
+					}
+					respBody, _ = json.Marshal(result.Response)
+				} else if grResult.MaskedContent != "" {
+					// Legacy whole-string mask cannot be mapped back to blocks
+					// without collapsing structure (and leaving tool_use input
+					// unmasked). Refuse to emit: controlled rejection.
+					slog.Warn("guardrail: response mask without spans cannot be applied field-safely, blocking", "rule", grResult.RuleName)
+					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
 				}
 			} else if grResult != nil && grResult.Action == "log" {
 				c.Set("guardrail_triggered", true)
@@ -366,6 +437,11 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		if v, ok := c.Get("guardrail_rule"); ok {
 			if s, _ := v.(string); s != "" {
 				entry.GuardrailRule = s
+			}
+		}
+		if v, ok := c.Get("guardrail_truncated"); ok {
+			if b, _ := v.(bool); b {
+				entry.GuardrailTruncated = true
 			}
 		}
 		if v, ok := c.Get("agent_type"); ok {
@@ -462,6 +538,8 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
 	}
+	strictMode := grWrapper != nil && grWrapper.Strict()
+	var strictOverflow bool
 
 	result, err := h.svc.StreamChatWithConnect(c.Request.Context(), req, func(ctx context.Context, event service.StreamEvent) bool {
 		select {
@@ -470,25 +548,117 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		default:
 		}
 
-		// Extract text from content_block_delta events (parsed once, used for TTFT + guardrail + content log)
-		var deltaText string
-		if event.Event == "content_block_delta" {
+		// Extract checkable fragments from content_block_delta AND
+		// content_block_start events (parsed once, used for TTFT + guardrail +
+		// content log). Block-start kinds: 3=text, 5=tool_use input, 4=thinking;
+		// delta kinds: 0=text, 1=partial_json, 2=thinking.
+		var deltaText, partialJSON, thinkingText string
+		var startText, startInput, startThinking string
+		blockIdx := -1
+		switch event.Event {
+		case "content_block_delta":
 			var delta struct {
-				Delta struct {
-					Text string `json:"text"`
-				} `json:"delta"`
+				Index int             `json:"index"`
+				Delta json.RawMessage `json:"delta"`
 			}
 			if json.Unmarshal([]byte(event.Data), &delta) == nil {
-				deltaText = delta.Delta.Text
+				blockIdx = delta.Index
+				var d struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+					Thinking    string `json:"thinking"`
+				}
+				if json.Unmarshal(delta.Delta, &d) == nil {
+					switch d.Type {
+					case "text_delta":
+						deltaText = d.Text
+					case "input_json_delta":
+						partialJSON = d.PartialJSON
+					case "thinking_delta":
+						thinkingText = d.Thinking
+					}
+				}
 			}
-			if deltaText != "" && firstTokenAt.IsZero() {
-				firstTokenAt = time.Now()
+		case "content_block_start":
+			var start struct {
+				Index int `json:"index"`
+				Block struct {
+					Type     string          `json:"type"`
+					Text     string          `json:"text"`
+					Thinking string          `json:"thinking"`
+					Input    json.RawMessage `json:"input"`
+				} `json:"content_block"`
+			}
+			if json.Unmarshal([]byte(event.Data), &start) == nil && start.Block.Type != "" {
+				blockIdx = start.Index
+				switch start.Block.Type {
+				case "text":
+					startText = start.Block.Text
+				case "tool_use":
+					if len(start.Block.Input) > 0 {
+						startInput = string(start.Block.Input)
+					}
+				case "thinking":
+					startThinking = start.Block.Thinking
+				}
 			}
 		}
+		if (deltaText != "" || partialJSON != "" || thinkingText != "" || startText != "" || startInput != "" || startThinking != "") && firstTokenAt.IsZero() {
+			firstTokenAt = time.Now()
+		}
 
-		// Response-side stream guardrail check
-		if grWrapper != nil && deltaText != "" {
-			grWrapper.Append(deltaText)
+		if grWrapper != nil && strictMode {
+			// Strict mode: buffer the raw event; nothing reaches the client
+			// before StrictFinish clears it (check-before-emit). Cap overflow
+			// fails closed by stopping the pull.
+			if !grWrapper.BufferEvent(event.Event, event.Data) {
+				strictOverflow = true
+				return false
+			}
+			if blockIdx >= 0 {
+				key := fmt.Sprintf("b%d", blockIdx)
+				if (deltaText != "" && grWrapper.RecordDelta(key, 0, deltaText)) ||
+					(partialJSON != "" && grWrapper.RecordDelta(key, 1, partialJSON)) ||
+					(thinkingText != "" && grWrapper.RecordDelta(key, 2, thinkingText)) ||
+					(startText != "" && grWrapper.RecordDelta(key, 3, startText)) ||
+					(startInput != "" && grWrapper.RecordDelta(key, 5, startInput)) ||
+					(startThinking != "" && grWrapper.RecordDelta(key, 4, startThinking)) {
+					strictOverflow = true
+					return false
+				}
+			}
+			if event.Event == "message_stop" {
+				messageStopSent = true
+			}
+			if h.usageSvc.IsContentLogEnabled() && deltaText != "" && modelRespBuf.Len() < maxResponseBuffer {
+				modelRespBuf.WriteString(deltaText)
+			}
+			return true
+		}
+
+		// Response-side stream guardrail check (window mode): accumulate
+		// text, tool-input JSON and thinking fragments (deltas AND block-start
+		// initial content), check each window.
+		if grWrapper != nil {
+			if deltaText != "" {
+				grWrapper.Append(deltaText)
+			}
+			if partialJSON != "" {
+				grWrapper.Append(partialJSON)
+			}
+			if thinkingText != "" {
+				grWrapper.Append(thinkingText)
+			}
+			if startText != "" {
+				grWrapper.Append(startText)
+			}
+			if startInput != "" {
+				grWrapper.Append(startInput)
+			}
+			if startThinking != "" {
+				grWrapper.Append(startThinking)
+			}
 			if grWrapper.BufferLen() >= grWrapper.WindowSize() {
 				blocked, grResult := grWrapper.CheckText(ctx, grWrapper.BufferText())
 				grWrapper.Slide()
@@ -527,7 +697,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		}
 
 		if _, werr := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.Event, event.Data); werr != nil {
-			// Client is gone (or the write failed) — stop pulling from upstream.
+			// Client is gone (or the write failed) â stop pulling from upstream.
 			slog.Debug("anthropic stream: write failed, stopping", "error", werr)
 			return false
 		}
@@ -566,8 +736,55 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		c.Set("output_price", result.OutputPrice)
 	}()
 
-	// Final-drain: check any remaining buffered content after stream ends
-	if grWrapper != nil && grWrapper.BufferLen() > 0 {
+	// Response-side guardrail verdict.
+	if strictOverflow {
+		// Strict buffer cap exceeded â fail closed; buffered content dropped.
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", "guardrail_stream_cap")
+		errData, _ := json.Marshal(map[string]any{
+			"type":  "error",
+			"error": map[string]any{"type": "guardrail_blocked", "message": "streamed response exceeds strict-mode guardrail buffer limit"},
+		})
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+		if !messageStopSent {
+			fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			messageStopSent = true
+		}
+		flusher.Flush()
+	} else if grWrapper != nil && strictMode && err == nil {
+		// Strict: the one and only release decision. Nothing was written
+		// before this point.
+		decision, events, grRes := grWrapper.StrictFinish(c.Request.Context())
+		if decision == guardrail.StrictBlock {
+			if grRes != nil {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grRes.RuleName)
+			}
+			errData, _ := json.Marshal(map[string]any{
+				"type":  "error",
+				"error": map[string]any{"type": "guardrail_blocked", "message": "blocked by guardrail"},
+			})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+			if !messageStopSent {
+				fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+				messageStopSent = true
+			}
+			flusher.Flush()
+		} else {
+			if decision == guardrail.StrictMasked && grRes != nil {
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", grRes.RuleName)
+			}
+			for _, ev := range events {
+				if _, werr := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", ev.Name(), ev.Data()); werr != nil {
+					slog.Debug("anthropic stream: write failed during strict release", "error", werr)
+					break
+				}
+			}
+			flusher.Flush()
+		}
+	} else if grWrapper != nil && !strictMode && grWrapper.BufferLen() > 0 {
+		// Window mode final-drain: check any remaining buffered content.
 		blocked, grResult := grWrapper.FinalCheck(c.Request.Context(), grWrapper.BufferText())
 		if blocked && grResult != nil {
 			c.Set("guardrail_triggered", true)
@@ -582,7 +799,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 				}
 				flusher.Flush()
-				// Upstream tokens were already consumed — fall through to
+				// Upstream tokens were already consumed â fall through to
 				// submitUsage so the request is recorded.
 				messageStopSent = true
 			} else {
@@ -596,7 +813,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 					fmt.Fprintf(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 				}
 				flusher.Flush()
-				// Upstream tokens were already consumed — fall through to
+				// Upstream tokens were already consumed â fall through to
 				// submitUsage so the request is recorded.
 				messageStopSent = true
 			}
@@ -675,6 +892,11 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 				entry.GuardrailRule = s
 			}
 		}
+		if v, ok := c.Get("guardrail_truncated"); ok {
+			if b, _ := v.(bool); b {
+				entry.GuardrailTruncated = true
+			}
+		}
 		if v, ok := c.Get("agent_type"); ok {
 			if s, _ := v.(string); s != "" {
 				entry.AgentType = s
@@ -694,7 +916,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			entry.UserMessage = truncateContent(extractLastUserMessage(req.Messages))
 			entry.ModelResponse = truncateContent(modelRespBuf.String())
 		}
-		// Stream: UsageFromUpstr marks real upstream usage — the translator seeds
+		// Stream: UsageFromUpstr marks real upstream usage â the translator seeds
 		// InputTokens with an estimate that must not feed calibration.
 		BuildContextAnalysisResult(contextAnalysisInput{
 			anthropicReq:   req,
@@ -711,8 +933,8 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 
 // anthropicCacheAdjustedCost applies Anthropic prompt-cache pricing on top of
 // the plain token cost. Cache-read tokens are included in inputTokens (OpenAI
-// semantics) but Anthropic bills them at 0.1× the input price, so discount the
-// 0.9×; cache-creation (write) tokens are billed at 1.25×, so add the 0.25×.
+// semantics) but Anthropic bills them at 0.1Ã the input price, so discount the
+// 0.9Ã; cache-creation (write) tokens are billed at 1.25Ã, so add the 0.25Ã.
 func anthropicCacheAdjustedCost(inputTokens, outputTokens, cacheRead, cacheCreation int, inputPrice, outputPrice float64) float64 {
 	cost := inputPrice*float64(inputTokens)/1000 + outputPrice*float64(outputTokens)/1000
 	if cacheRead > 0 {
@@ -772,4 +994,201 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 		"type":  "error",
 		"error": gin.H{"type": errType, "message": safeProviderError(err)},
 	})
+}
+
+// maskJoinedRange applies non-overlapping guardrail spans to the [start,end)
+// fragment of a joined content string and returns the masked fragment, or nil
+// when no span touches the range.
+func maskJoinedRange(content string, spans []guardrail.Span, start, end int) *string {
+	var b strings.Builder
+	touched := false
+	last := start
+	for _, sp := range spans {
+		if sp.End <= start || sp.Start >= end {
+			continue
+		}
+		touched = true
+		s := sp.Start
+		if s < start {
+			s = start
+		}
+		e := sp.End
+		if e > end {
+			e = end
+		}
+		if s > last {
+			b.WriteString(content[last:s])
+		}
+		b.WriteString(sp.Replacement)
+		last = e
+	}
+	if !touched {
+		return nil
+	}
+	if last < end {
+		b.WriteString(content[last:end])
+	}
+	out := b.String()
+	return &out
+}
+
+// idemReplayPassesGuardrail re-checks an idempotency-cached body against the
+// current response-direction policy before replaying it. True when guardrails
+// are off or the body passes; false when the body is blocked, needs masking,
+// or the check failed fail-closed — the caller must REJECT the replay with an
+// error, never fall through: an idempotent replay must not re-execute the
+// original (possibly side-effecting) operation under a changed policy.
+func idemReplayPassesGuardrail(c *gin.Context, svc *guardrail.GuardrailService, body []byte, model string) bool {
+	if svc == nil || !svc.IsEnabled() {
+		return true
+	}
+	text := extractGuardrailTextFromBody(body, c.Request.URL.Path)
+	if text == "" {
+		return true
+	}
+	var apiKeyID, teamID int64
+	if key := middleware.GetAPIKeyFromContext(c); key != nil {
+		apiKeyID = key.ID
+		if key.TeamID != nil {
+			teamID = *key.TeamID
+		}
+	}
+	orgID := c.GetInt64("org_id")
+
+	guardCtx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(svc.ResponseBudgetMs())*time.Millisecond)
+	defer cancel()
+	result, err := svc.Check(guardCtx, &guardrail.CheckRequest{
+		Content:   text,
+		Direction: guardrail.DirectionResponse,
+		Model:     model,
+		APIKeyID:  apiKeyID,
+		TeamID:    teamID,
+		OrgID:     orgID,
+	})
+	if err != nil {
+		if svc.IsFailOpen() {
+			return true
+		}
+		return false
+	}
+	if result == nil {
+		return true
+	}
+	if result.Action == "log" && result.RuleName != "" {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", result.RuleName)
+	}
+	if result.Truncated {
+		c.Set("guardrail_truncated", true)
+	}
+	if result.Blocked || result.Action == "mask" {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", result.RuleName)
+		return false
+	}
+	return true
+}
+
+// extractGuardrailTextFromBody pulls the checkable text of a serialized
+// chat/completions or messages response body.
+func extractGuardrailTextFromBody(body []byte, path string) string {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(body, &root) != nil {
+		return ""
+	}
+	var parts []string
+	if strings.HasSuffix(path, "/v1/chat/completions") {
+		var choices []struct {
+			Message struct {
+				Content          json.RawMessage `json:"content"`
+				ReasoningContent string          `json:"reasoning_content"`
+				ToolCalls        []struct {
+					Function struct {
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(root["choices"], &choices) != nil {
+			return ""
+		}
+		for _, ch := range choices {
+			var s string
+			if json.Unmarshal(ch.Message.Content, &s) == nil && s != "" {
+				parts = append(parts, s)
+			} else {
+				var contentParts []map[string]json.RawMessage
+				if json.Unmarshal(ch.Message.Content, &contentParts) == nil {
+					for _, p := range contentParts {
+						var t string
+						if json.Unmarshal(p["text"], &t) == nil && t != "" {
+							parts = append(parts, t)
+						}
+					}
+				}
+			}
+			if ch.Message.ReasoningContent != "" {
+				parts = append(parts, ch.Message.ReasoningContent)
+			}
+			for _, tc := range ch.Message.ToolCalls {
+				if tc.Function.Arguments != "" {
+					parts = append(parts, canonicalArgsJSON(tc.Function.Arguments))
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	if strings.HasSuffix(path, "/v1/messages") {
+		var resp struct {
+			Content []struct {
+				Type  string          `json:"type"`
+				Text  string          `json:"text"`
+				Input json.RawMessage `json:"input"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(root["content"], &resp.Content) != nil {
+			return ""
+		}
+		for _, b := range resp.Content {
+			switch b.Type {
+			case "text", "thinking":
+				if b.Text != "" {
+					parts = append(parts, b.Text)
+				}
+			case "tool_use":
+				if len(b.Input) > 0 {
+					parts = append(parts, canonicalArgsJSON(string(b.Input)))
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
+}
+
+// responseCheckCtx returns the context for a response-direction guardrail
+// check with the configured response budget applied.
+func responseCheckCtx(c *gin.Context, svc *guardrail.GuardrailService) (context.Context, context.CancelFunc) {
+	ctx := c.Request.Context()
+	if svc != nil {
+		if budget := svc.ResponseBudgetMs(); budget > 0 {
+			return context.WithTimeout(ctx, time.Duration(budget)*time.Millisecond)
+		}
+	}
+	return ctx, func() {}
+}
+
+// canonicalArgsJSON decodes and re-encodes a JSON arguments/input string so
+// escaped sequences (\uXXXX) are checked in DECODED form: a tool receiving
+// {"value":"SE\u0043RET"} sees "SECRET", so detection must too. Masked
+// rewrites are written back in this canonical form (validated as JSON).
+func canonicalArgsJSON(raw string) string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return raw
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return raw
 }

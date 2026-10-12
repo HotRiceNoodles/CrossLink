@@ -26,10 +26,14 @@ func ReadBody(maxSize int64) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSize))
+		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSize+1))
 		c.Request.Body.Close()
 		if err != nil {
 			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		if int64(len(bodyBytes)) > maxSize {
+			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
 			return
 		}
 		c.Set(BodyKey, bodyBytes)

@@ -169,6 +169,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Wire guardrail engine callbacks
 	guardrailSvc.SetIsDebugEnabled(debugStore.IsEnabled)
 	guardrailSvc.SetRedisClient(rdb)
+	// Cross-instance rules/settings reload: subscribe for the process
+	// lifetime. Convergence on other instances is TTL-bounded best-effort,
+	// not atomic; staleness is observable via
+	// cl_guardrail_rules_last_loaded_success_timestamp_seconds.
+	guardrailSvc.StartReloadSubscription(context.Background())
 	if ext.Gate != nil {
 		guardrailSvc.SetCheckLicenseTier(ext.Gate.CurrentTier)
 	}
@@ -631,7 +636,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
-	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider))
+	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider, guardrailSvc))
 	gwGroup.Use(middleware.RateLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	// BudgetCheck before TPMLimit: a budget-rejected request must not make a
 	// TPM reservation (the aborting chain never reaches ReportTokens).
