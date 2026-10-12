@@ -8,10 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
@@ -168,13 +170,23 @@ func (h *PlaygroundHandler) responsesNonStream(c *gin.Context, rawBody []byte, r
 	route := result.Route
 	latency := time.Since(start).Milliseconds()
 
-	orgID := c.GetInt64("org_id")
 	switch r := result.Response.(type) {
 	case *pgResponsesRaw:
-		h.logResponsesUsage(orgID, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, r.raw)
+		// Response-direction check on the raw body BEFORE it is delivered.
+		if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && pgResponsesGuardBlocked(c, h.guardrailSvc, req.Model, pgExtractResponsesText(r.raw)) {
+			h.logResponsesUsage(c, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
+			return
+		}
+		h.logResponsesUsage(c, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, r.raw)
 		c.Data(r.status, "application/json", r.raw)
 	case *domain.ResponsesResponse:
-		h.logResponsesUsage(orgID, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
+		if buf, err := json.Marshal(r); err == nil {
+			if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && pgResponsesGuardBlocked(c, h.guardrailSvc, req.Model, pgExtractResponsesText(buf)) {
+				h.logResponsesUsage(c, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
+				return
+			}
+		}
+		h.logResponsesUsage(c, req, route, route.Provider.Name(), latency, result.FallbackCount, 0, nil)
 		c.JSON(http.StatusOK, r)
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": "unexpected response type"})
@@ -203,9 +215,9 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 			continue
 		}
 		h.writeStreamHeader(c)
-		pgCopySSE(c, rc)
+		pgCopySSEGuarded(c, rc, h.guardrailSvc, req.Model)
 		rc.Close()
-		h.logResponsesUsage(c.GetInt64("org_id"), req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+		h.logResponsesUsage(c, req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
 		return
 	}
 
@@ -238,7 +250,55 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		defer res.CancelStream()
 	}
 	h.writeStreamHeader(c)
-	pgWriteEvents(c, builder.Start())
+
+	// Strict mode: buffer every event (bytes and event count capped) and run
+	// the final check BEFORE anything is released. Window mode: emit as it
+	// arrives and still run the end-of-stream check for observability —
+	// already-emitted window content is not retractable (documented tradeoff).
+	strict := h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && h.guardrailSvc.StreamMode() == "strict"
+	var held []string
+	var text strings.Builder
+	heldBytes, heldEvents := 0, 0
+	overflow := false
+	emit := func(events []domain.ResponsesEvent) {
+		flusher, _ := c.Writer.(http.Flusher)
+		for _, ev := range events {
+			data, err := json.Marshal(ev.Payload)
+			if err != nil {
+				continue
+			}
+			text.WriteString(pgExtractResponsesText(data))
+			block := fmt.Sprintf("event: %s\ndata: %s\n\n", ev.Type, data)
+			if strict {
+				held = append(held, block)
+				heldBytes += len(block)
+				heldEvents++
+				if heldBytes > h.guardrailSvc.StrictMaxBytes() || heldEvents > h.guardrailSvc.StrictMaxEvents() {
+					overflow = true
+				}
+				continue
+			}
+			c.Writer.WriteString(block)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if !strict && len(events) > 0 {
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
+	capFail := func() {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", "guardrail_stream_cap")
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_blocked","message":"streamed response exceeds strict-mode guardrail buffer limit"}`)
+		if f, _ := c.Writer.(http.Flusher); f != nil {
+			f.Flush()
+		}
+	}
+
+	emit(builder.Start())
 	var lastUsage domain.OpenAIUsage
 	var finishReason string
 	for chunk := range res.StreamCh {
@@ -252,13 +312,81 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 			if chunk.Chunk.Usage != nil {
 				lastUsage = domain.OpenAIUsage{PromptTokens: chunk.Chunk.Usage.PromptTokens, CompletionTokens: chunk.Chunk.Usage.CompletionTokens, TotalTokens: chunk.Chunk.Usage.TotalTokens}
 			}
-			pgWriteEvents(c, builder.Next(chunk.Chunk))
+			emit(builder.Next(chunk.Chunk))
+		}
+		if overflow {
+			break
 		}
 	}
-	pgWriteEvents(c, builder.Finish(lastUsage, finishReason, req.Model))
-	c.Writer.Write([]byte("data: [DONE]\n\n"))
-	c.Writer.Flush()
-	h.logResponsesUsage(c.GetInt64("org_id"), req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+	if !overflow {
+		emit(builder.Finish(lastUsage, finishReason, req.Model))
+	}
+	if overflow {
+		capFail()
+		h.logResponsesUsage(c, req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+		return
+	}
+	doneBlock := "data: [DONE]\n\n"
+	if strict {
+		held = append(held, doneBlock)
+	} else {
+		c.Writer.WriteString(doneBlock)
+		if f, _ := c.Writer.(http.Flusher); f != nil {
+			f.Flush()
+		}
+	}
+	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
+		grCtx, grCancel := guardResponseCtx(c, h.guardrailSvc)
+		grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: req.Model})
+		grCancel()
+		if grErr != nil {
+			if h.guardrailSvc.IsFailOpen() {
+				slog.Warn("playground: responses stream guardrail check failed, fail-open", "error", grErr)
+			} else {
+				// Fail-closed: the strict buffer must NOT be released and the
+				// stream terminates with a guardrail error.
+				slog.Error("playground: responses stream guardrail check failed", "error", grErr)
+				c.Set("guardrail_triggered", true)
+				c.Set("guardrail_rule", "guardrail_unavailable")
+				fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_error","message":"guardrail service unavailable"}`)
+				if f, _ := c.Writer.(http.Flusher); f != nil {
+					f.Flush()
+				}
+				h.logResponsesUsage(c, req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+				return
+			}
+		}
+		if grResult != nil && grResult.Truncated {
+			c.Set("guardrail_truncated", true)
+		}
+		if grErr == nil && grResult != nil && grResult.Blocked {
+			// Strict: nothing was released — withhold the buffer and emit only
+			// the guardrail error. Window: content already emitted; the error
+			// event still terminates the stream for the client.
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", grResult.RuleName)
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_blocked","message":"blocked by guardrail"}`)
+			if f, _ := c.Writer.(http.Flusher); f != nil {
+				f.Flush()
+			}
+			h.logResponsesUsage(c, req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
+			return
+		}
+		if grErr == nil && grResult != nil && grResult.Action == "log" {
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", grResult.RuleName)
+		}
+	}
+	if strict {
+		flusher, _ := c.Writer.(http.Flusher)
+		for _, block := range held {
+			c.Writer.WriteString(block)
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	h.logResponsesUsage(c, req, route, route.Provider.Name(), time.Since(start).Milliseconds(), 0, 0, nil)
 }
 
 func (h *PlaygroundHandler) writeStreamHeader(c *gin.Context) {
@@ -282,35 +410,288 @@ func pgWriteEvents(c *gin.Context, events []domain.ResponsesEvent) {
 	}
 }
 
-// pgCopySSE copies upstream SSE bytes verbatim to the client.
-func pgCopySSE(c *gin.Context, rc io.Reader) {
+// pgCopySSEGuarded relays upstream SSE with response-direction guardrail
+// checks. Strict mode buffers all lines (byte and event caps, comments/blank
+// lines count toward bytes) and releases them only after the final check;
+// window mode passes through and end-checks for observability.
+func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailService, model string) {
+	strict := svc != nil && svc.IsEnabled() && svc.StreamMode() == "strict"
 	flusher, _ := c.Writer.(http.Flusher)
 	br := bufio.NewReader(rc)
+	var held []string
+	var text strings.Builder
+	heldBytes, heldEvents := 0, 0
+	maxBytes, maxEvents := int(^uint(0)>>1), int(^uint(0)>>1)
+	if strict {
+		maxBytes = svc.StrictMaxBytes()
+		maxEvents = svc.StrictMaxEvents()
+	}
+	overflow := false
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
-			c.Writer.WriteString(line)
+			if strict {
+				held = append(held, line)
+				heldBytes += len(line)
+				if data, ok := pgSSEData(line); ok {
+					heldEvents++
+					text.WriteString(pgExtractResponsesText(data))
+				}
+				if heldBytes > maxBytes || heldEvents > maxEvents {
+					overflow = true
+				}
+			} else {
+				c.Writer.WriteString(line)
+				if flusher != nil {
+					flusher.Flush()
+				}
+				if data, ok := pgSSEData(line); ok {
+					text.WriteString(pgExtractResponsesText(data))
+				}
+			}
+		}
+		if err != nil || overflow {
+			break
+		}
+	}
+	if overflow {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", "guardrail_stream_cap")
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_blocked","message":"streamed response exceeds strict-mode guardrail buffer limit"}`)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	if svc == nil || !svc.IsEnabled() {
+		return
+	}
+	grCtx, grCancel := guardResponseCtx(c, svc)
+	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: model})
+	grCancel()
+	if grErr != nil {
+		if svc.IsFailOpen() {
+			slog.Warn("playground: responses stream guardrail check failed, fail-open", "error", grErr)
+		} else {
+			// Fail-closed: withhold the strict buffer entirely — zero
+			// unverified content is released.
+			slog.Error("playground: responses stream guardrail check failed", "error", grErr)
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", "guardrail_unavailable")
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_error","message":"guardrail service unavailable"}`)
 			if flusher != nil {
 				flusher.Flush()
 			}
-		}
-		if err != nil {
 			return
 		}
 	}
+	if grResult != nil && grResult.Truncated {
+		c.Set("guardrail_truncated", true)
+	}
+	if grErr == nil && grResult != nil && grResult.Blocked {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", grResult.RuleName)
+		if strict {
+			// Nothing was released: withhold the buffer, emit only the error.
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_blocked","message":"blocked by guardrail"}`)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		// Window mode: content already emitted; terminate with the error.
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"guardrail_blocked","message":"blocked by guardrail"}`)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	if grErr == nil && grResult != nil && grResult.Action == "log" {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", grResult.RuleName)
+	}
+	if strict {
+		for _, block := range held {
+			c.Writer.WriteString(block)
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 }
 
-func pgPeekResponseID(raw []byte) string {
-	var v struct {
-		ID string `json:"id"`
+// pgSSEData returns the JSON payload of a "data:" SSE line.
+func pgSSEData(line string) ([]byte, bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return nil, false
 	}
-	if json.Unmarshal(raw, &v) == nil {
-		return v.ID
+	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return nil, false
 	}
-	return ""
+	return []byte(payload), true
 }
 
-func (h *PlaygroundHandler) logResponsesUsage(orgID int64, req *PlaygroundResponsesRequest, route *router.RouteResult, providerName string, latencyMs int64, fallbackCount, retryCount int, rawResp []byte) {
+// pgResponsesGuardBlocked runs the response-direction check for a non-stream
+// playground Responses body. It reports whether the body must NOT be
+// delivered: policy block, or a mask that cannot be applied field-safely to
+// the structured body (controlled rejection, never degrade to forwarding the
+// original). log hits and partial coverage only set observability flags.
+func pgResponsesGuardBlocked(c *gin.Context, svc *guardrail.GuardrailService, model, text string) bool {
+	if text == "" {
+		return false
+	}
+	grCtx, grCancel := guardResponseCtx(c, svc)
+	defer grCancel()
+	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text, Direction: guardrail.DirectionResponse, Model: model})
+	if grErr != nil {
+		// Check only returns an error when it could not verify AND policy is
+		// fail-closed (fail-open is absorbed inside the service). Mirror the
+		// /v1 handlers: reject rather than deliver unverified content.
+		if svc.IsFailOpen() {
+			slog.Warn("playground: responses guardrail check failed, fail-open", "error", grErr)
+			return false
+		}
+		slog.Error("playground: responses guardrail check failed", "error", grErr)
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", "guardrail_unavailable")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "guardrail service unavailable"}})
+		return true
+	}
+	if grResult == nil {
+		return false
+	}
+	if grResult.Truncated {
+		c.Set("guardrail_truncated", true)
+	}
+	if grResult.Blocked {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", grResult.RuleName)
+		reason := "blocked by guardrail"
+		if grResult.Reason != "" {
+			reason = grResult.Reason
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": reason}})
+		return true
+	}
+	if grResult.Action == "mask" {
+		// Whole-string MaskedContent cannot be written back into the
+		// structured Responses body field-safely — refuse rather than leak.
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", grResult.RuleName)
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "guardrail mask could not be applied safely"}})
+		return true
+	}
+	if grResult.Action == "log" {
+		c.Set("guardrail_triggered", true)
+		c.Set("guardrail_rule", grResult.RuleName)
+	}
+	return false
+}
+
+// pgExtractResponsesText collects output-bearing string leaves from a
+// Responses JSON payload (non-stream body or one SSE event), aligned with the
+// gateway Responses gate's event family: text/arguments deltas,
+// output_text.done / reasoning_text.done (top-level text),
+// function_call_arguments.done (top-level arguments, canonicalized),
+// content_part.done (part.text), output_item.done (item),
+// response.completed (response.output), plus the non-stream body shape
+// (output[] items with content[] parts and reasoning summary[] parts).
+func pgExtractResponsesText(payload []byte) string {
+	var root map[string]any
+	if err := json.Unmarshal(payload, &root); err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	if d, ok := root["delta"].(string); ok {
+		sb.WriteString(d)
+	}
+	if a, ok := root["arguments"].(string); ok && a != "" {
+		sb.WriteString(pgCanonicalJSON(a))
+	}
+	if s, ok := root["text"].(string); ok {
+		sb.WriteString(s)
+	}
+	if part, ok := root["part"].(map[string]any); ok {
+		if s, ok := part["text"].(string); ok {
+			sb.WriteString(s)
+		}
+	}
+	if item, ok := root["item"].(map[string]any); ok {
+		pgWalkResponsesItem(item, &sb)
+	}
+	if resp, ok := root["response"].(map[string]any); ok {
+		if out, ok := resp["output"].([]any); ok {
+			pgWalkResponsesItems(out, &sb)
+		}
+		if cont, ok := resp["content"].([]any); ok {
+			pgWalkResponsesContent(cont, &sb)
+		}
+	}
+	if out, ok := root["output"].([]any); ok {
+		pgWalkResponsesItems(out, &sb)
+	}
+	if cont, ok := root["content"].([]any); ok {
+		pgWalkResponsesContent(cont, &sb)
+	}
+	return sb.String()
+}
+
+func pgWalkResponsesItems(items []any, sb *strings.Builder) {
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
+			pgWalkResponsesItem(m, sb)
+		}
+	}
+}
+
+// pgWalkResponsesItem extracts one output item's checkable leaves: tool
+// arguments (canonicalized so \uXXXX escapes are detected decoded), message
+// content text, reasoning summary text, and nested output items.
+func pgWalkResponsesItem(m map[string]any, sb *strings.Builder) {
+	if a, ok := m["arguments"].(string); ok && a != "" {
+		sb.WriteString(pgCanonicalJSON(a))
+	}
+	if s, ok := m["text"].(string); ok {
+		sb.WriteString(s)
+	}
+	if cont, ok := m["content"].([]any); ok {
+		pgWalkResponsesContent(cont, sb)
+	}
+	if summ, ok := m["summary"].([]any); ok {
+		pgWalkResponsesContent(summ, sb)
+	}
+	if out, ok := m["output"].([]any); ok {
+		pgWalkResponsesItems(out, sb)
+	}
+}
+
+func pgWalkResponsesContent(parts []any, sb *strings.Builder) {
+	for _, p := range parts {
+		m, _ := p.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if s, ok := m["text"].(string); ok {
+			sb.WriteString(s)
+		}
+	}
+}
+
+// pgCanonicalJSON decodes and re-encodes a JSON string value so escaped
+// content (\u0043) is checked in decoded form.
+func pgCanonicalJSON(raw string) string {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return raw
+	}
+	if buf, err := json.Marshal(v); err == nil {
+		return string(buf)
+	}
+	return raw
+}
+
+func (h *PlaygroundHandler) logResponsesUsage(c *gin.Context, req *PlaygroundResponsesRequest, route *router.RouteResult, providerName string, latencyMs int64, fallbackCount, retryCount int, rawResp []byte) {
 	// Translate to OpenAI request shape for content logging consistency.
 	oaiReq, _ := translator.ResponsesToOpenAI(&domain.ResponsesRequest{
 		Model: req.Model, Input: req.Input, Instructions: req.Instructions,
@@ -319,5 +700,7 @@ func (h *PlaygroundHandler) logResponsesUsage(orgID int64, req *PlaygroundRespon
 	if len(rawResp) > 0 {
 		respSummary = string(rawResp)
 	}
-	h.logUsage("", orgID, oaiReq, 0, 0, route, providerName, latencyMs, fallbackCount, retryCount, false, "", respSummary)
+	orgID := c.GetInt64("org_id")
+	grTriggered, grRule, grTruncated := guardrailContext(c)
+	h.logUsage("", orgID, oaiReq, 0, 0, route, providerName, latencyMs, fallbackCount, retryCount, grTriggered, grRule, grTruncated, respSummary)
 }

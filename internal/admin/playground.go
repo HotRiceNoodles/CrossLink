@@ -207,7 +207,9 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 		}
 
 		if respText != "" {
-			grResult, grErr := h.guardrailSvc.Check(c.Request.Context(), &guardrail.CheckRequest{
+			grCtx, grCancel := guardResponseCtx(c, h.guardrailSvc)
+			defer grCancel()
+			grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{
 				Content:   respText,
 				Direction: guardrail.DirectionResponse,
 				Model:     req.Model,
@@ -217,13 +219,18 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 			})
 			if grErr != nil {
 				slog.Warn("playground: guardrail response check failed", "error", grErr)
-			} else if grResult != nil && grResult.Blocked {
+			}
+			// Partial coverage surfaced for usage/security observability.
+			if grResult != nil && grResult.Truncated {
+				c.Set("guardrail_truncated", true)
+			}
+			if grErr == nil && grResult != nil && grResult.Blocked {
 				if grResult.Action == "block" {
 					// Upstream tokens were already consumed — record usage before returning.
 					go h.logUsage(c.GetHeader("X-Session-ID"), orgID, openaiReq,
 						resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
 						result.Route, pn, latencyMs, result.FallbackCount, totalRetries,
-						true, grResult.RuleName, "")
+						true, grResult.RuleName, grResult.Truncated, "")
 					reason := "blocked by guardrail"
 					if grResult.Reason != "" {
 						reason = grResult.Reason
@@ -259,9 +266,9 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 	}
 
 	sessionID := c.GetHeader("X-Session-ID")
-	grTriggered, grRule := guardrailContext(c)
+	grTriggered, grRule, grTruncated := guardrailContext(c)
 	go h.logUsage(sessionID, orgID, openaiReq, resp.Usage.PromptTokens, resp.Usage.CompletionTokens,
-		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, respText)
+		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, grTruncated, respText)
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
@@ -418,9 +425,10 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 				if outTok == 0 {
 					outTok = outputEstimate
 				}
+				_, _, grTrunc := guardrailContext(c)
 				go h.logUsage(c.GetHeader("X-Session-ID"), orgID, openaiReq, inputTokens, outTok,
 					result.Route, pn, time.Since(start).Milliseconds(), result.FallbackCount, totalRetries,
-					true, sr.Blocked.RuleName, modelRespBuf.String())
+					true, sr.Blocked.RuleName, grTrunc, modelRespBuf.String())
 				return
 			}
 			chunk := sr.Chunk
@@ -520,9 +528,9 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 	c.Set("output_tokens", outputTokens)
 
 	sessionID := c.GetHeader("X-Session-ID")
-	grTriggered, grRule := guardrailContext(c)
+	grTriggered, grRule, grTruncated := guardrailContext(c)
 	go h.logUsage(sessionID, orgID, openaiReq, inputTokens, outputTokens,
-		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, modelRespBuf.String())
+		result.Route, pn, latencyMs, result.FallbackCount, totalRetries, grTriggered, grRule, grTruncated, modelRespBuf.String())
 }
 
 func (h *PlaygroundHandler) logUsage(
@@ -531,6 +539,7 @@ func (h *PlaygroundHandler) logUsage(
 	route *router.RouteResult, providerName string,
 	latencyMs int64, fallbackCount, retryCount int,
 	guardrailTriggered bool, guardrailRule string,
+	guardrailTruncated bool,
 	modelResponse string,
 ) {
 	defer func() { recover() }()
@@ -554,6 +563,9 @@ func (h *PlaygroundHandler) logUsage(
 	if guardrailTriggered {
 		entry.GuardrailTriggered = true
 		entry.GuardrailRule = guardrailRule
+	}
+	if guardrailTruncated {
+		entry.GuardrailTruncated = true
 	}
 	if h.usageSvc.IsContentLogEnabled() {
 		entry.UserMessage = truncateMessages(req.Messages)
@@ -599,7 +611,7 @@ func truncateContent(s string) string {
 	return string(runes[:maxContentLen])
 }
 
-func guardrailContext(c *gin.Context) (triggered bool, rule string) {
+func guardrailContext(c *gin.Context) (triggered bool, rule string, truncated bool) {
 	if v, ok := c.Get("guardrail_triggered"); ok {
 		if b, _ := v.(bool); b {
 			triggered = true
@@ -608,6 +620,11 @@ func guardrailContext(c *gin.Context) (triggered bool, rule string) {
 	if v, ok := c.Get("guardrail_rule"); ok {
 		if s, _ := v.(string); s != "" {
 			rule = s
+		}
+	}
+	if v, ok := c.Get("guardrail_truncated"); ok {
+		if b, _ := v.(bool); b {
+			truncated = true
 		}
 	}
 	return
@@ -792,7 +809,7 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 	c.Set("output_price", 0)
 	c.Set("cost", cost)
 
-	grTriggered, grRule := guardrailContext(c)
+	grTriggered, grRule, grTruncated := guardrailContext(c)
 	go func() {
 		defer func() { recover() }()
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -816,6 +833,9 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 		if grTriggered {
 			entry.GuardrailTriggered = true
 			entry.GuardrailRule = grRule
+		}
+		if grTruncated {
+			entry.GuardrailTruncated = true
 		}
 		h.usageSvc.Log(bgCtx, entry)
 		if h.latencySvc != nil {
@@ -954,7 +974,7 @@ func (h *PlaygroundHandler) TextToSpeech(c *gin.Context) {
 
 	audioBase64 := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(audioBuf.Bytes())
 
-	grTriggered, grRule := guardrailContext(c)
+	grTriggered, grRule, grTruncated := guardrailContext(c)
 	go func() {
 		defer func() { recover() }()
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -973,6 +993,9 @@ func (h *PlaygroundHandler) TextToSpeech(c *gin.Context) {
 		if grTriggered {
 			entry.GuardrailTriggered = true
 			entry.GuardrailRule = grRule
+		}
+		if grTruncated {
+			entry.GuardrailTruncated = true
 		}
 		h.usageSvc.Log(bgCtx, entry)
 		if h.latencySvc != nil {
@@ -1297,7 +1320,9 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 
 	// Response-side guardrail for transcribed text
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && resp.Text != "" {
-		grResult, grErr := h.guardrailSvc.Check(c.Request.Context(), &guardrail.CheckRequest{
+		grCtx, grCancel := guardResponseCtx(c, h.guardrailSvc)
+		defer grCancel()
+		grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{
 			Content:   resp.Text,
 			Direction: guardrail.DirectionResponse,
 			Model:     req.Model,
@@ -1307,7 +1332,12 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 		})
 		if grErr != nil {
 			slog.Warn("playground: guardrail STT response check failed", "error", grErr)
-		} else if grResult != nil && grResult.Blocked {
+		}
+		// Partial coverage surfaced for usage/security observability.
+		if grResult != nil && grResult.Truncated {
+			c.Set("guardrail_truncated", true)
+		}
+		if grErr == nil && grResult != nil && grResult.Blocked {
 			if grResult.Action == "block" {
 				reason := "blocked by guardrail"
 				if grResult.Reason != "" {
@@ -1331,7 +1361,7 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 		}
 	}
 
-	grTriggered, grRule := guardrailContext(c)
+	grTriggered, grRule, grTruncated := guardrailContext(c)
 	go func() {
 		defer func() { recover() }()
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1350,6 +1380,7 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 			PrecomputedCost:    cost,
 			GuardrailTriggered: grTriggered,
 			GuardrailRule:      grRule,
+			GuardrailTruncated: grTruncated,
 		})
 		if h.latencySvc != nil {
 			h.latencySvc.RecordLatency(bgCtx, pn, latencyMs)
@@ -1367,4 +1398,16 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 			"cost":     cost,
 		},
 	})
+}
+
+// guardResponseCtx applies the configured response-direction budget to a
+// playground guardrail check.
+func guardResponseCtx(c *gin.Context, svc *guardrail.GuardrailService) (context.Context, context.CancelFunc) {
+	ctx := c.Request.Context()
+	if svc != nil {
+		if budget := svc.ResponseBudgetMs(); budget > 0 {
+			return context.WithTimeout(ctx, time.Duration(budget)*time.Millisecond)
+		}
+	}
+	return ctx, func() {}
 }
