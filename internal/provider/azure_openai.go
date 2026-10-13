@@ -164,11 +164,15 @@ func (p *AzureOpenAIProvider) StreamChat(ctx context.Context, req *domain.OpenAI
 
 	ch := make(chan domain.SSEChunk, 64)
 	done := make(chan struct{})
+	expectedChoices := 1
+	if req.N != nil && *req.N > 1 {
+		expectedChoices = *req.N
+	}
 	go func() {
 		defer close(ch)
 		defer close(done)
 		defer resp.Body.Close()
-		readSSEStream(ctx, resp.Body, ch)
+		readSSEStream(ctx, resp.Body, ch, expectedChoices)
 	}()
 	// Close the body when the context cancels to unblock a scanner blocked in
 	// Read; exits on done so normal completion does not leak the goroutine.

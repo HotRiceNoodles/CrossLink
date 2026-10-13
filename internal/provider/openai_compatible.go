@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/domain"
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/pool"
 )
@@ -38,6 +39,23 @@ func NewOpenAICompatible(name, baseURL string, timeout time.Duration) *OpenAICom
 		httpClient:   newDefaultClient(timeout),
 		streamClient: newStreamClient(),
 	}
+}
+
+// NewOpenAICompatibleWithTransport is the dependency-injection seam of
+// NewOpenAICompatible: it lets the caller supply the RoundTripper used for
+// streaming requests (still wrapped with the standard otel/debug layers),
+// while non-streaming requests keep the default SSRF-safe clients. Production
+// callers use NewOpenAICompatible; tests use this to target httptest servers
+// without touching global SSRF state.
+func NewOpenAICompatibleWithTransport(name, baseURL string, timeout time.Duration, rt http.RoundTripper) *OpenAICompatibleProvider {
+	p := NewOpenAICompatible(name, baseURL, timeout)
+	if rt != nil {
+		p.streamClient = &http.Client{
+			CheckRedirect: guardrail.BlockInternalRedirect,
+			Transport:     newWrappedTransport(rt),
+		}
+	}
+	return p
 }
 
 func (p *OpenAICompatibleProvider) Name() string { return p.name }
@@ -149,11 +167,15 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 
 	ch := make(chan domain.SSEChunk, 64)
 	done := make(chan struct{})
+	expectedChoices := 1
+	if req.N != nil && *req.N > 1 {
+		expectedChoices = *req.N
+	}
 	go func() {
 		defer close(ch)
 		defer close(done)
 		defer resp.Body.Close()
-		readSSEStream(ctx, resp.Body, ch)
+		readSSEStream(ctx, resp.Body, ch, expectedChoices)
 	}()
 	// Close the body when the context cancels to unblock a scanner blocked in
 	// Read. Exits on done as well, so a stream that completes normally does
@@ -180,12 +202,53 @@ func sendSSEChunk(ctx context.Context, ch chan<- domain.SSEChunk, chunk domain.S
 	}
 }
 
-func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk) {
+// upstreamStreamError probes a data payload for an OpenAI-style error object.
+// The probe runs on EVERY payload — some upstreams attach the error alongside
+// choices — and streams carrying an error frame must be classified as
+// interrupted, never as clean completion. Only the error TYPE is retained and
+// only after mapping to a fixed category: the upstream type string is
+// untrusted content and must never reach logs verbatim.
+type upstreamStreamError struct {
+	Error *struct {
+		Type string `json:"type"`
+	} `json:"error"`
+}
+
+// classifyUpstreamErrorType maps an untrusted upstream error type to a fixed
+// log-safe category; anything outside the well-known set logs as "unknown".
+func classifyUpstreamErrorType(raw string) string {
+	switch raw {
+	case "server_error", "overloaded_error", "rate_limit_error", "timeout",
+		"authentication_error", "permission_error", "invalid_request_error",
+		"not_found_error", "api_error", "billing_error", "quota_exceeded":
+		return raw
+	default:
+		return "unknown"
+	}
+}
+
+func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk, expectedChoices int) {
 	buf := pool.GetScannerBuffer()
 	defer pool.PutScannerBuffer(buf)
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(*buf, 4*1024*1024)
+
+	// Some OpenAI-compatible upstreams (e.g. MiniMax) close the SSE stream
+	// after the final finish_reason chunk without the `data: [DONE]` sentinel.
+	// A clean EOF is only reclassified as normal completion when EVERY choice
+	// the request expected (n, default 1) reported an explicit finish_reason,
+	// and no cancellation, read error, malformed chunk, or upstream error
+	// frame was seen; anything else stays a mid-stream interruption for the
+	// caller's graceful degradation. Malformed/error frames poison the stream
+	// even when a later [DONE] arrives — a sentinel must not launder a suspect
+	// stream into success. Usage-tail chunks after finish_reason are still
+	// forwarded: the synthesized terminal is emitted only after the stream has
+	// ended.
+	choiceSeen := make(map[int]bool)
+	choiceFinished := make(map[int]bool)
+	sawParseError := false
+	sawUpstreamError := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -198,18 +261,37 @@ func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChun
 			data := strings.TrimPrefix(line, "data: ")
 
 			if data == "[DONE]" {
+				if sawParseError || sawUpstreamError {
+					// A sentinel must not launder a stream that already showed
+					// malformed chunks or an upstream error frame into a
+					// clean completion — stay interrupted.
+					slog.Warn("terminal [DONE] ignored after malformed/error frames in stream",
+						"saw_parse_error", sawParseError, "saw_upstream_error", sawUpstreamError)
+					return
+				}
 				sendSSEChunk(ctx, ch, domain.SSEChunk{Done: true})
 				return
 			}
 
 			var chunk domain.OpenAIChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				preview := data
-				if len(preview) > 200 {
-					preview = preview[:200]
-				}
-				slog.Debug("skipped malformed SSE chunk", "error", err, "data", preview)
+				// Log the failure and the payload SIZE only — the raw payload
+				// is untrusted content and must never reach logs.
+				slog.Debug("skipped malformed SSE chunk", "error", err, "payload_bytes", len(data))
+				sawParseError = true
 				continue
+			}
+			var probe upstreamStreamError
+			if json.Unmarshal([]byte(data), &probe) == nil && probe.Error != nil {
+				slog.Warn("upstream error frame in stream",
+					"type", classifyUpstreamErrorType(probe.Error.Type), "payload_bytes", len(data))
+				sawUpstreamError = true
+			}
+			for _, c := range chunk.Choices {
+				choiceSeen[c.Index] = true
+				if c.FinishReason != nil && *c.FinishReason != "" {
+					choiceFinished[c.Index] = true
+				}
 			}
 
 			if !sendSSEChunk(ctx, ch, domain.SSEChunk{Chunk: &chunk}) {
@@ -220,7 +302,27 @@ func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChun
 
 	if err := scanner.Err(); err != nil {
 		slog.Warn("SSE stream read error", "error", err)
+		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
+	if sawParseError || sawUpstreamError || expectedChoices < 1 {
+		return
+	}
+	if len(choiceFinished) != len(choiceSeen) {
+		return
+	}
+	// Every choice the request expected must have reported an explicit
+	// finish_reason: an upstream that only served choice 0 of an n=2 request
+	// did NOT complete the stream.
+	for i := 0; i < expectedChoices; i++ {
+		if !choiceFinished[i] {
+			return
+		}
+	}
+	slog.Info("upstream stream ended without [DONE] after all choices reported finish_reason; synthesizing terminal")
+	sendSSEChunk(ctx, ch, domain.SSEChunk{Done: true})
 }
 
 func (p *OpenAICompatibleProvider) GenerateImage(ctx context.Context, req *domain.ImageRequest, apiKey string) (*domain.ImageResponse, error) {
