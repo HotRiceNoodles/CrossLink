@@ -125,6 +125,20 @@ end
 return v
 `)
 
+// reauthGetDelScript atomically reads and deletes the token key — the exact
+// semantics of GETDEL, but via EVAL so it also works on Redis < 6.2 (GETDEL
+// landed in 6.2; Redis 5.x is still common on Windows installs, and without
+// this fallback every consume fails closed with ErrReauthUnavailable). A
+// missing key makes Lua return false, which go-redis surfaces as redis.Nil —
+// same contract as the native command.
+var reauthGetDelScript = redis.NewScript(`
+local v = redis.call('GET', KEYS[1])
+if v then
+	redis.call('DEL', KEYS[1])
+end
+return v
+`)
+
 // Issue verifies the operator's password for THIS session (fingerprint) and
 // mints a single-use token. The attempt slot is reserved BEFORE verification
 // (atomic pre-claim) so concurrent requests cannot bypass the limit; a
@@ -248,7 +262,9 @@ func (m *ReauthManager) Verify(userID int64, fingerprint, token string) error {
 
 func (m *ReauthManager) verifyRedis(userID int64, fingerprint, token string) error {
 	ctx := context.Background()
-	raw, err := m.rdb.GetDel(ctx, reauthTokenKey(token)).Result() // atomic single-use
+	// Atomic single-use consume via the GETDEL-equivalent script (see
+	// reauthGetDelScript for the < 6.2 compatibility rationale).
+	raw, err := reauthGetDelScript.Run(ctx, m.rdb, []string{reauthTokenKey(token)}).Text()
 	if err == redis.Nil {
 		return ErrReauthTokenBad
 	}
