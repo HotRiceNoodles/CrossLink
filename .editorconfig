@@ -1,0 +1,22 @@
+# EditorConfig: https://editorconfig.org
+# Matches .gitattributes (LF in repo, LF on disk) so editors stop writing
+# CRLF into the working tree on Windows.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Windows-only scripts keep CRLF (same exceptions as .gitattributes)
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+[*.go]
+# gofmt owns Go indentation; keep editor insertion off to avoid fights
+indent_style = tab
+
+[Makefile]
+indent_style = tab
