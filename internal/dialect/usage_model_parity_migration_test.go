@@ -237,8 +237,15 @@ func TestSQLiteRunMigrationsAppliesFullChain(t *testing.T) {
 	if err := db.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 5 {
-		t.Fatalf("expected 5 applied versions (000001-000005), got %v", versions)
+	// The chain length must track the real migrations/sqlite directory, not a
+	// hardcoded count that goes stale with every new migration (B5's 000006
+	// broke exactly that).
+	ups, err := filepath.Glob(filepath.Join("migrations", "sqlite", "*_*.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != len(ups) {
+		t.Fatalf("expected %d applied versions (one per migrations/sqlite/*.up.sql), got %v", len(ups), versions)
 	}
 	insertAndReadBack(t, db, "RunMigrations fresh install")
 }

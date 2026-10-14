@@ -129,6 +129,11 @@ type GatewayConfig struct {
 	// restricted ranges; cloud-metadata (169.254.x.x) and loopback stay blocked
 	// unless explicitly listed. Env override: CL_GATEWAY_INTERNAL_ALLOW_CIDRS.
 	InternalAllowCIDRs []string `mapstructure:"internal_allow_cidrs"`
+	// InternalAllowCIDRsFromEnv reports whether the static value above came
+	// from the env var (true) or the YAML file (false). Not config-bound:
+	// set during Load; consumed by the B5 allowlist service to label the
+	// active source ("env" vs "yaml") and compute the reset fallback.
+	InternalAllowCIDRsFromEnv bool `mapstructure:"-"`
 	// ConcurrencyLimit caps the number of in-flight gateway (LLM proxy)
 	// requests. 0 means use the built-in default (2000). Lower it for
 	// resource-constrained or public demo deployments. Env override:
@@ -426,6 +431,13 @@ func Load(configPath string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// A set-but-blank CL_GATEWAY_INTERNAL_ALLOW_CIDRS would otherwise clobber
+	// the YAML value at the viper layer (AutomaticEnv applies to keys that
+	// exist in the config file too); treat blank as unset for this process.
+	if raw := os.Getenv("CL_GATEWAY_INTERNAL_ALLOW_CIDRS"); strings.TrimSpace(raw) == "" {
+		_ = os.Unsetenv("CL_GATEWAY_INTERNAL_ALLOW_CIDRS")
+	}
+
 	setDefaults(v)
 
 	if err := v.ReadInConfig(); err != nil {
@@ -441,6 +453,25 @@ func Load(configPath string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	// gateway.internal_allow_cidrs: viper cannot carry env strings into a
+	// []string field, so the explicit env override is handled here. Precedence
+	// matches viper's own (env > config file > default): a non-empty
+	// CL_GATEWAY_INTERNAL_ALLOW_CIDRS (comma-separated CIDRs) replaces the
+	// YAML value; an unset or whitespace-only env leaves the YAML value in
+	// place. Entries are validated later by guardrail.SetInternalAllowlist,
+	// which applies the whole list atomically or stays strict.
+	// InternalAllowCIDRsFromEnv records which static layer supplied the value
+	// (B5 reports the provenance and computes the reset fallback with it).
+	if raw := strings.TrimSpace(os.Getenv("CL_GATEWAY_INTERNAL_ALLOW_CIDRS")); raw != "" {
+		cidrs := make([]string, 0, 4)
+		for _, part := range strings.Split(raw, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				cidrs = append(cidrs, part)
+			}
+		}
+		cfg.Gateway.InternalAllowCIDRs = cidrs
+		cfg.Gateway.InternalAllowCIDRsFromEnv = true
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -493,6 +524,11 @@ func setDefaults(v *viper.Viper) {
 	// are honored in docker (where no config.yaml is present, AutomaticEnv only
 	// resolves env for keys Viper already knows).
 	v.SetDefault("gateway.auth_key", "")
+	// NOTE: gateway.internal_allow_cidrs is deliberately NOT registered with
+	// viper (no SetDefault/BindEnv): AutomaticEnv would then let a set-but-
+	// empty env clobber the YAML value at the viper layer. The env override is
+	// handled entirely in Load, which treats unset/whitespace env as "keep the
+	// YAML value".
 	v.SetDefault("secret_manager.encryption_key", "")
 	v.SetDefault("demo.enabled", false)
 	v.SetDefault("demo.api_key", "")

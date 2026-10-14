@@ -46,10 +46,21 @@ gateway:
   # base_url: "https://api.your-gateway.com"  # Public URL for key delivery emails
   # internal_allow_cidrs:                       # Permit outbound provider/MCP/video
   #   - "10.0.0.0/8"                            # connections to these restricted CIDRs (on-prem
-  #   - "192.168.0.0/16"                        # self-hosted LLMs). Empty/absent = block ALL
-                                              # restricted ranges (default, most secure). Cloud
-                                              # metadata (169.254.x.x) and loopback stay blocked
-                                              # unless explicitly listed. Env: CL_GATEWAY_INTERNAL_ALLOW_CIDRS
+  #   - "192.168.0.0/16"                        # self-hosted LLMs). Only SUBNETS of the private
+                                              # supernets are allowlistable: 10.0.0.0/8,
+                                              # 172.16.0.0/12, 192.168.0.0/16, fc00::/7 — EXCEPT
+                                              # entries overlapping cloud-metadata blocks
+                                              # (AWS IPv6 IMDS fd00:ec2::/32, Alibaba
+                                              # 100.100.100.200/32), which are refused. Empty/
+                                              # absent = block ALL restricted ranges (default,
+                                              # most secure). Loopback (127.0.0.0/8, ::1),
+                                              # link-local (169.254.0.0/16, fe80::/10),
+                                              # unspecified and multicast are NEVER allowlistable
+                                              # and stay blocked for any config. Docker containers
+                                              # reach a host service via its real private address
+                                              # (e.g. 192.168.65.0/24), not loopback. Env
+                                              # (comma-separated, overrides YAML):
+                                              # CL_GATEWAY_INTERNAL_ALLOW_CIDRS
   # concurrency_limit: 2000                    # Max in-flight gateway (LLM proxy) requests.
                                               # 0/unset = built-in default (2000). Lower it for
                                               # resource-constrained or public demo deployments.
