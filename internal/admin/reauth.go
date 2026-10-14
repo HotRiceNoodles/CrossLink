@@ -29,7 +29,8 @@ import (
 //     concurrent requests cannot all slip past the 5-attempt threshold.
 //     Over-limit attempts receive the fixed ErrReauthRateLimited response.
 //  3. MULTI-INSTANCE: when Redis is configured, tokens and failure counters
-//     live in Redis with ATOMIC consume (GETDEL) and ATOMIC increment
+//     live in Redis with ATOMIC consume (Lua GET+DEL, works on Redis 5.x
+//     where GETDEL is unavailable) and ATOMIC increment
 //     (INCR+EXPIRE), shared by all replicas. Without Redis the manager
 //     falls back to node-local state and reports Mode()=="local" — the
 //     admin UI surfaces this so operators know re-auth tokens/limits are
@@ -121,20 +122,6 @@ var reauthClaimScript = redis.NewScript(`
 local v = redis.call('INCR', KEYS[1])
 if v == 1 or redis.call('TTL', KEYS[1]) == -1 then
 	redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return v
-`)
-
-// reauthGetDelScript atomically reads and deletes the token key — the exact
-// semantics of GETDEL, but via EVAL so it also works on Redis < 6.2 (GETDEL
-// landed in 6.2; Redis 5.x is still common on Windows installs, and without
-// this fallback every consume fails closed with ErrReauthUnavailable). A
-// missing key makes Lua return false, which go-redis surfaces as redis.Nil —
-// same contract as the native command.
-var reauthGetDelScript = redis.NewScript(`
-local v = redis.call('GET', KEYS[1])
-if v then
-	redis.call('DEL', KEYS[1])
 end
 return v
 `)
@@ -238,11 +225,23 @@ func (m *ReauthManager) mint(userID int64, fingerprint string) (string, error) {
 	return token, nil
 }
 
+// reauthConsumeScript atomically reads and deletes the token key (GET+DEL in
+// one script). Semantically identical to GETDEL, which it replaces because
+// GETDEL requires Redis >= 6.2 and deployments on 5.x would otherwise fail
+// closed with ErrReauthUnavailable on every sensitive write.
+var reauthConsumeScript = redis.NewScript(`
+local v = redis.call('GET', KEYS[1])
+if v then
+	redis.call('DEL', KEYS[1])
+end
+return v
+`)
+
 // Verify consumes a token: it must exist, be unexpired, belong to the SAME
 // user AND the SAME session fingerprint performing the sensitive operation.
 // Single-use — the token is removed whether the check passes or fails
-// (GETDEL in Redis mode: atomic across replicas, so concurrent consumers
-// race safely and exactly one wins).
+// (atomic script in Redis mode: atomic across replicas, so concurrent
+// consumers race safely and exactly one wins).
 func (m *ReauthManager) Verify(userID int64, fingerprint, token string) error {
 	if token == "" {
 		return ErrReauthTokenBad
@@ -262,15 +261,15 @@ func (m *ReauthManager) Verify(userID int64, fingerprint, token string) error {
 
 func (m *ReauthManager) verifyRedis(userID int64, fingerprint, token string) error {
 	ctx := context.Background()
-	// Atomic single-use consume via the GETDEL-equivalent script (see
-	// reauthGetDelScript for the < 6.2 compatibility rationale).
-	raw, err := reauthGetDelScript.Run(ctx, m.rdb, []string{reauthTokenKey(token)}).Text()
+	// Atomic single-use consume via script (GETDEL needs Redis >= 6.2).
+	v, err := reauthConsumeScript.Run(ctx, m.rdb, []string{reauthTokenKey(token)}).Result()
 	if err == redis.Nil {
 		return ErrReauthTokenBad
 	}
 	if err != nil {
 		return ErrReauthUnavailable // fail closed on Redis errors
 	}
+	raw, _ := v.(string)
 	var p reauthPayload
 	if json.Unmarshal([]byte(raw), &p) != nil || p.UserID != userID || p.Fingerprint != fingerprint {
 		return ErrReauthTokenBad // burned by the GETDEL above
