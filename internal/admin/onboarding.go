@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -86,21 +85,16 @@ func (h *OnboardingHandler) Probe(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
-	if input.BaseURL != "" && !isValidProviderURL(input.BaseURL) {
-		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
+	baseURL, urlMsg := validateOutboundURL("base_url", input.BaseURL)
+	if urlMsg != "" {
+		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
-	}
-	if input.BaseURL != "" {
-		if u, err := url.Parse(input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
-			errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
-			return
-		}
 	}
 
 	tmp := &model.Provider{
 		Name:        "__probe__",
 		AdapterType: input.AdapterType,
-		BaseURL:     input.BaseURL,
+		BaseURL:     baseURL,
 		APIKey:      input.APIKey,
 		ExtraConfig: datatypes.JSON(input.ExtraConfig),
 	}
@@ -206,15 +200,11 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 
 	// --- validate (reuse existing rules) ---
-	if input.Provider.BaseURL != "" && !isValidProviderURL(input.Provider.BaseURL) {
-		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
+	if providerBaseURL, urlMsg := validateOutboundURL("base_url", input.Provider.BaseURL); urlMsg != "" {
+		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
-	}
-	if input.Provider.BaseURL != "" {
-		if u, err := url.Parse(input.Provider.BaseURL); err == nil && isInternalHost(u.Hostname()) {
-			errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
-			return
-		}
+	} else {
+		input.Provider.BaseURL = providerBaseURL
 	}
 	for i, m := range input.Models {
 		if m.InputPrice < 0 || m.OutputPrice < 0 {

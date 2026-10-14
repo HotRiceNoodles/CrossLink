@@ -17,21 +17,22 @@ import (
 
 // AdminHandlers holds all admin handler instances.
 type AdminHandlers struct {
-	Provider    *ProviderHandler
-	Model       *ModelHandler
-	Key         *KeyHandler
-	Usage       *UsageHandler
-	System      *SystemHandler
-	Debug       *DebugHandler
-	License     *LicenseHandler
-	Preferences *PreferencesHandler
-	ErrorRule   *ErrorRuleHandler
-	Routing     *RoutingHandler
-	Onboarding  *OnboardingHandler
-	Templates   *TemplateHandler
-	Readiness   *ReadinessHandler
-	Setup       *SetupHandler
-	Perms       gin.HandlerFunc
+	Provider      *ProviderHandler
+	Model         *ModelHandler
+	Key           *KeyHandler
+	Usage         *UsageHandler
+	System        *SystemHandler
+	Debug         *DebugHandler
+	License       *LicenseHandler
+	Preferences   *PreferencesHandler
+	ErrorRule     *ErrorRuleHandler
+	Routing       *RoutingHandler
+	Onboarding    *OnboardingHandler
+	Templates     *TemplateHandler
+	Readiness     *ReadinessHandler
+	Setup         *SetupHandler
+	SsrfAllowlist *SsrfAllowlistHandler
+	Perms         gin.HandlerFunc
 }
 
 // AdminDeps groups the dependencies required to construct admin handlers.
@@ -54,12 +55,20 @@ type AdminDeps struct {
 	AuditSvc         *service.AuditService // set by commercial build; nil in Community
 	TemplateRegistry *service.TemplateRegistry
 	TemplateSync     *service.TemplateRegistrySync // nil when Redis absent
+	// SsrfAllowlist is the shared hot-reload service (B5); created by the app
+	// before handlers so the same instance performs the cold-start load.
+	SsrfAllowlist *service.SsrfAllowlistService
 }
 
 // ProvideAdminHandlers constructs all admin handlers from their dependencies.
 func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 	readiness := NewReadinessChecker(deps.DB, deps.Config)
 	readiness.SetSettingsProvider(deps.Settings)
+	// Shared re-auth manager for sensitive admin operations (B5): tokens
+	// minted on the reauth endpoint are verified on write endpoints. With
+	// Redis configured the state (tokens + rate limits) is SHARED across
+	// replicas with atomic consume; otherwise node-local (Mode()=="local").
+	adminReauth := NewReauthManager(deps.RDB)
 	h := &AdminHandlers{
 		Provider: NewProviderHandler(
 			deps.Repos.ProviderRepo,
@@ -115,10 +124,11 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.CacheSvc,
 			deps.AuditSvc,
 		),
-		Templates: NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
-		Readiness: NewReadinessHandler(readiness),
-		Setup:     NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
-		Perms:     GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
+		Templates:     NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
+		Readiness:     NewReadinessHandler(readiness),
+		Setup:         NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
+		SsrfAllowlist: NewSsrfAllowlistHandler(deps.SsrfAllowlist, adminReauth, deps.Repos.UserRepo),
+		Perms:         GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
 	}
 	// Runtime settings provider (may be nil in handler-level tests). Wired
 	// via setter to keep NewSystemHandler's signature stable for the

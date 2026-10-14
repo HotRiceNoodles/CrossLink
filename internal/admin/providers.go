@@ -85,22 +85,17 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		return
 	}
 	orgID := GetOrgID(c)
-	if input.BaseURL != "" && !isValidProviderURL(input.BaseURL) {
-		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
+	baseURL, urlMsg := validateOutboundURL("base_url", input.BaseURL)
+	if urlMsg != "" {
+		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
-	}
-	if input.BaseURL != "" {
-		if u, err := url.Parse(input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
-			errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
-			return
-		}
 	}
 
 	p := &model.Provider{
 		Name:        input.Name,
 		DisplayName: input.DisplayName,
 		AdapterType: input.AdapterType,
-		BaseURL:     input.BaseURL,
+		BaseURL:     baseURL,
 		APIKey:      input.APIKey,
 		ExtraConfig: datatypes.JSON(input.ExtraConfig),
 		Status:      1,
@@ -169,16 +164,15 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	}
 	if input.BaseURL != nil {
 		if *input.BaseURL != "" {
-			if !isValidProviderURL(*input.BaseURL) {
-				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must start with http:// or https://")
+			trimmed, urlMsg := validateOutboundURL("base_url", *input.BaseURL)
+			if urlMsg != "" {
+				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 				return
 			}
-			if u, err := url.Parse(*input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
-				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, "base_url must not point to an internal address")
-				return
-			}
+			p.BaseURL = trimmed
+		} else {
+			p.BaseURL = *input.BaseURL
 		}
-		p.BaseURL = *input.BaseURL
 	}
 	if input.APIKey != nil && *input.APIKey != "" {
 		p.APIKey = *input.APIKey

@@ -45,6 +45,16 @@ const (
 	ErrIncorrectOldPassword   = "incorrect_old_password"
 	ErrPasswordTooShort       = "password_too_short"
 
+	// SSRF allowlist (B5)
+	ErrSsrfAllowlistInvalid = "ssrf_allowlist_invalid"
+
+	// Sensitive-operation re-authentication (B5)
+	ErrReauthInvalidCode       = "reauth_invalid"
+	ErrReauthRateLimitedCode   = "reauth_rate_limited"
+	ErrReauthUnavailableCode   = "reauth_unavailable"
+	ErrReauthRedisRequiredCode = "reauth_redis_required"
+	ErrReauthTokenCode         = "reauth_required"
+
 	// Providers
 	ErrProviderURLInvalid = "provider_url_invalid"
 	ErrProviderHasModels  = "provider_has_models"

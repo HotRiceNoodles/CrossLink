@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -97,14 +96,12 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 			return
 		}
 		if key == settings.KeyGatewayBaseURL {
-			if !isValidProviderURL(value) {
-				errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, "gateway_base_url must start with http:// or https://")
+			gatewayURL, urlMsg := validateOutboundURL("gateway_base_url", value)
+			if urlMsg != "" {
+				errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, urlMsg)
 				return
 			}
-			if u, err := url.Parse(value); err == nil && isInternalHost(u.Hostname()) {
-				errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, "gateway_base_url must not point to an internal address")
-				return
-			}
+			value = gatewayURL
 		}
 		// Sensitive values are encrypted at rest when a key is active.
 		if def.Sensitive {

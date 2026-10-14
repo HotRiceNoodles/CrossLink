@@ -49,16 +49,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		slog.Warn("gateway.auth_key is set — this static key bypasses all per-key limits and cannot be expired/disabled; use only as a root credential and rotate via config restart if compromised")
 	}
 
-	// Configure the SSRF internal allowlist for outbound provider/MCP/video
-	// connections. Empty = strict (block all restricted ranges). On invalid CIDRs
-	// we keep the strict default and log loudly rather than fail to boot.
-	if len(cfg.Gateway.InternalAllowCIDRs) > 0 {
-		if err := guardrail.SetInternalAllowlist(cfg.Gateway.InternalAllowCIDRs); err != nil {
-			slog.Error("invalid gateway.internal_allow_cidrs; SSRF allowlist stays strict", "error", err)
-		} else {
-			slog.Info("SSRF internal allowlist active", "cidrs", cfg.Gateway.InternalAllowCIDRs)
-		}
-	}
+	// SSRF internal allowlist (B5: hot-reloadable via the admin page).
+	// Effective policy precedence: page/DB override > env
+	// CL_GATEWAY_INTERNAL_ALLOW_CIDRS > YAML gateway.internal_allow_cidrs >
+	// strict default. Cold start is fail-closed: a DB read failure or an
+	// invalid stored row publishes the STRICT policy (never the possibly
+	// wider env/YAML value) and the fault is surfaced via the status API.
+	// The service is created before anything dials so no outbound request
+	// can race the initial publish; the refresh/broadcast loop starts once
+	// the app context exists (see below).
+	ssrfAllowlistSvc := service.NewSsrfAllowlistService(db, rdb, cfg.Gateway.InternalAllowCIDRs, cfg.Gateway.InternalAllowCIDRsFromEnv)
+	ssrfAllowlistSvc.LoadColdStart(context.Background())
 
 	// Crypto provider (standard or GM mode)
 	cryptoProvider, err := crypto.NewProvider(cfg.Crypto.Mode)
@@ -212,6 +213,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Background refresh: keep the runtime settings snapshot in sync across
 	// instances (admin writes hot-apply locally via RefreshNow).
 	go settingsProvider.RunRefreshLoop(appCtx, 30*time.Second)
+	// SSRF allowlist (B5): bounded-TTL pull plus Redis invalidation broadcast
+	// keeps every instance's policy converging after a page change.
+	go ssrfAllowlistSvc.Start(appCtx)
 	// Background refresh: keep the error-classification rule table hot-reloaded
 	go infra.Classifier.RunRefreshLoop(appCtx)
 
@@ -362,6 +366,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		AuditSvc:         ext.Deps.AuditSvc,
 		TemplateRegistry: templateRegistry,
 		TemplateSync:     templateSync,
+		SsrfAllowlist:    ssrfAllowlistSvc,
 	})
 
 	// Wire registry sync: notify other instances on provider mutations,
@@ -539,6 +544,15 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Pro-only /system/settings aggregate).
 		adminGroup.GET("/system/config", middleware.RequireAction(permCache, "system:view"), handlers.System.GetConfig)
 		adminGroup.PUT("/system/config", middleware.RequireAction(permCache, "system:update"), handlers.System.UpdateConfig)
+		// SSRF internal allowlist (B5): hot-reload without restart. Writes are
+		// platform-admin only (RequireAction + handler-side IsAdmin); reads
+		// follow the same system:view gate as the rest of system config.
+		adminGroup.GET("/system/ssrf-allowlist", middleware.RequireAction(permCache, "system:view"), handlers.SsrfAllowlist.Get)
+		adminGroup.PUT("/system/ssrf-allowlist", middleware.RequireAction(permCache, "system:update"), handlers.SsrfAllowlist.Put)
+		adminGroup.DELETE("/system/ssrf-allowlist", middleware.RequireAction(permCache, "system:update"), handlers.SsrfAllowlist.Delete)
+		// Sensitive-op re-authentication (password → short-lived single-use
+		// token, user-bound, rate-limited; consumed by PUT/DELETE above).
+		adminGroup.POST("/system/ssrf-allowlist/reauth", middleware.RequireAction(permCache, "system:update"), handlers.SsrfAllowlist.Reauth)
 		// First-run setup wizard persistence (system_settings KV rows).
 		adminGroup.POST("/system/setup/apply", middleware.RequireAction(permCache, "system:update"), handlers.Setup.Apply)
 		adminGroup.POST("/system/setup/skip", middleware.RequireAction(permCache, "system:update"), handlers.Setup.Skip)

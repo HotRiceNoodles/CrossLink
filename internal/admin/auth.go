@@ -111,6 +111,25 @@ type Claims struct {
 }
 
 func GenerateToken(user *model.User, roleName string, teamID int64, orgID int64, orgRole string, cfg config.AdminConfig, cp crypto.CryptoProvider) (string, error) {
+	// SessionID (jti): fresh 256-bit random PER LOGIN. Without it two
+	// logins in the same second mint byte-identical JWTs (same claims, same
+	// iat, same signature), which collapses "session" identity for anything
+	// bound to the token — notably the B5 sensitive-op re-authentication,
+	// which binds its tokens to the issuing session via this ID.
+	sid := make([]byte, 32)
+	if _, err := rand.Read(sid); err != nil {
+		return "", fmt.Errorf("generate session id: %w", err)
+	}
+	return generateTokenWithSessionID(user, roleName, teamID, orgID, orgRole, hex.EncodeToString(sid), cfg, cp)
+}
+
+// generateTokenWithSessionID signs a token carrying an EXPLICIT session
+// identity. The auto-refresh path reuses the CURRENT login's jti so a
+// session keeps one stable identity across refreshes — only a NEW login
+// mints a new jti. Without this, a re-auth token issued just before a
+// refresh would die when the browser adopts the refreshed cookie (new jti)
+// and the next sensitive write fails binding.
+func generateTokenWithSessionID(user *model.User, roleName string, teamID int64, orgID int64, orgRole string, sessionID string, cfg config.AdminConfig, cp crypto.CryptoProvider) (string, error) {
 	expiry := time.Duration(cfg.TokenExpiry) * time.Hour
 	claims := Claims{
 		UserID:   user.ID,
@@ -121,6 +140,7 @@ func GenerateToken(user *model.User, roleName string, teamID int64, orgID int64,
 		OrgID:    orgID,
 		OrgRole:  orgRole,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        sessionID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "crosslink",
@@ -212,6 +232,20 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		}
 
 		c.Set("user_id", claims.UserID)
+		c.Set("session_id", claims.ID) // jti: per-login session identity (B5 re-auth binding)
+		// Session fingerprint for sensitive-op re-auth (B5): derived from the
+		// credential THIS middleware actually verified (tokenStr — cookie
+		// first, else the Authorization bearer), NEVER from an unverified
+		// header. Cookie-only logins with legacy tokens (no jti) otherwise
+		// all hash the same empty Authorization string and could share
+		// re-auth tokens; and a valid cookie plus an arbitrary Authorization
+		// header must not shift the identity to that header's value.
+		if claims.ID != "" {
+			c.Set("session_fingerprint", "jti:"+claims.ID)
+		} else {
+			sum := sha256.Sum256([]byte(tokenStr))
+			c.Set("session_fingerprint", "cred:"+hex.EncodeToString(sum[:]))
+		}
 		c.Set("username", claims.Username)
 		c.Set("role_id", roleID)
 		c.Set("role_name", roleName)
@@ -241,10 +275,23 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 			return
 		}
 
-		// Auto-refresh token if expiring within 5 minutes
+		// Auto-refresh token if expiring within 5 minutes. The refreshed
+		// token KEEPS the current login's jti: the session identity is
+		// stable across refreshes (only a new login mints a new one), so
+		// re-auth tokens issued before the refresh stay consumable after
+		// the browser adopts the refreshed cookie. Legacy tokens (no jti)
+		// are UPGRADED with a fresh jti at refresh — their credential
+		// rotates anyway, and from then on they enjoy the stable identity.
 		if claims.ExpiresAt != nil && time.Until(claims.ExpiresAt.Time) < 5*time.Minute {
 			u := &model.User{ID: claims.UserID, Username: claims.Username, RoleID: roleID}
-			if newToken, err := GenerateToken(u, roleName, teamID, orgID, orgRole, cfg, cp); err == nil {
+			var newToken string
+			var err error
+			if claims.ID == "" {
+				newToken, err = GenerateToken(u, roleName, teamID, orgID, orgRole, cfg, cp)
+			} else {
+				newToken, err = generateTokenWithSessionID(u, roleName, teamID, orgID, orgRole, claims.ID, cfg, cp)
+			}
+			if err == nil {
 				c.Header("X-Token-Refresh", newToken)
 				c.SetCookie("admin_token", newToken, cfg.TokenExpiry*3600, "/", "", true, true)
 			}

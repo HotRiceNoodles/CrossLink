@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/crosslink/internal/config"
@@ -65,15 +64,11 @@ func (h *SetupHandler) Apply(c *gin.Context) {
 			return
 		}
 	}
-	if input.BaseURL != "" {
-		if !isValidProviderURL(input.BaseURL) {
-			errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, "base_url must start with http:// or https://")
-			return
-		}
-		if u, err := url.Parse(input.BaseURL); err == nil && isInternalHost(u.Hostname()) {
-			errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, "base_url must not point to an internal address")
-			return
-		}
+	if baseURL, urlMsg := validateOutboundURL("base_url", input.BaseURL); urlMsg != "" {
+		errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, urlMsg)
+		return
+	} else {
+		input.BaseURL = baseURL
 	}
 
 	// Server-side key generation (never trust a client-supplied key). Refused
