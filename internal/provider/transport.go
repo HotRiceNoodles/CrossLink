@@ -32,6 +32,54 @@ const (
 // are excluded from production binaries, so this is never disabled in deployment.
 var outboundSSRFGuard = true
 
+// outboundTransports tracks every SSRF-guarded outbound *http.Transport so a
+// policy swap can drop the idle connections the previous, wider allowlist
+// admitted (revocation must not be bypassed by connection-pool reuse). Each
+// new transport registers itself; the single guardrail observer closes all
+// idle pooled connections after every ApplyInternalAllowlist. Busy
+// connections are never touched — in-flight requests run to completion by
+// design. Note: none of these transports negotiates HTTP/2 — the stream
+// transport pins http/1.1 via NextProtos, and the default transport uses a
+// custom TLS dialer without ForceAttemptHTTP2, which disables Go's
+// automatic h2 upgrade — so there is no multiplexing path that could carry
+// NEW requests over a connection dialed under an old policy; if h2 is ever
+// enabled here, revocation semantics must be re-evaluated.
+var (
+	outboundTransportsMu sync.Mutex
+	outboundTransports   []*http.Transport
+	outboundObserverOnce sync.Once
+)
+
+func registerOutboundTransport(t *http.Transport) {
+	outboundObserverOnce.Do(func() {
+		guardrail.OnInternalAllowlistApply(func() {
+			outboundTransportsMu.Lock()
+			ts := make([]*http.Transport, len(outboundTransports))
+			copy(ts, outboundTransports)
+			outboundTransportsMu.Unlock()
+			for _, tr := range ts {
+				tr.CloseIdleConnections()
+			}
+		})
+	})
+	outboundTransportsMu.Lock()
+	outboundTransports = append(outboundTransports, t)
+	outboundTransportsMu.Unlock()
+}
+
+// CloseIdleOutboundConnections closes all idle pooled outbound connections.
+// Exposed for tests and operational tooling; the allowlist publish path
+// invokes it automatically via the guardrail observer.
+func CloseIdleOutboundConnections() {
+	outboundTransportsMu.Lock()
+	ts := make([]*http.Transport, len(outboundTransports))
+	copy(ts, outboundTransports)
+	outboundTransportsMu.Unlock()
+	for _, tr := range ts {
+		tr.CloseIdleConnections()
+	}
+}
+
 func newStreamTransport() *http.Transport {
 	t := &http.Transport{
 		MaxConnsPerHost:       defaultMaxConnsPerHost,
@@ -49,6 +97,7 @@ func newStreamTransport() *http.Transport {
 			return dialer.DialContext(ctx, network, addr)
 		}
 	}
+	registerOutboundTransport(t)
 	return t
 }
 
@@ -63,6 +112,7 @@ func newDefaultTransport() *http.Transport {
 		t.DialContext = guardrail.NewSSRFSafeDialer(defaultSSRFDialTimeout)
 		t.DialTLSContext = guardrail.NewSSRFSafeTLSDialer(defaultSSRFDialTimeout, nil)
 	}
+	registerOutboundTransport(t)
 	return t
 }
 

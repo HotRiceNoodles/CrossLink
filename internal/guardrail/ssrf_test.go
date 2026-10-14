@@ -99,26 +99,18 @@ func TestInternalAllowlist(t *testing.T) {
 	}
 }
 
-// TestSSRFSafeDialer_AllowlistPasses confirms an allowlisted internal address
-// clears the SSRF check. Use a local ephemeral listener instead of assuming
-// an arbitrary private network address has no listener.
-func TestSSRFSafeDialer_AllowlistPasses(t *testing.T) {
-	if err := SetInternalAllowlist([]string{"127.0.0.0/8"}); err != nil {
-		t.Fatalf("SetInternalAllowlist: %v", err)
-	}
+// TestSSRFSafeDialer_LoopbackNotAllowlistable pins the red line: loopback is
+// NOT allowlistable — configuring it must be rejected outright. (The positive
+// allowlist dial path — a real connection to an allowlisted private address —
+// is covered by TestSSRFDialer_RealPrivateAddress_AllowlistEndToEnd.)
+func TestSSRFSafeDialer_LoopbackNotAllowlistable(t *testing.T) {
 	t.Cleanup(func() { _ = SetInternalAllowlist(nil) })
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	if err := SetInternalAllowlist([]string{"127.0.0.0/8"}); err == nil {
+		t.Fatal("SetInternalAllowlist(127.0.0.0/8) accepted; loopback must never be allowlistable")
 	}
-	defer listener.Close()
-
-	dial := NewSSRFSafeDialer(500 * time.Millisecond)
-	conn, err := dial(context.Background(), "tcp", listener.Addr().String())
-	if err != nil {
-		t.Fatalf("allowlisted loopback should connect: %v", err)
+	if err := SetInternalAllowlist([]string{"::1/128"}); err == nil {
+		t.Fatal("SetInternalAllowlist(::1/128) accepted; loopback v6 must never be allowlistable")
 	}
-	defer conn.Close()
 }
 
 // TestSSRFSafeTLSDialer_BlocksInternal is the TLS counterpart.
