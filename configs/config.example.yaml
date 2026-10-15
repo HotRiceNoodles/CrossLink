@@ -65,6 +65,15 @@ gateway:
                                               # 0/unset = built-in default (2000). Lower it for
                                               # resource-constrained or public demo deployments.
                                               # Env: CL_GATEWAY_CONCURRENCY_LIMIT
+  # provider_timeout: 180s                     # Per-attempt cap for NON-streaming upstream calls
+                                              # (0 = built-in default 180s). Long reasoning-model
+                                              # generations exceed 30s; streaming is NOT affected.
+                                              # Env: CL_GATEWAY_PROVIDER_TIMEOUT
+  # upstream_max_conns_per_host: 200           # Concurrent upstream connections per host per
+                                              # provider (0 = default 200). Streams beyond the cap
+                                              # queue and inflate first-token latency; raise for
+                                              # high-concurrency deployments, or add provider rows
+                                              # for the same upstream (pools are per instance).
 
 # Zero-cost demo mode. When enabled, the gateway idempotently seeds a mock
 # provider (mock-sonnet, mock-gpt4) + a PUBLIC mock-only API key, and serves the
@@ -99,6 +108,12 @@ logging:
 #   default_ttl: 5m            # TTL for chat/messages responses
 #   embeddings_ttl: 60m        # TTL for embeddings responses
 #   max_body_size: 10485760    # skip caching bodies larger than this (bytes)
+#   redis:                     # OPTIONAL dedicated cache instance. Cache keys
+#     host: cache-redis        # tolerate eviction (allkeys-lru) while quota/
+#     port: 6379               # budget/idempotency keys on the main redis must
+#     db: 0                    # NOT be evicted (noeviction). DB numbers on one
+#     pool_size: 200           # instance share maxmemory - isolation needs a
+#                              # separate instance. Absent = share main redis.
 
 admin:
   username: admin

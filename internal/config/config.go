@@ -38,12 +38,18 @@ type Config struct {
 }
 
 // UsageConfig sizes the async usage-logging worker pool. Tasks carry billing
-// data: when both the queue and the overflow allowance are exhausted, tasks
-// are dropped (counted by cl_worker_tasks_dropped_total).
+// data: when the queue, the overflow allowance AND the disk spill are all
+// exhausted, tasks are dropped (counted by cl_worker_tasks_dropped_total).
 type UsageConfig struct {
 	Workers     int `mapstructure:"workers"`      // concurrent DB writers
 	QueueSize   int `mapstructure:"queue_size"`   // buffered queue depth
 	OverflowCap int `mapstructure:"overflow_cap"` // extra detached tasks allowed when the queue is full
+	// SpoolDir arms the disk spill fallback for billing rows the pool cannot
+	// accept (outage/degradation): rows persist as JSONL and a replay loop
+	// feeds them back once the pool recovers. Empty disables spooling.
+	SpoolDir string `mapstructure:"spool_dir"`
+	// SpoolMaxBytes caps the spill file; beyond it rows drop (counted).
+	SpoolMaxBytes int64 `mapstructure:"spool_max_bytes"`
 }
 
 type ServerConfig struct {
@@ -56,6 +62,30 @@ type ServerConfig struct {
 	// regardless of this value; the cap only bounds runaway streams whose
 	// client stays connected.
 	StreamMaxDuration time.Duration `mapstructure:"stream_max_duration"`
+	// StreamIdleTimeout closes an established SSE stream when the upstream
+	// sends no bytes for this long (0 = disabled). A connected-but-silent
+	// upstream otherwise pins one goroutine + one upstream connection per
+	// request indefinitely. Mid-stream heartbeats (e.g. `: ping`) reset it.
+	StreamIdleTimeout time.Duration `mapstructure:"stream_idle_timeout"`
+	// StreamWriteTimeout arms a deadline before EVERY response Write/Flush on
+	// the real connection (0 = disabled). http.Server.WriteTimeout is
+	// intentionally 0 (it would kill healthy long SSE streams at a fixed
+	// total age); instead each individual write must complete within this
+	// budget. A consumer that keeps the connection open but never reads
+	// therefore surfaces as a write timeout and unwinds the handler,
+	// admission slot, upstream stream and billing resources — a
+	// request-context deadline cannot unblock a parked TCP write. Slow but
+	// live readers are unaffected (each write completes as the socket
+	// drains).
+	StreamWriteTimeout time.Duration `mapstructure:"stream_write_timeout"`
+	// Shutdown phase budgets. Defaults preserve the historical behavior
+	// (60s stream drain + 10s http.Server shutdown + 10s usage flush). Their
+	// SUM plus DB/Redis teardown bounds the container stop grace period — a
+	// grace shorter than drain+shutdown+flush truncates in-flight streams and
+	// loses buffered usage rows.
+	DrainTimeout       time.Duration `mapstructure:"drain_timeout"`
+	ShutdownTimeout    time.Duration `mapstructure:"shutdown_timeout"`
+	WorkerFlushTimeout time.Duration `mapstructure:"worker_flush_timeout"`
 }
 
 type DatabaseConfig struct {
@@ -71,6 +101,16 @@ type DatabaseConfig struct {
 	// (DATE(created_at)) and the day boundaries of usage statistics. Empty =
 	// server process local time. IANA name, e.g. "Asia/Shanghai".
 	Timezone string `mapstructure:"timezone"`
+	// Pool overrides. Zero = dialect built-in defaults (PG/MySQL: 100 open /
+	// 50 idle / 5m lifetime / 1m idle-time; SQLite is single-connection by
+	// design). Set these when running multiple replicas against a shared
+	// postgres: total steady connections = replicas x MaxOpenConns, which
+	// must fit the server's max_connections with headroom for admin tooling,
+	// migrations and surge capacity during rolling updates.
+	MaxOpenConns    int           `mapstructure:"max_open_conns"`
+	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"`
 }
 
 func (d DatabaseConfig) DSN() string {
@@ -139,6 +179,33 @@ type GatewayConfig struct {
 	// resource-constrained or public demo deployments. Env override:
 	// CL_GATEWAY_CONCURRENCY_LIMIT.
 	ConcurrencyLimit int `mapstructure:"concurrency_limit"`
+	// ProviderTimeout bounds ONE non-streaming upstream attempt (per provider,
+	// before fallback moves on). Long reasoning-model generations exceed the
+	// old hardcoded 30s and failed as 502s; 0 means the built-in default.
+	// Streaming is NOT affected (its caps are stream_max_duration /
+	// stream_idle_timeout). Env override: CL_GATEWAY_PROVIDER_TIMEOUT.
+	ProviderTimeout time.Duration `mapstructure:"provider_timeout"`
+	// UpstreamMaxConnsPerHost caps concurrent upstream connections per host
+	// per provider instance (0 = default 200). Concurrent streams beyond the
+	// cap queue on the pool and inflate first-token latency; raise for
+	// high-concurrency deployments or add more provider rows for the same
+	// upstream (pools are per provider instance).
+	UpstreamMaxConnsPerHost int `mapstructure:"upstream_max_conns_per_host"`
+	// InflightBodyBudgetBytes caps the TOTAL bytes of buffered request bodies
+	// across all in-flight gateway requests (0 = disabled). The concurrency
+	// limit alone bounds request COUNT, not memory: 2000 slots x the 10MiB
+	// body ceiling is ~19.5GiB of BodyKey buffers alone. Requests are
+	// rejected (503, before buffering — known length via pre-check, unknown
+	// length via per-block reservation before each allocation) once the
+	// budget is exhausted.
+	InflightBodyBudgetBytes int64 `mapstructure:"inflight_body_budget_bytes"`
+	// InflightMultipartReserveBytes is the conservative budget reservation
+	// for a multipart upload with unknown Content-Length: its handler buffers
+	// the form in-process (FormFile → ParseMultipartForm, ~32MB in memory
+	// plus file-part copies), so uploads participate in the body budget
+	// rather than bypassing it. A known Content-Length below this cap
+	// reserves the actual smaller value.
+	InflightMultipartReserveBytes int64 `mapstructure:"inflight_multipart_reserve_bytes"`
 }
 
 // DemoConfig controls the optional zero-cost demo mode (public /demo try page
@@ -193,6 +260,15 @@ type CacheConfig struct {
 	DefaultTTL    time.Duration `mapstructure:"default_ttl"`
 	EmbeddingsTTL time.Duration `mapstructure:"embeddings_ttl"`
 	MaxBodySize   int           `mapstructure:"max_body_size"`
+	// Redis optionally points the response cache at a SEPARATE Redis instance
+	// from the quota/budget/idempotency one. Deployments should isolate them:
+	// the cache tolerates eviction (allkeys-lru, cheap RAM), while
+	// quota/budget/idempotency keys must NOT be evicted (noeviction). Sharing
+	// one instance forces one eviction policy over both — either the cache
+	// never evicts (RAM blowup) or limits fail open. A different DB number on
+	// the same instance does NOT isolate maxmemory/eviction. nil/absent =
+	// share the main redis (current behavior).
+	Redis *RedisConfig `mapstructure:"redis"`
 }
 
 type SecretManagerConfig struct {
@@ -482,11 +558,26 @@ func Load(configPath string) (*Config, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.read_timeout", "30s")
-	v.SetDefault("server.write_timeout", "120s")
+	// write_timeout is intentionally NOT applied to the http.Server: a global
+	// WriteTimeout kills long SSE streams mid-flight. Kept only so existing
+	// YAML keeps parsing; a startup warning flags it if set.
+	v.SetDefault("server.write_timeout", "0s")
+	// Whole-stream and idle caps for SSE (0 = uncapped / disabled). Defaults
+	// chosen defensively for production: generous enough for long reasoning
+	// streams, finite enough that stalled/abandoned streams cannot pin
+	// goroutines and upstream connections forever.
+	v.SetDefault("server.stream_max_duration", "30m")
+	v.SetDefault("server.stream_idle_timeout", "180s")
+	v.SetDefault("server.stream_write_timeout", "180s")
+	v.SetDefault("server.drain_timeout", "60s")
+	v.SetDefault("server.shutdown_timeout", "10s")
+	v.SetDefault("server.worker_flush_timeout", "10s")
 
 	v.SetDefault("usage.workers", 15)
 	v.SetDefault("usage.queue_size", 1000)
 	v.SetDefault("usage.overflow_cap", 200)
+	v.SetDefault("usage.spool_dir", "data/usage-spool")
+	v.SetDefault("usage.spool_max_bytes", 100<<20)
 
 	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.host", "localhost")
@@ -520,6 +611,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("captcha.slider.bg_height", 150)
 
 	v.SetDefault("gateway.concurrency_limit", 2000)
+	v.SetDefault("gateway.provider_timeout", "180s")
+	v.SetDefault("gateway.upstream_max_conns_per_host", 200)
+	// Registered (0 = disabled) so CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES /
+	// CL_GATEWAY_INFLIGHT_MULTIPART_RESERVE_BYTES env overrides are honored
+	// env-only — viper's AutomaticEnv only resolves keys it already knows.
+	v.SetDefault("gateway.inflight_body_budget_bytes", 0)
+	v.SetDefault("gateway.inflight_multipart_reserve_bytes", 32<<20)
 	// Empty defaults so CL_GATEWAY_AUTH_KEY / CL_ENCRYPTION_KEY env overrides
 	// are honored in docker (where no config.yaml is present, AutomaticEnv only
 	// resolves env for keys Viper already knows).
@@ -546,6 +644,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.default_ttl", "5m")
 	v.SetDefault("cache.embeddings_ttl", "60m")
 	v.SetDefault("cache.max_body_size", 10485760)
+	// Register the optional cache.redis block so CL_CACHE_REDIS_* env vars are
+	// honored in env-only deployments (AutomaticEnv only resolves known keys).
+	// Empty host (the default) means "share the main redis" — InitCacheRedis
+	// treats a nil block or an empty host identically.
+	v.SetDefault("cache.redis.host", "")
+	v.SetDefault("cache.redis.port", 6379)
+	v.SetDefault("cache.redis.password", "")
+	v.SetDefault("cache.redis.db", 0)
+	v.SetDefault("cache.redis.pool_size", 200)
+	v.SetDefault("cache.redis.min_idle_conns", 20)
 
 	v.SetDefault("secret_manager.cache_ttl", "5m")
 

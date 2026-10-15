@@ -94,31 +94,29 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	det := errorInfo(result.FinalError)
 	attempts := attemptsJSON(result.Attempts)
 	c.Set("usage_logged", true)
-	submitUsage(func() {
-		h.usageSvc.Log(context.Background(), &service.UsageEntry{
-			RouteType:          "openai",
-			ModelRequested:     reqModel,
-			ProviderID:         providerID,
-			APIKeyID:           keyID,
-			TeamID:             teamID,
-			OrgID:              orgID,
-			Currency:           currency,
-			StatusCode:         statusCode,
-			ErrorType:          "provider_error",
-			ErrorMessage:       det.Message,
-			UpstreamStatus:     det.UpstreamStatus,
-			UpstreamErrorCode:  det.Code,
-			UpstreamErrorType:  det.Type,
-			UpstreamErrorParam: det.Param,
-			ErrorStage:         det.Stage,
-			Attempts:           attempts,
-			LatencyMs:          time.Since(start).Milliseconds(),
-			FallbackCount:      result.FallbackCount,
-			RetryCount:         retryCount,
-			SessionID:          sessionID,
-			TemplateID:         templateID,
-			PriceMultiplier:    priceMult,
-		})
+	submitUsageEntry(h.usageSvc, &service.UsageEntry{
+		RouteType:          "openai",
+		ModelRequested:     reqModel,
+		ProviderID:         providerID,
+		APIKeyID:           keyID,
+		TeamID:             teamID,
+		OrgID:              orgID,
+		Currency:           currency,
+		StatusCode:         statusCode,
+		ErrorType:          "provider_error",
+		ErrorMessage:       det.Message,
+		UpstreamStatus:     det.UpstreamStatus,
+		UpstreamErrorCode:  det.Code,
+		UpstreamErrorType:  det.Type,
+		UpstreamErrorParam: det.Param,
+		ErrorStage:         det.Stage,
+		Attempts:           attempts,
+		LatencyMs:          time.Since(start).Milliseconds(),
+		FallbackCount:      result.FallbackCount,
+		RetryCount:         retryCount,
+		SessionID:          sessionID,
+		TemplateID:         templateID,
+		PriceMultiplier:    priceMult,
 	})
 }
 
@@ -191,7 +189,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
 		logRequestStageError(h.usageSvc, c, "openai", req.Model, resolveErrorStatus(err), "resolve_error", "resolve", err.Error())
-		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": safeProviderError(err)}})
+		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": resolveErrorMessage(err)}})
 		return
 	}
 
@@ -535,32 +533,32 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	pn := route.Provider.Name()
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
-	submitUsage(func() {
+	entry := &service.UsageEntry{
+		RouteType:       "openai",
+		ModelRequested:  req.Model,
+		ModelUsed:       route.ProviderModel,
+		ProviderID:      route.ProviderRow.ID,
+		APIKeyID:        apiKeyID,
+		TeamID:          teamID,
+		OrgID:           orgID,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		InputPrice:      route.InputPrice,
+		Currency:        route.Currency,
+		OutputPrice:     route.OutputPrice,
+		StatusCode:      http.StatusOK,
+		LatencyMs:       latency,
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      totalRetries,
+		ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
+		CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
+		SessionID:       sessionID,
+		TemplateID:      templateID,
+		PriceMultiplier: priceMult,
+	}
+	submitUsageEntryFunc(h.usageSvc, entry, func() {
 		if h.latencySvc != nil {
 			h.latencySvc.RecordLatency(context.Background(), pn, latency)
-		}
-		entry := &service.UsageEntry{
-			RouteType:       "openai",
-			ModelRequested:  req.Model,
-			ModelUsed:       route.ProviderModel,
-			ProviderID:      route.ProviderRow.ID,
-			APIKeyID:        apiKeyID,
-			TeamID:          teamID,
-			OrgID:           orgID,
-			InputTokens:     inputTokens,
-			OutputTokens:    outputTokens,
-			InputPrice:      route.InputPrice,
-			Currency:        route.Currency,
-			OutputPrice:     route.OutputPrice,
-			StatusCode:      http.StatusOK,
-			LatencyMs:       latency,
-			FallbackCount:   result.FallbackCount,
-			RetryCount:      totalRetries,
-			ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
-			CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
-			SessionID:       sessionID,
-			TemplateID:      templateID,
-			PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -611,7 +609,6 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			inputFromUpstr: inputTokens > 0,
 			inputTokens:    inputTokens,
 		}).apply(entry)
-		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 
@@ -957,33 +954,33 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	pn := route.Provider.Name()
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
-	submitUsage(func() {
+	entry := &service.UsageEntry{
+		RouteType:       "openai",
+		ModelRequested:  req.Model,
+		ModelUsed:       route.ProviderModel,
+		ProviderID:      route.ProviderRow.ID,
+		APIKeyID:        apiKeyID,
+		TeamID:          teamID,
+		OrgID:           orgID,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		InputPrice:      route.InputPrice,
+		Currency:        route.Currency,
+		OutputPrice:     route.OutputPrice,
+		StatusCode:      http.StatusOK,
+		LatencyMs:       latency,
+		FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      totalRetries,
+		ReasoningTokens: reasoningTokens,
+		CacheReadTokens: cacheReadTokens,
+		SessionID:       sessionID,
+		TemplateID:      templateID,
+		PriceMultiplier: priceMult,
+	}
+	submitUsageEntryFunc(h.usageSvc, entry, func() {
 		if h.latencySvc != nil {
 			h.latencySvc.RecordLatency(context.Background(), pn, latency)
-		}
-		entry := &service.UsageEntry{
-			RouteType:       "openai",
-			ModelRequested:  req.Model,
-			ModelUsed:       route.ProviderModel,
-			ProviderID:      route.ProviderRow.ID,
-			APIKeyID:        apiKeyID,
-			TeamID:          teamID,
-			OrgID:           orgID,
-			InputTokens:     inputTokens,
-			OutputTokens:    outputTokens,
-			InputPrice:      route.InputPrice,
-			Currency:        route.Currency,
-			OutputPrice:     route.OutputPrice,
-			StatusCode:      http.StatusOK,
-			LatencyMs:       latency,
-			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
-			FallbackCount:   result.FallbackCount,
-			RetryCount:      totalRetries,
-			ReasoningTokens: reasoningTokens,
-			CacheReadTokens: cacheReadTokens,
-			SessionID:       sessionID,
-			TemplateID:      templateID,
-			PriceMultiplier: priceMult,
 		}
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
@@ -1033,7 +1030,6 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			inputFromUpstr: inputTokens > 0 && !inputFromEstimate,
 			inputTokens:    inputTokens,
 		}).apply(entry)
-		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 func extractReasoningTokens(d *domain.CompletionTokensDetails) int {

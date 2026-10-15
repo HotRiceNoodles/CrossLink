@@ -27,11 +27,20 @@ var tasksOverflowTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Tasks run via the overflow allowance because the worker pool queue was full, by pool. These are NOT dropped.",
 }, []string{"pool"})
 
+// tasksSpilledTotal counts tasks routed to the pool's spill fallback (the
+// queue AND the overflow allowance were both full, but the caller persisted
+// or otherwise handled the task instead of losing it).
+var tasksSpilledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "cl_worker_tasks_spilled_total",
+	Help: "Tasks the pool could not enqueue and handed to the caller's spill fallback (NOT dropped), by pool.",
+}, []string{"pool"})
+
 type Pool struct {
 	kind    string
 	ch      chan func()
 	wg      sync.WaitGroup
 	dropped atomic.Int64
+	spilled atomic.Int64
 	closed  atomic.Bool
 	// overflow bounds detached execution when the queue is full, so a
 	// sustained overload degrades into bounded extra concurrency instead of
@@ -69,31 +78,51 @@ func NewPool(kind string, workerCount int, bufferSize int, overflowCap int) *Poo
 // Dropped reports how many tasks this pool has dropped since startup.
 func (p *Pool) Dropped() int64 { return p.dropped.Load() }
 
+// Spilled reports how many tasks were handed to the caller's spill fallback.
+func (p *Pool) Spilled() int64 { return p.spilled.Load() }
+
+// Submit enqueues fn, degrading through the bounded overflow allowance. A
+// task is only dropped (and counted) when both queue and overflow are full
+// and no caller fallback exists.
 func (p *Pool) Submit(fn func()) {
+	if p.TrySubmit(fn) {
+		return
+	}
+	p.dropped.Add(1)
+	tasksDroppedTotal.WithLabelValues(p.kind).Inc()
+	slog.Warn("worker pool full, dropping task", "pool", p.kind, "dropped_total", p.dropped.Load())
+}
+
+// TrySubmit enqueues fn and reports whether it was accepted (queue or
+// overflow). When it returns false the task has NOT been executed and NOT
+// been counted as dropped — the caller owns it and must spill, persist or run
+// it itself. This is the integration point for durable-fallback paths (e.g.
+// usage rows persisted to a disk spool instead of being lost).
+func (p *Pool) TrySubmit(fn func()) bool {
 	if p.closed.Load() {
 		// Shutdown already ran; sending would panic on the closed channel.
 		// Best-effort: run detached so late usage rows still get a chance to
 		// flush before the process exits.
 		p.runDetached(fn)
-		return
+		return true
 	}
 	if p.send(fn) {
-		return
+		return true
 	}
 	// Queue full: fall back to a bounded detached goroutine instead of
 	// dropping — a transient DB slowdown should slow the pipeline down, not
 	// silently discard billing rows. Only when the overflow allowance is also
-	// exhausted is the task dropped (and counted).
+	// exhausted is the task handed back to the caller.
 	select {
 	case p.overflow <- struct{}{}:
 		tasksOverflowTotal.WithLabelValues(p.kind).Inc()
 		p.runDetachedTracked(fn)
-		return
+		return true
 	default:
 	}
-	p.dropped.Add(1)
-	tasksDroppedTotal.WithLabelValues(p.kind).Inc()
-	slog.Warn("worker pool full, dropping task", "pool", p.kind, "dropped_total", p.dropped.Load())
+	p.spilled.Add(1)
+	tasksSpilledTotal.WithLabelValues(p.kind).Inc()
+	return false
 }
 
 // runDetachedTracked runs fn in its own goroutine and releases the overflow

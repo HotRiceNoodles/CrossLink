@@ -72,3 +72,55 @@ func TestLoad_EnvOverrideDockerScenario(t *testing.T) {
 	assert.Equal(t, "docker-gateway-key", cfg.Gateway.AuthKey, "CL_GATEWAY_AUTH_KEY must apply without a config file")
 	assert.Equal(t, "docker-encryption-key", cfg.SecretManager.EncryptionKey, "CL_ENCRYPTION_KEY must apply without a config file")
 }
+
+// The optional cache.redis block must honor CL_CACHE_REDIS_* in env-only
+// deployments (defaults registered so AutomaticEnv resolves them), while an
+// empty host means "share the main redis" for InitCacheRedis.
+func TestLoad_CacheRedisEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("CL_CACHE_REDIS_HOST", "cache-redis.internal")
+	t.Setenv("CL_CACHE_REDIS_PORT", "6380")
+	t.Setenv("CL_GATEWAY_AUTH_KEY", "k")
+	t.Setenv("CL_ADMIN_JWT_SECRET", "this-must-be-at-least-thirty-two-characters-long")
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Cache.Redis, "cache.redis block must decode when env vars are set")
+	assert.Equal(t, "cache-redis.internal", cfg.Cache.Redis.Host)
+	assert.Equal(t, 6380, cfg.Cache.Redis.Port)
+}
+
+// Without cache env vars the block decodes to empty host — the documented
+// "share the main redis" sentinel (handled by app.InitCacheRedis).
+func TestLoad_CacheRedisAbsentMeansShared(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CL_GATEWAY_AUTH_KEY", "k")
+	t.Setenv("CL_ADMIN_JWT_SECRET", "this-must-be-at-least-thirty-two-characters-long")
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	if cfg.Cache.Redis != nil {
+		assert.Empty(t, cfg.Cache.Redis.Host, "unset cache.redis must leave host empty (shared sentinel)")
+	}
+}
+
+// The in-flight body budget must honor CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES
+// in env-only deployments (defaults registered so AutomaticEnv resolves the
+// keys — before F26's fix the key had no default and the env was silently
+// ignored, i.e. the budget never armed).
+func TestLoad_InflightBodyBudgetEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES", "33554432")
+	t.Setenv("CL_GATEWAY_INFLIGHT_MULTIPART_RESERVE_BYTES", "16777216")
+	t.Setenv("CL_GATEWAY_AUTH_KEY", "k")
+	t.Setenv("CL_ADMIN_JWT_SECRET", "this-must-be-at-least-thirty-two-characters-long")
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, int64(33554432), cfg.Gateway.InflightBodyBudgetBytes,
+		"CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES must apply without a config file")
+	assert.Equal(t, int64(16777216), cfg.Gateway.InflightMultipartReserveBytes,
+		"CL_GATEWAY_INFLIGHT_MULTIPART_RESERVE_BYTES must apply without a config file")
+}

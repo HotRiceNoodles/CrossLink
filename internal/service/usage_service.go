@@ -83,6 +83,13 @@ func (s *UsageService) IsContentLogEnabled() bool {
 }
 
 type UsageEntry struct {
+	// EventID is the stable idempotency key of this billing event. Minted
+	// exactly once at submit time (handler.submitUsageEntryFunc) and
+	// serialized into the disk spool, so a replay of an already-committed
+	// row collides on the usage_logs unique index instead of double-billing.
+	// Empty for legacy direct-Log callers (admin playground), which have no
+	// replay path and fall back to a one-shot UUID inside buildUsageLog.
+	EventID        string
 	RouteType      string
 	ModelRequested string
 	ModelUsed      string
@@ -156,8 +163,17 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		mult = 1.0
 	}
 	upstreamCost := entry.cost()
+	// Stable billing-event id (F34): prefer the one minted at submit time so
+	// retries/replays of the SAME entry dedupe on the unique index; only
+	// direct-Log callers without a submit path mint here (one-shot, no
+	// replay, same effective behavior as before).
+	eventID := entry.EventID
+	if eventID == "" {
+		eventID = uuid.New().String()
+	}
 	log := &model.UsageLog{
 		RequestID:          uuid.New().String()[:8],
+		EventID:            &eventID,
 		RouteType:          entry.RouteType,
 		ModelRequested:     entry.ModelRequested,
 		ModelUsed:          entry.ModelUsed,
@@ -255,4 +271,16 @@ func (s *UsageService) Log(ctx context.Context, entry *UsageEntry) {
 	if err := s.repo.Create(ctx, log); err != nil {
 		slog.Error("failed to write usage log", "error", err)
 	}
+}
+
+// LogChecked is Log with the DB result surfaced: nil means the row is
+// durably stored. The usage spill replay relies on this ack — a row leaves
+// the spool only when this returns nil.
+func (s *UsageService) LogChecked(ctx context.Context, entry *UsageEntry) error {
+	log := buildUsageLog(entry)
+	if err := s.repo.Create(ctx, log); err != nil {
+		slog.Error("failed to write usage log", "error", err)
+		return err
+	}
+	return nil
 }

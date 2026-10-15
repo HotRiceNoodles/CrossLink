@@ -7,8 +7,15 @@ import (
 )
 
 type UsageLog struct {
-	ID             int64   `gorm:"primaryKey" json:"id"`
-	RequestID      string  `gorm:"size:64;not null" json:"request_id"`
+	ID        int64  `gorm:"primaryKey" json:"id"`
+	RequestID string `gorm:"size:64;not null" json:"request_id"`
+	// EventID is the stable idempotency key of the billing event: minted once
+	// per UsageEntry at submit time and carried through the disk spool, so a
+	// replay of an already-committed row collides on the unique index and is
+	// ignored instead of double-billing (the ONLY accounting side effect of
+	// Log() is this row — budget numbers are derived from usage_logs). NULL
+	// for legacy rows written before the column existed; new rows always set it.
+	EventID        *string `gorm:"size:36;uniqueIndex" json:"event_id,omitempty"`
 	APIKeyID       *int64  `gorm:"index" json:"api_key_id"`
 	ProviderID     *int64  `gorm:"index" json:"provider_id"`
 	RouteType      string  `gorm:"size:16;not null" json:"route_type"`

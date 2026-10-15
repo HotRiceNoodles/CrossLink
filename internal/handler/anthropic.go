@@ -107,30 +107,28 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 		attempts = attemptsJSON(routeErr.Attempts)
 	}
 	c.Set("usage_logged", true)
-	submitUsage(func() {
-		h.usageSvc.Log(context.Background(), &service.UsageEntry{
-			RouteType:          "anthropic",
-			ModelRequested:     model,
-			ProviderID:         providerID,
-			APIKeyID:           keyID,
-			TeamID:             teamID,
-			OrgID:              orgID,
-			Currency:           currency,
-			StatusCode:         statusCode,
-			ErrorType:          "provider_error",
-			ErrorMessage:       det.Message,
-			UpstreamStatus:     det.UpstreamStatus,
-			UpstreamErrorCode:  det.Code,
-			UpstreamErrorType:  det.Type,
-			UpstreamErrorParam: det.Param,
-			ErrorStage:         det.Stage,
-			Attempts:           attempts,
-			LatencyMs:          time.Since(start).Milliseconds(),
-			FallbackCount:      fallbackCount,
-			RetryCount:         retryCount,
-			TemplateID:         templateID,
-			PriceMultiplier:    priceMult,
-		})
+	submitUsageEntry(h.usageSvc, &service.UsageEntry{
+		RouteType:          "anthropic",
+		ModelRequested:     model,
+		ProviderID:         providerID,
+		APIKeyID:           keyID,
+		TeamID:             teamID,
+		OrgID:              orgID,
+		Currency:           currency,
+		StatusCode:         statusCode,
+		ErrorType:          "provider_error",
+		ErrorMessage:       det.Message,
+		UpstreamStatus:     det.UpstreamStatus,
+		UpstreamErrorCode:  det.Code,
+		UpstreamErrorType:  det.Type,
+		UpstreamErrorParam: det.Param,
+		ErrorStage:         det.Stage,
+		Attempts:           attempts,
+		LatencyMs:          time.Since(start).Milliseconds(),
+		FallbackCount:      fallbackCount,
+		RetryCount:         retryCount,
+		TemplateID:         templateID,
+		PriceMultiplier:    priceMult,
 	})
 }
 
@@ -404,31 +402,31 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		result.CacheReadTokens, result.CacheCreationTokens, result.InputPrice, result.OutputPrice)
 	c.Set("cost", cost)
 
-	submitUsage(func() {
-		entry := &service.UsageEntry{
-			RouteType:       "anthropic",
-			ModelRequested:  req.Model,
-			ModelUsed:       result.ModelUsed,
-			ProviderID:      result.ProviderID,
-			APIKeyID:        apiKeyID,
-			TeamID:          teamID,
-			OrgID:           orgID,
-			InputTokens:     result.InputTokens,
-			OutputTokens:    result.OutputTokens,
-			InputPrice:      result.InputPrice,
-			OutputPrice:     result.OutputPrice,
-			Currency:        result.Currency,
-			LatencyMs:       result.LatencyMs,
-			StatusCode:      http.StatusOK,
-			FallbackCount:   result.FallbackCount,
-			RetryCount:      result.RetryCount,
-			ReasoningTokens: result.ReasoningTokens,
-			CacheReadTokens: result.CacheReadTokens,
-			SessionID:       sessionID,
-			TemplateID:      templateID,
-			PriceMultiplier: priceMult,
-			PrecomputedCost: cost,
-		}
+	entry := &service.UsageEntry{
+		RouteType:       "anthropic",
+		ModelRequested:  req.Model,
+		ModelUsed:       result.ModelUsed,
+		ProviderID:      result.ProviderID,
+		APIKeyID:        apiKeyID,
+		TeamID:          teamID,
+		OrgID:           orgID,
+		InputTokens:     result.InputTokens,
+		OutputTokens:    result.OutputTokens,
+		InputPrice:      result.InputPrice,
+		OutputPrice:     result.OutputPrice,
+		Currency:        result.Currency,
+		LatencyMs:       result.LatencyMs,
+		StatusCode:      http.StatusOK,
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      result.RetryCount,
+		ReasoningTokens: result.ReasoningTokens,
+		CacheReadTokens: result.CacheReadTokens,
+		SessionID:       sessionID,
+		TemplateID:      templateID,
+		PriceMultiplier: priceMult,
+		PrecomputedCost: cost,
+	}
+	submitUsageEntryFunc(h.usageSvc, entry, func() {
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
 				entry.GuardrailTriggered = true
@@ -480,7 +478,6 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			inputFromUpstr: result.InputTokens > 0,
 			inputTokens:    result.InputTokens,
 		}).apply(entry)
-		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 
@@ -856,32 +853,32 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		result.CacheReadTokens, result.CacheCreationTokens, result.InputPrice, result.OutputPrice)
 	c.Set("cost", cost)
 
-	submitUsage(func() {
-		entry := &service.UsageEntry{
-			RouteType:       "anthropic",
-			ModelRequested:  req.Model,
-			ModelUsed:       result.ModelUsed,
-			ProviderID:      result.ProviderID,
-			APIKeyID:        apiKeyID,
-			TeamID:          teamID,
-			OrgID:           orgID,
-			InputTokens:     result.InputTokens,
-			OutputTokens:    result.OutputTokens,
-			InputPrice:      result.InputPrice,
-			OutputPrice:     result.OutputPrice,
-			Currency:        result.Currency,
-			LatencyMs:       result.LatencyMs,
-			FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
-			StatusCode:      http.StatusOK,
-			FallbackCount:   result.FallbackCount,
-			RetryCount:      result.RetryCount,
-			ReasoningTokens: result.ReasoningTokens,
-			CacheReadTokens: result.CacheReadTokens,
-			SessionID:       sessionID,
-			TemplateID:      templateID,
-			PriceMultiplier: priceMult,
-			PrecomputedCost: cost,
-		}
+	entry := &service.UsageEntry{
+		RouteType:       "anthropic",
+		ModelRequested:  req.Model,
+		ModelUsed:       result.ModelUsed,
+		ProviderID:      result.ProviderID,
+		APIKeyID:        apiKeyID,
+		TeamID:          teamID,
+		OrgID:           orgID,
+		InputTokens:     result.InputTokens,
+		OutputTokens:    result.OutputTokens,
+		InputPrice:      result.InputPrice,
+		OutputPrice:     result.OutputPrice,
+		Currency:        result.Currency,
+		LatencyMs:       result.LatencyMs,
+		FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
+		StatusCode:      http.StatusOK,
+		FallbackCount:   result.FallbackCount,
+		RetryCount:      result.RetryCount,
+		ReasoningTokens: result.ReasoningTokens,
+		CacheReadTokens: result.CacheReadTokens,
+		SessionID:       sessionID,
+		TemplateID:      templateID,
+		PriceMultiplier: priceMult,
+		PrecomputedCost: cost,
+	}
+	submitUsageEntryFunc(h.usageSvc, entry, func() {
 		if v, ok := c.Get("guardrail_triggered"); ok {
 			if b, _ := v.(bool); b {
 				entry.GuardrailTriggered = true
@@ -927,7 +924,6 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			inputFromUpstr: result.UsageFromUpstr,
 			inputTokens:    result.InputTokens,
 		}).apply(entry)
-		h.usageSvc.Log(context.Background(), entry)
 	})
 }
 
@@ -963,6 +959,11 @@ func gatewayErrorStatus(err error) int {
 		status = http.StatusBadRequest
 	case errors.Is(err, router.ErrProRequired):
 		status = http.StatusForbidden
+	case errors.Is(err, router.ErrNoActiveProvider):
+		// Model exists but every route is circuit-open/tier-gated: temporary
+		// server condition, not a client error — same mapping as the OpenAI
+		// path's resolveErrorStatus.
+		status = http.StatusServiceUnavailable
 	}
 
 	var providerErr *provider.ProviderError
@@ -989,10 +990,12 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 	if providerRateLimited(err) {
 		errType = "rate_limit_error"
 		providerRetryAfterHeader(c, err)
+	} else if errors.Is(err, router.ErrNoActiveProvider) {
+		errType = "overloaded_error"
 	}
 	c.JSON(gatewayErrorStatus(err), gin.H{
 		"type":  "error",
-		"error": gin.H{"type": errType, "message": safeProviderError(err)},
+		"error": gin.H{"type": errType, "message": resolveErrorMessage(err)},
 	})
 }
 
