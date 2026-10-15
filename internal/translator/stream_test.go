@@ -93,7 +93,7 @@ func TestStreamTranslator_OnProviderDisconnect_BlockActive(t *testing.T) {
 	st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`))
 	st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`))
 
-	events := st.OnProviderDisconnect()
+	events := st.OnProviderDisconnect(true)
 	assert.Equal(t, []string{"content_block_stop", "message_delta", "message_stop"}, eventTypes(events))
 }
 
@@ -102,14 +102,14 @@ func TestStreamTranslator_OnProviderDisconnect_Started(t *testing.T) {
 
 	st.TranslateChunk(chunk(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`))
 
-	events := st.OnProviderDisconnect()
+	events := st.OnProviderDisconnect(true)
 	assert.Equal(t, []string{"message_delta", "message_stop"}, eventTypes(events))
 }
 
 func TestStreamTranslator_OnProviderDisconnect_Init(t *testing.T) {
 	st := NewStreamTranslator("msg_test", "claude-sonnet-4-20250514", 0)
 
-	events := st.OnProviderDisconnect()
+	events := st.OnProviderDisconnect(true)
 	assert.Equal(t, []string{"message_start", "message_delta", "message_stop"}, eventTypes(events))
 }
 

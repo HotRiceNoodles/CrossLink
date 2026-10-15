@@ -241,17 +241,44 @@ func (h *HealthTracker) RecordSuccessModel(name, model string) {
 // Retry-After hint. Kept so existing callers/tests compile (B7).
 func (h *HealthTracker) RecordFailure(name string) { h.RecordTransientFailure(name, "", 0) }
 
-// RecordTransientFailure records a transient failure on the account key. After
-// transientThreshold consecutive failures the circuit opens for the transient cooldown
-// (clamped Retry-After if provided). A half-open probe failure resets the count.
+// RecordTransientFailure records a transient failure on the ACCOUNT key
+// (name). After transientThreshold consecutive failures the circuit opens for
+// the transient cooldown (clamped Retry-After if provided). A half-open probe
+// failure resets the count.
+//
+// Failure domains: network/timeout/5xx faults are account-wide signals (the
+// account's host or credentials are unhealthy), so they stay account-scoped.
+// Rate-limit (429) faults are NOT — see RecordRateLimitFailure.
 func (h *HealthTracker) RecordTransientFailure(name, model string, retryAfter time.Duration) {
-	_ = model // transient failures are account-scoped
+	_ = model
+	h.recordTransientOnKey(name, retryAfter)
+}
+
+// RecordRateLimitFailure records a 429/rate-limit failure on the MODEL key
+// (name|model) when the failing call targeted a specific upstream model, and
+// on the account key otherwise. Rate limits are per-model in practice
+// (OpenAI/Anthropic per-model RPM/tier limits): one model's 429s say nothing
+// about a sibling model on the same account, so opening the shared account
+// circuit falsely rejects healthy traffic (soak1 measured 16,779 collateral
+// rejections = 10.84% of normal-flow requests while a fault model on the same
+// provider was being rate-limited).
+func (h *HealthTracker) RecordRateLimitFailure(name, model string, retryAfter time.Duration) {
+	if model == "" {
+		h.recordTransientOnKey(name, retryAfter)
+		return
+	}
+	h.recordTransientOnKey(name+"|"+model, retryAfter)
+}
+
+// recordTransientOnKey is the shared threshold/open state machine behind
+// RecordTransientFailure and RecordRateLimitFailure.
+func (h *HealthTracker) recordTransientOnKey(k string, retryAfter time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s := h.states[name]
+	s := h.states[k]
 	if s == nil {
 		s = &circuitState{kind: kindTransient}
-		h.states[name] = s
+		h.states[k] = s
 	}
 	now := time.Now()
 	if !s.openUntil.IsZero() && now.After(s.openUntil) {

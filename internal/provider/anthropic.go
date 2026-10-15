@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/domain"
@@ -129,11 +130,23 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 
 	ch := make(chan domain.SSEChunk, 64)
 	done := make(chan struct{})
+	// Idle watchdog: a connected-but-silent upstream must not pin this
+	// goroutine and its connection forever. stopWatch fires on normal end.
+	var streamBody io.Reader = resp.Body
+	var stopWatch func()
+	var act *atomic.Int64
+	if idle := getStreamIdleTimeout(); idle > 0 {
+		iw, stop := watchStreamIdle(resp.Body, idle)
+		streamBody, stopWatch, act = iw, stop, iw.Activity()
+	}
 	go func() {
+		if stopWatch != nil {
+			defer stopWatch()
+		}
 		defer close(ch)
 		defer close(done)
 		defer resp.Body.Close()
-		p.readAnthropicSSE(ctx, resp.Body, ch)
+		p.readAnthropicSSE(ctx, streamBody, ch, act)
 	}()
 	// Close the body when the context cancels to unblock a scanner blocked in
 	// Read; exits on done so normal completion does not leak the goroutine.
@@ -154,7 +167,9 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("anthropic-version", p.apiVersion)
 }
 
-func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk) {
+// activity refreshes while sends block on a full channel (consumer
+// backpressure) so the idle watchdog only cuts genuinely silent upstreams.
+func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk, activity *atomic.Int64) {
 	buf := pool.GetScannerBuffer()
 	defer pool.PutScannerBuffer(buf)
 
@@ -163,6 +178,10 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, body io.Reader
 	scanner.Buffer(*buf, 4*1024*1024)
 
 	var eventType string
+	// An upstream `event: error` frame poisons the stream: the terminal
+	// message_stop must not launder it into a clean completion — the same rule
+	// readSSEStream applies to a post-error [DONE] sentinel.
+	sawUpstreamError := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -178,9 +197,32 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, body io.Reader
 
 		if strings.HasPrefix(line, "data: ") {
 			data := []byte(strings.TrimPrefix(line, "data: "))
+
+			if eventType == "error" {
+				// Log only the mapped type and payload size — the frame is
+				// untrusted content and must not reach logs verbatim.
+				typ := "unknown"
+				var probe struct {
+					Error *struct {
+						Type string `json:"type"`
+					} `json:"error"`
+				}
+				if json.Unmarshal(data, &probe) == nil && probe.Error != nil {
+					typ = classifyUpstreamErrorType(probe.Error.Type)
+				}
+				slog.Warn("anthropic upstream error frame in stream", "type", typ, "payload_bytes", len(data))
+				sawUpstreamError = true
+				eventType = ""
+				continue
+			}
+			if eventType == "message_stop" && sawUpstreamError {
+				eventType = ""
+				continue
+			}
+
 			chunks := t.TranslateEvent(eventType, data)
 			for _, chunk := range chunks {
-				if !sendSSEChunk(ctx, ch, chunk) {
+				if !sendSSEChunkActivity(ctx, ch, chunk, activity) {
 					return
 				}
 			}

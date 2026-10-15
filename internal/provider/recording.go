@@ -41,6 +41,28 @@ func (r *RecordingProvider) activeStore() FixtureStore {
 	return globalFixtureStore
 }
 
+// Recording caps (supervisor review): an unbounded `recorded` slice grows
+// with stream length and the final Marshal makes a full second copy — a
+// 20MB stream would pin 40MB+ per recorded stream. Past either cap the tee
+// STOPS recording (discards the partial fixture) but keeps forwarding to the
+// consumer: recording must never degrade the live stream. Vars (not consts)
+// ONLY so tests can lower them; production never reassigns.
+var (
+	recordingMaxChunks = 20000
+	recordingMaxBytes  = 32 << 20 // estimated payload bytes across chunks
+)
+
+func chunkApproxBytes(c domain.SSEChunk) int {
+	if c.Chunk == nil {
+		return 0
+	}
+	n := len(c.Chunk.ID) + len(c.Chunk.Model) + 64
+	for _, ch := range c.Chunk.Choices {
+		n += len(ch.Delta.Role) + len(ch.Delta.Content) + len(ch.Delta.ReasoningContent) + 32
+	}
+	return n
+}
+
 // Chat delegates to the real provider and saves the response as a fixture.
 // Errors are NOT recorded (no point replaying failures).
 func (r *RecordingProvider) Chat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (*domain.OpenAIResponse, error) {
@@ -51,7 +73,10 @@ func (r *RecordingProvider) Chat(ctx context.Context, req *domain.OpenAIRequest,
 		if mErr != nil {
 			slog.Warn("recording: marshal response failed", "provider", r.name, "error", mErr)
 		} else {
-			if sErr := r.store.Save(ctx, &Fixture{
+			// store (not r.store): activeStore may have resolved the global
+			// fixture store while r.store is nil — calling r.store.Save here
+			// panicked in exactly that case.
+			if sErr := store.Save(ctx, &Fixture{
 				ProviderName: r.name,
 				Model:        req.Model,
 				RequestHash:  RequestHash(req),
@@ -78,12 +103,58 @@ func (r *RecordingProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 	go func() {
 		defer close(out)
 		var recorded []domain.SSEChunk
-		for chunk := range ch {
-			out <- chunk
-			recorded = append(recorded, chunk)
+		var estBytes int
+		overCap := false
+	loop:
+		for {
+			// BOTH directions select on ctx: cancellation must unblock the
+			// tee whether it is parked receiving from a hung inner producer
+			// (a `for range ch` would wait forever for a close that never
+			// comes) or sending to a gone consumer. Standard adapters close
+			// their channel on ctx cancel, but the tee's own exit must not
+			// depend on the inner producer's good behavior — and it never
+			// drains open-endedly in place of cancellation propagation
+			// (supervisor review).
+			var chunk domain.SSEChunk
+			select {
+			case c, ok := <-ch:
+				if !ok {
+					break loop
+				}
+				chunk = c
+			case <-ctx.Done():
+				slog.Debug("recording: cancelled while receiving from inner stream, discarding partial fixture",
+					"provider", r.name, "chunks", len(recorded))
+				return
+			}
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				slog.Debug("recording: consumer gone and ctx cancelled, discarding partial fixture",
+					"provider", r.name, "chunks", len(recorded))
+				return
+			}
+			// Cap enforcement (supervisor review): stop RECORDING past the
+			// chunk/byte caps — forwarding to the consumer continues
+			// untouched. The partial fixture is discarded (a truncated
+			// replay would be misleading) and the drop is logged once.
+			if !overCap {
+				recorded = append(recorded, chunk)
+				estBytes += chunkApproxBytes(chunk)
+				if len(recorded) > recordingMaxChunks || estBytes > recordingMaxBytes {
+					overCap = true
+					recorded = nil
+					slog.Warn("recording: stream exceeded recording cap, fixture discarded (stream unaffected)",
+						"provider", r.name, "cap_chunks", recordingMaxChunks,
+						"cap_bytes", recordingMaxBytes, "est_bytes", estBytes)
+				}
+			}
 		}
 		// Save fixture after stream ends. Use background context (request ctx
 		// may be cancelled by the time we get here).
+		if overCap {
+			return
+		}
 		store := r.activeStore()
 		if store != nil && len(recorded) > 0 {
 			chunksJSON, mErr := json.Marshal(recorded)
@@ -91,7 +162,10 @@ func (r *RecordingProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 				slog.Warn("recording: marshal stream chunks failed", "provider", r.name, "error", mErr)
 				return
 			}
-			if sErr := r.store.Save(context.Background(), &Fixture{
+			// store (not r.store): activeStore may have resolved the global
+			// fixture store while r.store is nil — r.store.Save panicked in
+			// exactly that case.
+			if sErr := store.Save(context.Background(), &Fixture{
 				ProviderName: r.name,
 				Model:        req.Model,
 				RequestHash:  RequestHash(req),

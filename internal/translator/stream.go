@@ -272,8 +272,41 @@ func (t *StreamTranslator) closeActiveToolBlock() []domain.SSEEvent {
 	return events
 }
 
-func (t *StreamTranslator) OnProviderDisconnect() []domain.SSEEvent {
+// OnProviderDisconnect closes out the message when the upstream channel ended
+// without an in-band terminal. cleanTerminal reports whether the provider
+// signaled a clean stream completion (SSEChunk.Done — [DONE] sentinel, or a
+// synthesized clean terminal from the read loops). A mid-stream truncation
+// (cleanTerminal=false) must surface as a structured stream_interrupted error
+// event followed by message_stop — never be laundered into a normal end_turn
+// completion, which would hand agent loops silently truncated tool arguments.
+func (t *StreamTranslator) OnProviderDisconnect(cleanTerminal bool) []domain.SSEEvent {
+	if t.state == stateDone {
+		return nil // in-band terminal already emitted
+	}
+
 	var events []domain.SSEEvent
+
+	if !cleanTerminal {
+		// Close any dangling block so the event sequence stays parseable, then
+		// emit the same wire shape writeStreamInterruptedAnthropic produces:
+		// error(stream_interrupted) + message_stop.
+		switch t.state {
+		case stateBlockActive:
+			if len(t.toolOrder) > 0 {
+				events = append(events, t.closeActiveToolBlock()...)
+			} else {
+				events = append(events, contentBlockStop(t.blockIndex))
+				t.activeBlockType = ""
+			}
+		case stateInit:
+			events = append(events, buildMessageStart(t.messageID, t.requestedModel, 0))
+		case stateStarted:
+		}
+		events = append(events, streamInterruptedError())
+		events = append(events, messageStop())
+		t.state = stateDone
+		return events
+	}
 
 	switch t.state {
 	case stateBlockActive:

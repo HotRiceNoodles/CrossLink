@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/debug/upstream"
@@ -80,9 +81,34 @@ func CloseIdleOutboundConnections() {
 	}
 }
 
+// maxConnsPerHostOverride scales the per-host connection cap above the
+// conservative default. Concurrent streams to one upstream host are capped by
+// MaxConnsPerHost; at high concurrency (thousands of simultaneous
+// generations) requests queue on the pool and first-token latency inflates —
+// observed in load testing as linear TTFB growth past 200 concurrent streams
+// per provider. Wired from gateway.upstream_max_conns_per_host at startup.
+var maxConnsPerHostOverride atomic.Int32 // 0 = use default
+
+// SetMaxConnsPerHost overrides the per-host upstream connection cap for
+// transports created after this call (non-positive resets to the default).
+func SetMaxConnsPerHost(n int) {
+	if n <= 0 {
+		maxConnsPerHostOverride.Store(0)
+		return
+	}
+	maxConnsPerHostOverride.Store(int32(n))
+}
+
+func effectiveMaxConnsPerHost() int {
+	if n := int(maxConnsPerHostOverride.Load()); n > 0 {
+		return n
+	}
+	return defaultMaxConnsPerHost
+}
+
 func newStreamTransport() *http.Transport {
 	t := &http.Transport{
-		MaxConnsPerHost:       defaultMaxConnsPerHost,
+		MaxConnsPerHost:       effectiveMaxConnsPerHost(),
 		MaxIdleConns:          defaultMaxIdleConns,
 		MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
 		IdleConnTimeout:       defaultIdleConnTimeout,
@@ -103,7 +129,7 @@ func newStreamTransport() *http.Transport {
 
 func newDefaultTransport() *http.Transport {
 	t := &http.Transport{
-		MaxConnsPerHost:     defaultMaxConnsPerHost,
+		MaxConnsPerHost:     effectiveMaxConnsPerHost(),
 		MaxIdleConns:        defaultMaxIdleConns,
 		MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
 		IdleConnTimeout:     defaultIdleConnTimeout,

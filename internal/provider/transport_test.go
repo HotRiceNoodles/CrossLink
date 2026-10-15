@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/stretchr/testify/assert"
@@ -75,7 +76,11 @@ func TestDebugTransport_NonStreamCapture(t *testing.T) {
 	assert.Equal(t, "POST", call.Method)
 	assert.Equal(t, "/v1/chat/completions", call.Path)
 	assert.Equal(t, 200, call.StatusCode)
-	assert.True(t, call.Duration > 0)
+	// Windows clock granularity can complete a loopback round trip inside
+	// one tick, yielding a 0 duration (observed ~1/3 of full-package runs,
+	// always passing in isolation). A non-negative duration is the honest
+	// invariant; the capture itself is asserted by the fields below.
+	assert.GreaterOrEqual(t, call.Duration, time.Duration(0))
 	assert.Empty(t, call.Error)
 	assert.Contains(t, string(call.ReqBody), `{"prompt":"hi"}`)
 	assert.Contains(t, string(call.RespBody), `{"result":"hello"}`)

@@ -128,3 +128,17 @@ func messageStop() domain.SSEEvent {
 	})
 	return domain.SSEEvent{Event: "message_stop", Data: data}
 }
+
+// streamInterruptedError is the Anthropic-SSE truncation marker: a named error
+// event clients can distinguish from a clean finish. Emitted by
+// OnProviderDisconnect when the provider stream dropped mid-flight.
+func streamInterruptedError() domain.SSEEvent {
+	data, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    "stream_interrupted",
+			"message": "upstream stream ended unexpectedly",
+		},
+	})
+	return domain.SSEEvent{Event: "error", Data: data}
+}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,17 +206,41 @@ func TestOpenAICompatible_StreamChat_NoGoroutineLeakOnCompletion(t *testing.T) {
 	p := NewOpenAICompatible("test", server.URL, 10*time.Second)
 	req := &domain.OpenAIRequest{Model: "m", Stream: true}
 
-	before := runtime.NumGoroutine()
 	for i := 0; i < 25; i++ {
 		ch, err := p.StreamChat(context.Background(), req, "key")
 		require.NoError(t, err)
 		for range ch {
 		}
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+	// Count GATEWAY goroutines only. A raw NumGoroutine assertion is not
+	// meaningful here: net/http infrastructure (a readLoop/writeLoop pair per
+	// pooled idle client connection, plus httptest server-side connection
+	// readers) lives on its own schedule and its teardown races the
+	// assertion — a full goroutine dump taken during the 2026-10-14
+	// stability pass showed those are the ONLY residuals after 25 streams,
+	// with zero crosslink frames. A real leak shows up as a goroutine whose
+	// stack contains crosslink/internal frames.
+	deadline := time.Now().Add(5 * time.Second)
+	for countGatewayGoroutines() > 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	assert.LessOrEqual(t, runtime.NumGoroutine(), before+2,
-		"watchdog goroutines leaked across completed streams")
+	if n := countGatewayGoroutines(); n > 0 {
+		buf := make([]byte, 1<<20)
+		m := runtime.Stack(buf, true)
+		t.Fatalf("gateway goroutines survived 25 completed streams: %d\n%s", n, buf[:m])
+	}
+}
+
+// countGatewayGoroutines dumps all stacks and counts goroutines carrying
+// crosslink/internal frames, excluding test code goroutines.
+func countGatewayGoroutines() int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	var count int
+	for _, g := range strings.Split(string(buf[:n]), "goroutine ") {
+		if strings.Contains(g, "crosslink/internal/") && !strings.Contains(g, "_test.go") {
+			count++
+		}
+	}
+	return count
 }

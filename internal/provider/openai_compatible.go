@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/domain"
@@ -171,11 +172,23 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 	if req.N != nil && *req.N > 1 {
 		expectedChoices = *req.N
 	}
+	// Idle watchdog: a connected-but-silent upstream must not pin this
+	// goroutine and its connection forever. stopWatch fires on normal end.
+	var streamBody io.Reader = resp.Body
+	var stopWatch func()
+	var act *atomic.Int64
+	if idle := getStreamIdleTimeout(); idle > 0 {
+		iw, stop := watchStreamIdle(resp.Body, idle)
+		streamBody, stopWatch, act = iw, stop, iw.Activity()
+	}
 	go func() {
+		if stopWatch != nil {
+			defer stopWatch()
+		}
 		defer close(ch)
 		defer close(done)
 		defer resp.Body.Close()
-		readSSEStream(ctx, resp.Body, ch, expectedChoices)
+		readSSEStream(ctx, streamBody, ch, expectedChoices, act)
 	}()
 	// Close the body when the context cancels to unblock a scanner blocked in
 	// Read. Exits on done as well, so a stream that completes normally does
@@ -194,11 +207,62 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 // sendSSEChunk sends one chunk, aborting when the context is cancelled (the
 // consumer stopped reading). Returns false when the caller should stop.
 func sendSSEChunk(ctx context.Context, ch chan<- domain.SSEChunk, chunk domain.SSEChunk) bool {
-	select {
-	case ch <- chunk:
-		return true
-	case <-ctx.Done():
-		return false
+	return sendSSEChunkActivity(ctx, ch, chunk, nil)
+}
+
+// sendSSEChunkActivity is sendSSEChunk with a stream-progress timestamp.
+// While BLOCKED on a full channel (slow/stalled consumer, not upstream
+// silence) it retries at idle/4 and refreshes activity — the idle watchdog
+// must not cut backpressured streams; the total-duration cap and client
+// disconnects bound them instead. A send blocked past a full idle window is
+// counted (and logged rate-limited) as POSITIVE backpressure evidence — the
+// acceptance criterion is "backpressure events > 0 while watchdog cuts stay
+// unchanged", not the absence of cut logs.
+func sendSSEChunkActivity(ctx context.Context, ch chan<- domain.SSEChunk, chunk domain.SSEChunk, activity *atomic.Int64) bool {
+	if activity == nil {
+		select {
+		case ch <- chunk:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	// Retry interval must stay well below the idle window (idle/4): a
+	// heartbeat gap longer than the window reads as a stall — exactly the
+	// mis-cut the backpressure regression test catches.
+	retry := time.Second
+	idle := getStreamIdleTimeout()
+	if idle > 0 {
+		if q := idle / 4; q < retry {
+			retry = q
+		}
+	}
+	if retry < 100*time.Millisecond {
+		retry = 100 * time.Millisecond
+	}
+	blockStart := time.Now()
+	overIdle := false
+	for {
+		select {
+		case ch <- chunk:
+			if overIdle {
+				streamBackpressureEventsTotal.Inc()
+				if now := time.Now().UnixNano(); now-lastBackpressureLogNs.Load() > int64(5*time.Second) {
+					lastBackpressureLogNs.Store(now)
+					slog.Info("stream consumer backpressured: send blocked past idle window, watchdog held",
+						"blocked", time.Since(blockStart).Round(time.Millisecond).String(),
+						"idle_timeout", idle.String())
+				}
+			}
+			return true
+		case <-ctx.Done():
+			return false
+		case <-time.After(retry):
+			activity.Store(time.Now().UnixNano())
+			if idle > 0 && !overIdle && time.Since(blockStart) > idle {
+				overIdle = true // count at most once per send attempt
+			}
+		}
 	}
 }
 
@@ -227,7 +291,10 @@ func classifyUpstreamErrorType(raw string) string {
 	}
 }
 
-func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk, expectedChoices int) {
+// readSSEStream relays upstream SSE lines as chunks. activity (optional,
+// from the idle watchdog) is refreshed while sends block on a full channel so
+// consumer backpressure is not misread as upstream silence.
+func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChunk, expectedChoices int, activity *atomic.Int64) {
 	buf := pool.GetScannerBuffer()
 	defer pool.PutScannerBuffer(buf)
 
@@ -269,7 +336,7 @@ func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChun
 						"saw_parse_error", sawParseError, "saw_upstream_error", sawUpstreamError)
 					return
 				}
-				sendSSEChunk(ctx, ch, domain.SSEChunk{Done: true})
+				sendSSEChunkActivity(ctx, ch, domain.SSEChunk{Done: true}, activity)
 				return
 			}
 
@@ -294,7 +361,7 @@ func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChun
 				}
 			}
 
-			if !sendSSEChunk(ctx, ch, domain.SSEChunk{Chunk: &chunk}) {
+			if !sendSSEChunkActivity(ctx, ch, domain.SSEChunk{Chunk: &chunk}, activity) {
 				return
 			}
 		}
@@ -322,7 +389,7 @@ func readSSEStream(ctx context.Context, body io.Reader, ch chan<- domain.SSEChun
 		}
 	}
 	slog.Info("upstream stream ended without [DONE] after all choices reported finish_reason; synthesizing terminal")
-	sendSSEChunk(ctx, ch, domain.SSEChunk{Done: true})
+	sendSSEChunkActivity(ctx, ch, domain.SSEChunk{Done: true}, activity)
 }
 
 func (p *OpenAICompatibleProvider) GenerateImage(ctx context.Context, req *domain.ImageRequest, apiKey string) (*domain.ImageResponse, error) {

@@ -94,7 +94,33 @@ func retryAfterFrom(err error) time.Duration {
 	return 0
 }
 
+// defaultPerProviderTimeout bounds one non-streaming upstream attempt. Long
+// reasoning-model generations regularly exceed 30s, so the effective value is
+// wired from gateway.provider_timeout (default 180s) via SetPerProviderTimeout
+// at startup; this constant is only the pre-wiring fallback.
 const defaultPerProviderTimeout = 30 * time.Second
+
+// perProviderTimeout is the effective per-attempt cap (nanoseconds; 0 = use
+// the constant above). Package-level because engines are constructed per
+// request.
+var perProviderTimeout atomic.Int64
+
+// SetPerProviderTimeout configures the non-streaming per-attempt cap.
+// Non-positive values fall back to the built-in default.
+func SetPerProviderTimeout(d time.Duration) {
+	if d <= 0 {
+		perProviderTimeout.Store(0)
+		return
+	}
+	perProviderTimeout.Store(int64(d))
+}
+
+func effectivePerProviderTimeout() time.Duration {
+	if d := time.Duration(perProviderTimeout.Load()); d > 0 {
+		return d
+	}
+	return defaultPerProviderTimeout
+}
 
 // circuitSkipError builds the error for a circuit-breaker skip, carrying the
 // recorded upstream cause (error type + message from RecordCause) when
@@ -129,12 +155,13 @@ func perProviderCtx(parent context.Context, attempt, totalAttempts int) (context
 		if perProvider < 5*time.Second {
 			perProvider = 5 * time.Second
 		}
-		if perProvider > defaultPerProviderTimeout {
-			perProvider = defaultPerProviderTimeout
+		cap := effectivePerProviderTimeout()
+		if perProvider > cap {
+			perProvider = cap
 		}
 		return context.WithTimeout(parent, perProvider)
 	}
-	return context.WithTimeout(parent, defaultPerProviderTimeout)
+	return context.WithTimeout(parent, effectivePerProviderTimeout())
 }
 
 // ExecuteNonStream runs a non-streaming call across routes with fallback.
@@ -198,7 +225,13 @@ func (e *FallbackEngine) ExecuteNonStream(
 					e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 				}
 			} else if e.health != nil {
-				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				if classified.ErrorType == provider.ErrorRateLimit {
+					// Rate limits are per-model: open the MODEL circuit, not the
+					// shared account circuit (isolation — see RecordRateLimitFailure).
+					e.health.RecordRateLimitFailure(name, model, retryAfterFrom(err))
+				} else {
+					e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				}
 				e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 			}
 
@@ -355,7 +388,13 @@ func (e *FallbackEngine) ExecuteStream(
 					e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 				}
 			} else if e.health != nil {
-				e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				if classified.ErrorType == provider.ErrorRateLimit {
+					// Rate limits are per-model: open the MODEL circuit, not the
+					// shared account circuit (isolation — see RecordRateLimitFailure).
+					e.health.RecordRateLimitFailure(name, model, retryAfterFrom(err))
+				} else {
+					e.health.RecordTransientFailure(name, model, retryAfterFrom(err))
+				}
 				e.health.RecordCause(name, model, string(classified.ErrorType), err.Error())
 			}
 

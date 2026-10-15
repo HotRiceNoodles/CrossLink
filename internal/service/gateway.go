@@ -291,8 +291,16 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 	st := translator.NewStreamTranslator(messageID, req.Model, inputEstimate)
 
 	stopped := false
+	// sawDone tracks whether the provider reported a clean stream terminal
+	// (SSEChunk.Done). Its absence after the channel closes means a mid-stream
+	// truncation, which must reach the client as a structured error — not be
+	// closed out as a normal completion.
+	sawDone := false
 loop:
 	for sseChunk := range ch {
+		if sseChunk.Done {
+			sawDone = true
+		}
 		events := st.TranslateChunk(sseChunk)
 		for _, event := range events {
 			if !fn(ctx, StreamEvent{Event: event.Event, Data: string(event.Data)}) {
@@ -303,7 +311,7 @@ loop:
 	}
 
 	if !stopped {
-		disconnectEvents := st.OnProviderDisconnect()
+		disconnectEvents := st.OnProviderDisconnect(sawDone)
 		for _, event := range disconnectEvents {
 			fn(ctx, StreamEvent{Event: event.Event, Data: string(event.Data)})
 		}

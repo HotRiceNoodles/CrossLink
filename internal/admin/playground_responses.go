@@ -260,6 +260,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 	var text strings.Builder
 	heldBytes, heldEvents := 0, 0
 	overflow := false
+	clientGone := false
 	emit := func(events []domain.ResponsesEvent) {
 		flusher, _ := c.Writer.(http.Flusher)
 		for _, ev := range events {
@@ -278,7 +279,10 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 				}
 				continue
 			}
-			c.Writer.WriteString(block)
+			if _, werr := c.Writer.WriteString(block); werr != nil {
+				clientGone = true
+				return
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -305,6 +309,12 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		if chunk.Done {
 			break
 		}
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
+			// Client disconnected — stop pulling the upstream stream (it would
+			// otherwise keep generating and burning provider quota).
+			clientGone = true
+			break
+		}
 		if chunk.Chunk != nil {
 			if len(chunk.Chunk.Choices) > 0 && chunk.Chunk.Choices[0].FinishReason != nil {
 				finishReason = *chunk.Chunk.Choices[0].FinishReason
@@ -314,9 +324,13 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 			}
 			emit(builder.Next(chunk.Chunk))
 		}
-		if overflow {
+		if clientGone || overflow {
 			break
 		}
+	}
+	if clientGone {
+		slog.Debug("playground: client disconnected during responses stream")
+		return
 	}
 	if !overflow {
 		emit(builder.Finish(lastUsage, finishReason, req.Model))
@@ -410,6 +424,11 @@ func pgWriteEvents(c *gin.Context, events []domain.ResponsesEvent) {
 	}
 }
 
+// pgMaxSSELineBytes caps one SSE line in the passthrough relay — a hostile or
+// broken upstream streaming without newlines must not grow a single string
+// without bound (matches the 4MB scanner cap used by the provider readers).
+const pgMaxSSELineBytes = 4 << 20
+
 // pgCopySSEGuarded relays upstream SSE with response-direction guardrail
 // checks. Strict mode buffers all lines (byte and event caps, comments/blank
 // lines count toward bytes) and releases them only after the final check;
@@ -427,8 +446,19 @@ func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailServ
 		maxEvents = svc.StrictMaxEvents()
 	}
 	overflow := false
+	clientGone := false
 	for {
 		line, err := br.ReadString('\n')
+		if len(line) > pgMaxSSELineBytes {
+			// Unbounded line — abort the relay rather than buffering it.
+			slog.Warn("playground: upstream SSE line exceeds cap, aborting relay",
+				"line_bytes", len(line), "cap", pgMaxSSELineBytes)
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", `{"type":"stream_error","message":"upstream stream line exceeds size limit"}`)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
 		if line != "" {
 			if strict {
 				held = append(held, line)
@@ -441,7 +471,12 @@ func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailServ
 					overflow = true
 				}
 			} else {
-				c.Writer.WriteString(line)
+				if _, werr := c.Writer.WriteString(line); werr != nil {
+					// Client disconnected — stop pulling the upstream (it would
+					// keep burning provider quota until EOF).
+					clientGone = true
+					break
+				}
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -453,6 +488,18 @@ func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailServ
 		if err != nil || overflow {
 			break
 		}
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
+			clientGone = true
+			break
+		}
+	}
+	if clientGone && !strict {
+		// Window mode: nothing is held, the client is gone — stop writing and
+		// skip the end-check. Strict mode must NOT return here: its buffer is
+		// still unverified, and the cancelled request context routes the final
+		// guardrail check into the fail-closed branch (guardrail_error event).
+		slog.Debug("playground: client disconnected during responses stream relay")
+		return
 	}
 	if overflow {
 		c.Set("guardrail_triggered", true)

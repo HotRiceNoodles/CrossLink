@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/domain"
@@ -168,11 +169,23 @@ func (p *AzureOpenAIProvider) StreamChat(ctx context.Context, req *domain.OpenAI
 	if req.N != nil && *req.N > 1 {
 		expectedChoices = *req.N
 	}
+	// Idle watchdog: a connected-but-silent upstream must not pin this
+	// goroutine and its connection forever. stopWatch fires on normal end.
+	var streamBody io.Reader = resp.Body
+	var stopWatch func()
+	var act *atomic.Int64
+	if idle := getStreamIdleTimeout(); idle > 0 {
+		iw, stop := watchStreamIdle(resp.Body, idle)
+		streamBody, stopWatch, act = iw, stop, iw.Activity()
+	}
 	go func() {
+		if stopWatch != nil {
+			defer stopWatch()
+		}
 		defer close(ch)
 		defer close(done)
 		defer resp.Body.Close()
-		readSSEStream(ctx, resp.Body, ch, expectedChoices)
+		readSSEStream(ctx, streamBody, ch, expectedChoices, act)
 	}()
 	// Close the body when the context cancels to unblock a scanner blocked in
 	// Read; exits on done so normal completion does not leak the goroutine.
