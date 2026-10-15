@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 )
 
 var blockedHeaders = map[string]bool{
@@ -46,8 +45,11 @@ func NewHTTPTransport(serverURL string, auth Authenticator, customHeaders map[st
 		transport = newFallbackMCPTransport()
 	}
 	return &HTTPTransport{
-		serverURL:     serverURL,
-		httpClient:    mcpHTTPClient(transport, 30*time.Second),
+		serverURL: serverURL,
+		// No overall client Timeout: it would cut SSE tool-result bodies mid-
+		// stream (the old 30s cap). Handshake is bounded by the transport's
+		// ResponseHeaderTimeout; lifetime by the per-call context.
+		httpClient:    mcpHTTPClient(transport, 0),
 		auth:          auth,
 		customHeaders: customHeaders,
 	}

@@ -270,6 +270,12 @@ func (m *ReauthManager) verifyRedis(userID int64, fingerprint, token string) err
 		return ErrReauthUnavailable // fail closed on Redis errors
 	}
 	raw, _ := v.(string)
+	if err == redis.Nil {
+		return ErrReauthTokenBad
+	}
+	if err != nil {
+		return ErrReauthUnavailable // fail closed on Redis errors
+	}
 	var p reauthPayload
 	if json.Unmarshal([]byte(raw), &p) != nil || p.UserID != userID || p.Fingerprint != fingerprint {
 		return ErrReauthTokenBad // burned by the GETDEL above

@@ -77,4 +77,30 @@ type DBConfig struct {
 	SSLMode    string
 	Timezone   string // e.g. "UTC" — appended to PG/MySQL DSN
 	SQLitePath string
+
+	// Pool overrides; zero values keep the dialect's built-in defaults.
+	// Multi-replica deployments set these so that
+	// replicas x MaxOpenConns fits the server's max_connections.
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
+// applyPoolOverrides copies non-zero config pool settings over the dialect's
+// recommended PoolConfig.
+func applyPoolOverrides(pool PoolConfig, cfg DBConfig) PoolConfig {
+	if cfg.MaxOpenConns > 0 {
+		pool.MaxOpenConns = cfg.MaxOpenConns
+	}
+	if cfg.MaxIdleConns > 0 {
+		pool.MaxIdleConns = cfg.MaxIdleConns
+	}
+	if cfg.ConnMaxLifetime > 0 {
+		pool.ConnMaxLifetime = cfg.ConnMaxLifetime
+	}
+	if cfg.ConnMaxIdleTime > 0 {
+		pool.ConnMaxIdleTime = cfg.ConnMaxIdleTime
+	}
+	return pool
 }

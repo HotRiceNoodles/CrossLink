@@ -143,7 +143,9 @@ func (a *sigv4Auth) Apply(req *http.Request) error {
 	var bodyBytes []byte
 	if req.Body != nil {
 		var err error
-		bodyBytes, err = io.ReadAll(req.Body)
+		// Bounded read: OAuth/token endpoints have no legitimate multi-MB
+		// body, and this outbound path has no global MaxBytesReader ceiling.
+		bodyBytes, err = io.ReadAll(io.LimitReader(req.Body, 1<<20))
 		if err != nil {
 			return fmt.Errorf("read body for signing: %w", err)
 		}

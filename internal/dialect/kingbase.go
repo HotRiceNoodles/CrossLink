@@ -59,7 +59,7 @@ func (k *KingbaseDialect) InitDB() (*gorm.DB, error) {
 		return nil, fmt.Errorf("open kingbase connection: %w", err)
 	}
 
-	pool := k.PoolConfig()
+	pool := applyPoolOverrides(k.PoolConfig(), k.cfg)
 	sqlDB.SetMaxOpenConns(pool.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)

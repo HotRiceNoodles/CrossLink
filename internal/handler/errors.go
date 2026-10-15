@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +19,30 @@ import (
 )
 
 // resolveErrorStatus maps a Resolver error to an HTTP status. Alias-on-Community
-// is 403; everything else stays 404 (the historical behavior).
+// is 403; "model exists but every route was filtered out" (ErrNoActiveProvider —
+// all circuits open / tier-gated) is a temporary server condition and maps to
+// 503 so clients retry instead of treating the model as unknown; everything
+// else (unknown model, DB query failure) stays 404 (the historical behavior).
 func resolveErrorStatus(err error) int {
-	if errors.Is(err, router.ErrProRequired) {
+	switch {
+	case errors.Is(err, router.ErrProRequired):
 		return http.StatusForbidden
+	case errors.Is(err, router.ErrNoActiveProvider):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusNotFound
 	}
-	return http.StatusNotFound
+}
+
+// resolveErrorMessage returns a client-safe body message for a Resolve
+// failure. The 503 no-active-provider case states the real condition without
+// upstream cause detail (which may embed provider internals); the detailed
+// cause stays in server logs and usage_logs via logRequestStageError.
+func resolveErrorMessage(err error) string {
+	if errors.Is(err, router.ErrNoActiveProvider) {
+		return "model temporarily unavailable: all provider routes are circuit-open or disabled; retry later"
+	}
+	return safeProviderError(err)
 }
 
 // mapProviderErrorStatus maps a provider error to an appropriate HTTP status code.
@@ -195,18 +212,16 @@ func logRequestStageError(usageSvc *service.UsageService, c *gin.Context, routeT
 		}
 	}
 	c.Set("usage_logged", true)
-	submitUsage(func() {
-		usageSvc.Log(context.Background(), &service.UsageEntry{
-			RouteType:      routeType,
-			ModelRequested: model,
-			APIKeyID:       keyID,
-			TeamID:         teamID,
-			OrgID:          orgID,
-			StatusCode:     statusCode,
-			ErrorType:      errorType,
-			ErrorMessage:   sanitizeMessageForLog(message),
-			ErrorStage:     stage,
-			LatencyMs:      time.Since(start).Milliseconds(),
-		})
+	submitUsageEntry(usageSvc, &service.UsageEntry{
+		RouteType:      routeType,
+		ModelRequested: model,
+		APIKeyID:       keyID,
+		TeamID:         teamID,
+		OrgID:          orgID,
+		StatusCode:     statusCode,
+		ErrorType:      errorType,
+		ErrorMessage:   sanitizeMessageForLog(message),
+		ErrorStage:     stage,
+		LatencyMs:      time.Since(start).Milliseconds(),
 	})
 }

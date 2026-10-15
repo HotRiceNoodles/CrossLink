@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
@@ -87,10 +88,13 @@ func PATAuthMiddleware(patSvc PATValidator, users UserResolver, action string) g
 		c.Set("pat_id", tok.ID)
 		c.Set("pat_scopes", scopes)
 
-		// Async last-used touch — never block the request path.
+		// Async last-used touch — never block the request path, but bound it:
+		// un-timed Background goroutines pile up when the DB hangs.
 		patID := tok.ID
 		go func() {
-			_ = patSvc.TouchLastUsed(context.Background(), patID)
+			tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = patSvc.TouchLastUsed(tctx, patID)
 		}()
 
 		c.Next()

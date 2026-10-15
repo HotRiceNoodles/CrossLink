@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 )
 
 type SSETransport struct {
@@ -29,8 +28,10 @@ func NewSSETransport(serverURL string, auth Authenticator, customHeaders map[str
 		transport = newFallbackMCPTransport()
 	}
 	return &SSETransport{
-		serverURL:     serverURL,
-		httpClient:    mcpHTTPClient(transport, 30*time.Second),
+		serverURL: serverURL,
+		// No overall client Timeout (see NewHTTPTransport): SSE bodies are
+		// bounded by the transport's ResponseHeaderTimeout + per-call context.
+		httpClient:    mcpHTTPClient(transport, 0),
 		auth:          auth,
 		customHeaders: customHeaders,
 	}

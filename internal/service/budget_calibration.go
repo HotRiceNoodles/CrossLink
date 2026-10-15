@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -24,6 +26,21 @@ func NewBudgetCalibrationService(db *gorm.DB, rdb *redis.Client) *BudgetCalibrat
 	return &BudgetCalibrationService{db: db, rdb: rdb}
 }
 
+// Calibration lock failures are RECOGNIZABLE: a round never proceeds
+// unlocked (supervisor review — the previous "proceed on Redis error"
+// fallback voided the mutual-exclusion guarantee), and every Redis write
+// re-verifies ownership atomically so a lease that expires mid-run stops the
+// stale holder instead of letting it corrupt counters.
+var (
+	ErrCalibrationLockHeld        = errors.New("budget calibration lock held by another replica")
+	ErrCalibrationLockUnavailable = errors.New("budget calibration lock store unavailable")
+	ErrCalibrationLockLost        = errors.New("budget calibration lock lost mid-run (lease expired)")
+)
+
+// calibrationRunBudget bounds one round strictly under the lease TTL so a
+// normal round cannot outlive its own lease.
+const calibrationRunBudget = 40 * time.Minute
+
 func (s *BudgetCalibrationService) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
@@ -37,33 +54,94 @@ func (s *BudgetCalibrationService) Run(ctx context.Context) {
 	}
 }
 
+// CalibrateOnce (manual/admin trigger) shares the exact same entry as the
+// hourly loop: local mutex + cross-replica lock + ownership-checked writes.
+// Manual-vs-scheduled concurrency therefore cannot double-calibrate.
 func (s *BudgetCalibrationService) CalibrateOnce(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.calibrateTeams(ctx); err != nil {
-		return err
-	}
-	if err := s.calibrateOrgs(ctx); err != nil {
-		return err
-	}
-	return s.calibrateKeys(ctx)
+	return s.calibrateOnceLocked(ctx)
 }
 
 func (s *BudgetCalibrationService) calibrateAll(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.calibrateTeams(ctx); err != nil {
-		slog.Warn("budget calibration: teams failed", "error", err)
-	}
-	if err := s.calibrateOrgs(ctx); err != nil {
-		slog.Warn("budget calibration: orgs failed", "error", err)
-	}
-	if err := s.calibrateKeys(ctx); err != nil {
-		slog.Warn("budget calibration: keys failed", "error", err)
+	if err := s.calibrateOnceLocked(ctx); err != nil {
+		switch {
+		case errors.Is(err, ErrCalibrationLockHeld):
+			slog.Info("budget calibration: another replica holds the lock, skipping this round")
+		case errors.Is(err, ErrCalibrationLockUnavailable):
+			slog.Warn("budget calibration: lock store unavailable, SKIPPING this round (never unlocked)", "error", err)
+		default:
+			slog.Warn("budget calibration round failed", "error", err)
+		}
 	}
 }
 
-func (s *BudgetCalibrationService) calibrateTeams(ctx context.Context) error {
+func (s *BudgetCalibrationService) calibrateOnceLocked(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, release, err := s.acquireCalibrationLock(ctx)
+	if err != nil {
+		return err
+	}
+	if release == nil {
+		return ErrCalibrationLockHeld
+	}
+	defer release()
+
+	runCtx, cancel := context.WithTimeout(ctx, calibrationRunBudget)
+	defer cancel()
+
+	for _, step := range []func(context.Context, string) error{
+		s.calibrateTeams, s.calibrateOrgs, s.calibrateKeys,
+	} {
+		if err := step(runCtx, token); err != nil {
+			if errors.Is(err, ErrCalibrationLockLost) {
+				// Ownership is gone — stop writing immediately; remaining
+				// scopes wait for the (new holder) next round.
+				slog.Warn("budget calibration: lease lost mid-run, aborting remaining scopes", "error", err)
+				return err
+			}
+			slog.Warn("budget calibration: scope failed", "error", err)
+		}
+	}
+	return nil
+}
+
+const calibrationLockKey = "budget:calibration:lock"
+const calibrationLockTTL = 50 * time.Minute
+
+var calibrationUnlockScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+	return redis.call("DEL", KEYS[1])
+end
+return 0`)
+
+// acquireCalibrationLock takes the cross-replica lock. Errors are RETURNED,
+// never swallowed into an unlocked run: store failures surface as
+// ErrCalibrationLockUnavailable so callers skip the round; a taken lock
+// surfaces as a nil release. The release is token-guarded so a stale holder
+// never deletes a newer holder lock.
+func (s *BudgetCalibrationService) acquireCalibrationLock(ctx context.Context) (token string, release func(), err error) {
+	var raw [16]byte
+	if _, rerr := rand.Read(raw[:]); rerr != nil {
+		return "", nil, fmt.Errorf("%w: token: %v", ErrCalibrationLockUnavailable, rerr)
+	}
+	token = fmt.Sprintf("%x", raw)
+	ok, serr := s.rdb.SetNX(ctx, calibrationLockKey, token, calibrationLockTTL).Result()
+	if serr != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrCalibrationLockUnavailable, serr)
+	}
+	if !ok {
+		return "", nil, nil
+	}
+	return token, func() {
+		releaseCtx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer rcancel()
+		if uerr := calibrationUnlockScript.Run(releaseCtx, s.rdb, []string{calibrationLockKey}, token).Err(); uerr != nil {
+			slog.Warn("budget calibration: lock release failed (expires by TTL)", "error", uerr)
+		}
+	}, nil
+}
+
+func (s *BudgetCalibrationService) calibrateTeams(ctx context.Context, token string) error {
 	var teams []model.Team
 	if err := s.db.WithContext(ctx).Where("budget_limit > 0").Find(&teams).Error; err != nil {
 		return fmt.Errorf("query teams: %w", err)
@@ -109,13 +187,15 @@ func (s *BudgetCalibrationService) calibrateTeams(ctx context.Context) error {
 		}
 		for _, team := range periodTeams {
 			spent := spendMap[team.ID]
-			s.syncRedisAndSnapshot(ctx, "team", team.ID, pk, period, spent, team.BudgetLimit)
+			if lerr := s.syncRedisAndSnapshot(ctx, token, "team", team.ID, pk, period, spent, team.BudgetLimit); lerr != nil {
+				return lerr
+			}
 		}
 	}
 	return nil
 }
 
-func (s *BudgetCalibrationService) calibrateOrgs(ctx context.Context) error {
+func (s *BudgetCalibrationService) calibrateOrgs(ctx context.Context, token string) error {
 	var orgs []model.Organization
 	if err := s.db.WithContext(ctx).Where("budget_limit > 0 AND deleted_at IS NULL").Find(&orgs).Error; err != nil {
 		return fmt.Errorf("query orgs: %w", err)
@@ -159,13 +239,15 @@ func (s *BudgetCalibrationService) calibrateOrgs(ctx context.Context) error {
 		}
 		for _, org := range periodOrgs {
 			spent := spendMap[org.ID]
-			s.syncRedisAndSnapshot(ctx, "org", org.ID, pk, period, spent, org.BudgetLimit)
+			if lerr := s.syncRedisAndSnapshot(ctx, token, "org", org.ID, pk, period, spent, org.BudgetLimit); lerr != nil {
+				return lerr
+			}
 		}
 	}
 	return nil
 }
 
-func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context) error {
+func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context, token string) error {
 	var keys []model.APIKey
 	if err := s.db.WithContext(ctx).Where("max_budget > 0").Find(&keys).Error; err != nil {
 		return fmt.Errorf("query keys: %w", err)
@@ -209,25 +291,46 @@ func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context) error {
 		}
 		for _, k := range periodKeys {
 			spent := spendMap[k.ID]
-			s.syncRedisAndSnapshot(ctx, "key", k.ID, pk, period, spent, k.MaxBudget)
+			if lerr := s.syncRedisAndSnapshot(ctx, token, "key", k.ID, pk, period, spent, k.MaxBudget); lerr != nil {
+				return lerr
+			}
 		}
 	}
 	return nil
 }
 
-func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, scope string, targetID int64, pk, period string, spent, budget float64) {
-	key := fmt.Sprintf("budget:%s:%d:%s", scope, targetID, pk)
+// calibratedWriteScript performs the read-modify-write of one budget
+// counter ATOMICALLY and ONLY while the caller still owns the calibration
+// lease: -1 = ownership lost (stale holder must stop), 1 = key created,
+// 0 = reconciled in place. This also removes the old GET→delta→INCRBYFLOAT
+// interleave two replicas could double-apply.
+var calibratedWriteScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+	return -1
+end
+local cur = redis.call('GET', KEYS[2])
+local spent = tonumber(ARGV[2])
+if not cur then
+	redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+	return 1
+end
+local curVal = tonumber(cur)
+if curVal ~= spent then
+	redis.call('INCRBYFLOAT', KEYS[2], spent - curVal)
+end
+redis.call('EXPIRE', KEYS[2], ARGV[3])
+return 0`)
 
-	current, err := s.rdb.Get(ctx, key).Float64()
+func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, token, scope string, targetID int64, pk, period string, spent, budget float64) error {
+	key := fmt.Sprintf("budget:%s:%d:%s", scope, targetID, pk)
+	res, err := calibratedWriteScript.Run(ctx, s.rdb,
+		[]string{calibrationLockKey, key}, token, spent, int(PeriodTTL(period).Seconds())).Int()
 	if err != nil {
-		// Key doesn't exist yet — set the authoritative value
-		s.rdb.Set(ctx, key, spent, PeriodTTL(period))
-	} else {
-		delta := spent - current
-		if delta != 0 {
-			s.rdb.IncrByFloat(ctx, key, delta)
-		}
-		s.rdb.Expire(ctx, key, PeriodTTL(period))
+		slog.Warn("budget calibration: calibrated write failed", "key", key, "error", err)
+		return nil // store error (not ownership loss): skip this row, keep going
+	}
+	if res == -1 {
+		return fmt.Errorf("%w: key=%s", ErrCalibrationLockLost, key)
 	}
 
 	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -242,6 +345,7 @@ func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, sco
 	}).Error; err != nil {
 		slog.Warn("budget calibration: failed to save snapshot", "scope", scope, "id", targetID, "error", err)
 	}
+	return nil
 }
 
 func periodBoundaries(period string) (start, end time.Time) {

@@ -14,15 +14,19 @@ import (
 // any error as "no override" and fall back to the config value.
 func readStatsTimezoneOverride(cfg *config.Config) (string, error) {
 	dia, err := dialect.New(dialect.DBConfig{
-		Driver:     cfg.Database.Driver,
-		Host:       cfg.Database.Host,
-		Port:       cfg.Database.Port,
-		User:       cfg.Database.User,
-		Password:   cfg.Database.Password,
-		DBName:     cfg.Database.DBName,
-		SSLMode:    cfg.Database.SSLMode,
-		SQLitePath: cfg.Database.SQLitePath,
-		Timezone:   "",
+		Driver:          cfg.Database.Driver,
+		Host:            cfg.Database.Host,
+		Port:            cfg.Database.Port,
+		User:            cfg.Database.User,
+		Password:        cfg.Database.Password,
+		DBName:          cfg.Database.DBName,
+		SSLMode:         cfg.Database.SSLMode,
+		SQLitePath:      cfg.Database.SQLitePath,
+		Timezone:        "",
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
 	})
 	if err != nil {
 		return "", err

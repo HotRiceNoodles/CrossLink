@@ -24,6 +24,10 @@ import (
 const migParityUp = migDir + "000004_usage_model_parity.up.sql"
 const migParityDn = migDir + "000004_usage_model_parity.down.sql"
 
+// F34 billing idempotency column (sqlite chain 000007): usage_logs.event_id.
+const migEventIDUp = migDir + "000007_usage_event_id.up.sql"
+const migEventIDDn = migDir + "000007_usage_event_id.down.sql"
+
 func applyChain(t *testing.T, db *gorm.DB, files ...string) {
 	t.Helper()
 	for _, f := range files {
@@ -52,6 +56,7 @@ func fullUsageLog() *model.UsageLog {
 	sys, hist, q, tool, toolOut, ctxWin, util, flags := 10, 20, 30, 40, 50, 128000, 8123, 7
 	return &model.UsageLog{
 		RequestID: "chain-1",
+		EventID:   strPtr("evt-chain-1"),
 		RouteType: "chat", ModelRequested: "req-model", ModelUsed: "used-model",
 		InputTokens: 11, OutputTokens: 22, Cost: 1.5, BillableCost: 2.25,
 		LatencyMs: 99, FirstTokenMs: &firstMs, StatusCode: 200, ErrorType: "",
@@ -76,6 +81,9 @@ func assertFullUsageLog(t *testing.T, got *model.UsageLog) {
 	t.Helper()
 	if got.RequestID != "chain-1" {
 		t.Fatalf("base columns lost: %+v", got)
+	}
+	if got.EventID == nil || *got.EventID != "evt-chain-1" {
+		t.Fatalf("event_id (F34 idempotency key) lost: %+v", got)
 	}
 	if got.InputTokens != 11 || got.OutputTokens != 22 || got.Cost != 1.5 || got.BillableCost != 2.25 {
 		t.Fatalf("cost columns lost: %+v", got)
@@ -135,11 +143,14 @@ func insertAndReadBack(t *testing.T, db *gorm.DB, label string) {
 // the current model writes and reads back EVERY field.
 func TestFreshInstallFullChainModelWriteAllFields(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp)
 	// Parity columns must come from 000004 only — the duplicate-column guard
 	// for this migration class.
 	if !hasUsageColumn(t, db, "billable_cost") || !hasUsageColumn(t, db, "attempts") || !hasUsageColumn(t, db, "context_snapshot") {
 		t.Fatal("000004 did not add the parity columns")
+	}
+	if !hasUsageColumn(t, db, "event_id") {
+		t.Fatal("000007 did not add the event_id idempotency column")
 	}
 	insertAndReadBack(t, db, "fresh-install full chain")
 }
@@ -154,8 +165,8 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 	} else {
 		t.Logf("pre-upgrade write fails as expected: %v", err)
 	}
-	applyChain(t, db, migTruncatedUp, migParityUp)
-	insertAndReadBack(t, db, "deployed upgrade 000003+000004")
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp)
+	insertAndReadBack(t, db, "deployed upgrade 000003+000004+000007")
 }
 
 // Rollback/re-upgrade over the FULL new tail (golang-migrate steps one
@@ -164,9 +175,13 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 // parity-column DATA (column-drop semantics), which is asserted explicitly.
 func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp)
 	insertAndReadBack(t, db, "before rollback")
 
+	applyChain(t, db, migEventIDDn)
+	if hasUsageColumn(t, db, "event_id") {
+		t.Fatal("000007 down left event_id behind")
+	}
 	applyChain(t, db, migParityDn)
 	if hasUsageColumn(t, db, "billable_cost") {
 		t.Fatal("000004 down left parity columns behind")
@@ -185,7 +200,7 @@ func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 		t.Fatal("000003 down left guardrail_truncated behind")
 	}
 
-	applyChain(t, db, migTruncatedUp, migParityUp)
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp)
 	if err := db.Exec("DELETE FROM usage_logs").Error; err != nil {
 		t.Fatal(err)
 	}

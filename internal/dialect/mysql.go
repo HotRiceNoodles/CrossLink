@@ -63,7 +63,7 @@ func (m *MySQLDialect) InitDB() (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get sql.DB: %w", err)
 	}
-	pc := m.PoolConfig()
+	pc := applyPoolOverrides(m.PoolConfig(), m.cfg)
 	sqlDB.SetMaxOpenConns(pc.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(pc.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(pc.ConnMaxLifetime)

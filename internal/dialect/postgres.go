@@ -71,7 +71,7 @@ func (p *PostgresDialect) InitDB() (*gorm.DB, error) {
 		return nil, fmt.Errorf("get sql.DB: %w", err)
 	}
 
-	pool := p.PoolConfig()
+	pool := applyPoolOverrides(p.PoolConfig(), p.cfg)
 	sqlDB.SetMaxOpenConns(pool.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)

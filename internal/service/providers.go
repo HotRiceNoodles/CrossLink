@@ -24,14 +24,20 @@ type Services struct {
 }
 
 // ProvideServices constructs all service instances from repos + infra dependencies.
-func ProvideServices(repos *repository.Repos, rdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider, dlCfg config.DataLensConfig, d dialect.Dialect) *Services {
+// cacheRdb is the Redis client for the response cache (may be a dedicated
+// instance so its eviction policy can differ from quota/budget keys); nil
+// falls back to the shared rdb.
+func ProvideServices(repos *repository.Repos, rdb *redis.Client, cacheRdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider, dlCfg config.DataLensConfig, d dialect.Dialect) *Services {
+	if cacheRdb == nil {
+		cacheRdb = rdb
+	}
 	return &Services{
 		UsageSvc:       NewUsageService(repos.UsageLogRepo),
 		BudgetSvc:      NewBudgetService(rdb),
 		BudgetAlertSvc: NewBudgetAlertService(repos.BudgetAlertRepo),
 		BudgetCalSvc:   NewBudgetCalibrationService(db, rdb),
 		LatencySvc:     NewLatencyService(rdb),
-		CacheSvc:       NewCacheService(rdb, db, *cacheCfg),
+		CacheSvc:       NewCacheService(cacheRdb, db, *cacheCfg),
 		KeySvc:         NewKeyService(repos.APIKeyRepo, repos.APIKeyHashRepo, db, cp, rdb),
 		ActiveTracker:  NewActiveRequestTracker(rdb),
 		IdemCache:      NewIdempotencyCache(rdb),

@@ -73,6 +73,20 @@ type tpmReservations struct {
 	Org  int // tokens reserved at org level (0 = no reservation)
 }
 
+// tpmWindowTTLSeconds is the Redis TTL for every TPM counter — reservation
+// AND settlement must use the same value: a shorter settlement TTL lets
+// window-edge keys expire early and under-count.
+const tpmWindowTTLSeconds = 120
+
+// refundTPMReservation rolls back a reservation using the negative-delta-safe
+// script (no-op on a missing/expired key) with the same window TTL as the
+// reservation itself.
+func refundTPMReservation(ctx context.Context, rdb *redis.Client, key string, reservation int) {
+	if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, -reservation, tpmWindowTTLSeconds).Result(); err != nil {
+		slog.Warn("tpm reservation refund failed", "key", key, "error", err)
+	}
+}
+
 // RateLimitProvider supplies effective rate-limit defaults at request time
 // (runtime settings snapshot — DB row > yaml). Satisfied by *settings.Provider.
 type RateLimitProvider interface {
@@ -352,7 +366,7 @@ func tpmLimit(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgC
 		}
 
 		ctx := c.Request.Context()
-		windowTTL := int((2 * time.Minute).Seconds())
+		windowTTL := tpmWindowTTLSeconds
 
 		// Key-level TPM: atomic reserve
 		result, err := reserveTPMAtomicScript.Run(ctx, rdb, []string{tpmKey}, reservation, limit, windowTTL).Int64Slice()
@@ -388,8 +402,11 @@ func tpmLimit(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgC
 				teamTPMKey := fmt.Sprintf("tpm:team:%d", team.ID)
 				teamResult, teamErr := reserveTPMAtomicScript.Run(ctx, rdb, []string{teamTPMKey}, reservation, team.TPMLimit, windowTTL).Int64Slice()
 				if teamErr == nil && len(teamResult) > 1 && teamResult[1] == 0 {
-					// Team rejected: refund key-level reservation
-					rdb.DecrBy(ctx, tpmKey, int64(reservation))
+					// Team rejected: refund key-level reservation via the
+					// negative-delta-safe script — a bare DECRBY can resurrect
+					// an expired key as a negative counter with no TTL, gifting
+					// free headroom for the rest of the new window.
+					refundTPMReservation(ctx, rdb, tpmKey, reservation)
 					res.Key = 0
 					abortTPMLimit(c, rdb, teamTPMKey, team.TPMLimit, "team token rate limit exceeded")
 					return
@@ -408,12 +425,13 @@ func tpmLimit(rdb *redis.Client, p RateLimitProvider, teamCache *TeamCache, orgC
 					orgTPMKey := fmt.Sprintf("tpm:org:%d", org.ID)
 					orgResult, orgErr := reserveTPMAtomicScript.Run(ctx, rdb, []string{orgTPMKey}, reservation, org.TPMLimit, windowTTL).Int64Slice()
 					if orgErr == nil && len(orgResult) > 1 && orgResult[1] == 0 {
-						// Org rejected: refund key and team reservations
-						rdb.DecrBy(ctx, tpmKey, int64(reservation))
+						// Org rejected: refund key and team reservations (same
+						// negative-delta-safe script rationale as above).
+						refundTPMReservation(ctx, rdb, tpmKey, reservation)
 						res.Key = 0
 						if res.Team > 0 && teamID > 0 {
 							teamTPMKey := fmt.Sprintf("tpm:team:%d", teamID)
-							rdb.DecrBy(ctx, teamTPMKey, int64(reservation))
+							refundTPMReservation(ctx, rdb, teamTPMKey, reservation)
 							res.Team = 0
 						}
 						abortTPMLimit(c, rdb, orgTPMKey, org.TPMLimit, "organization token rate limit exceeded")
@@ -477,7 +495,7 @@ func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 			if key != "" {
 				if delta := total - keyRes; delta != 0 {
 					RecordTPMSettlementCorrection(delta)
-					if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+					if _, err := incrByExpireScript.Run(ctx, rdb, []string{key}, delta, tpmWindowTTLSeconds).Result(); err != nil {
 						slog.Warn("report tokens redis atomic incrby failed", "key", key, "error", err)
 					}
 				}
@@ -489,7 +507,7 @@ func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 			if teamID > 0 && (total > 0 || teamRes > 0) {
 				teamTPMKey := fmt.Sprintf("tpm:team:%d", teamID)
 				if delta := total - teamRes; delta != 0 {
-					if _, err := incrByExpireScript.Run(ctx, rdb, []string{teamTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+					if _, err := incrByExpireScript.Run(ctx, rdb, []string{teamTPMKey}, delta, tpmWindowTTLSeconds).Result(); err != nil {
 						slog.Warn("report tokens redis team atomic incrby failed", "key", teamTPMKey, "error", err)
 					}
 				}
@@ -500,7 +518,7 @@ func ReportTokens(rdb *redis.Client, orgCache *OrgCache) gin.HandlerFunc {
 				if orgID := c.GetInt64("org_id"); orgID != 0 && (total > 0 || orgRes > 0) {
 					orgTPMKey := fmt.Sprintf("tpm:org:%d", orgID)
 					if delta := total - orgRes; delta != 0 {
-						if _, err := incrByExpireScript.Run(ctx, rdb, []string{orgTPMKey}, delta, int(time.Minute.Seconds())).Result(); err != nil {
+						if _, err := incrByExpireScript.Run(ctx, rdb, []string{orgTPMKey}, delta, tpmWindowTTLSeconds).Result(); err != nil {
 							slog.Warn("report tokens redis org atomic incrby failed", "key", orgTPMKey, "error", err)
 						}
 					}

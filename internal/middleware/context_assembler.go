@@ -3,7 +3,6 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/crosslink/internal/model"
@@ -24,10 +23,28 @@ type AssemblerHook func(c *gin.Context, tpl *model.PromptTemplate, variables map
 // regression). Must run AFTER ReadBody (reads BodyKey) and BEFORE Cache/Guardrails
 // so downstream sees the assembled request. See
 // docs/plans/2026-07-14-context-engineering-gateway-design.md.
+// assemblerMaxBody caps the EXPANDED request body (matches the ReadBody
+// per-request ceiling): the pre-marshal estimate and the post-marshal
+// SetBodyBytes check both enforce it, so a template expansion can never
+// allocate past the body envelope before being rejected.
+const assemblerMaxBody = 10 << 20
+
 func ContextAssembler(reg *service.TemplateRegistry, hook AssemblerHook) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body := GetBodyBytes(c)
 		if len(body) == 0 {
+			c.Next()
+			return
+		}
+		// Fast path: the x_context field cannot be present unless its literal
+		// key appears in the raw bytes — BUT JSON allows ESCAPED key names
+		// (`{"\u0078_context":{...}}` unmarshals to the same key and would
+		// silently skip template expansion and the permission hook). Escapes
+		// require a backslash in the raw bytes, so any backslash falls back
+		// to the full parse. This keeps the fast path for escape-free bodies
+		// (the overwhelming majority) while preserving exact pre-optimization
+		// semantics for every legal JSON encoding of the field name.
+		if !bytes.Contains(body, []byte(`"x_context"`)) && !bytes.ContainsRune(body, '\\') {
 			c.Next()
 			return
 		}
@@ -99,16 +116,54 @@ func ContextAssembler(reg *service.TemplateRegistry, hook AssemblerHook) gin.Han
 		}
 
 		delete(raw, "x_context")
+
+		// PRE-MARSHAL size cap (acceptance blocker 2): json.Marshal below
+		// allocates the FULL expanded body before SetBodyBytes can check the
+		// ceiling — a giant template would OOM/allocate first, reject later.
+		// Conservative estimate BEFORE building: original body bytes plus
+		// every injected string at ×6 (worst-case JSON escaping of control
+		// characters). The SetBodyBytes ceiling check after Marshal remains
+		// the exact backstop.
+		est := int64(len(body))
+		for _, s := range []string{rendered.SystemPrompt} {
+			est += int64(len(s)) * 6
+		}
+		for _, fs := range rendered.FewShot {
+			est += (int64(len(fs.Role)) + int64(len(fs.Content))) * 6
+		}
+		if est > assemblerMaxBody {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error_code": "template_expansion_too_large",
+				"error":      "assembled request exceeds the body-size ceiling; template too large",
+			})
+			return
+		}
+		// GLOBAL budget reservation BEFORE the Marshal allocation (acceptance
+		// round 2): a per-request ceiling alone does not stop N concurrent
+		// expansions; the estimated growth delta leaves the shared budget
+		// first. SetBodyBytes consumes this pre-allocation exactly.
+		if !PreallocBodyGrowth(c, est-int64(len(body))) {
+			budgetExhaustedAbort(c)
+			return
+		}
+
 		newBody, err := json.Marshal(raw)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "reassemble request failed"})
 			return
 		}
-		// B1 double-update: both BodyKey (for GetBodyBytes) and c.Request.Body
-		// (for direct readers) must reflect the assembled body, since this runs
-		// BEFORE Cache which keys on the body.
-		c.Set(BodyKey, newBody)
-		c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
+		// B1 double-update via SetBodyBytes: BodyKey (GetBodyBytes consumers)
+		// AND c.Request.Body (direct readers) — this runs BEFORE Cache which
+		// keys on the body. Budget-aware (supervisor F26 review): template
+		// expansion may not push the body past the per-request ceiling or the
+		// in-flight budget; exceeding either aborts with a typed error.
+		if !SetBodyBytes(c, newBody) {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error_code": "template_expansion_too_large",
+				"error":      "assembled request exceeds the body-size ceiling; template too large",
+			})
+			return
+		}
 		c.Request.ContentLength = int64(len(newBody))
 		c.Set("template_id", tpl.ID)
 		c.Next()

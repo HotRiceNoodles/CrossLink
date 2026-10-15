@@ -61,14 +61,19 @@ func CloseIdleOutboundConnections() {
 
 // newSharedMCPTransport builds the *http.Transport shared by MCP HTTP/SSE
 // transports, with SSRF-safe dialers wired when the guard is enabled.
+// ResponseHeaderTimeout is the handshake bound — the clients built on this
+// transport deliberately carry NO overall http.Client.Timeout because
+// streamable-HTTP tool results arrive as SSE bodies that may legitimately run
+// minutes; the per-call request context bounds their lifetime.
 func newSharedMCPTransport(maxIdleConns int) *http.Transport {
 	if maxIdleConns <= 0 {
 		maxIdleConns = 10
 	}
 	t := &http.Transport{
-		MaxIdleConnsPerHost: maxIdleConns,
-		MaxIdleConns:        maxIdleConns,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConnsPerHost:   maxIdleConns,
+		MaxIdleConns:          maxIdleConns,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
 	}
 	if outboundSSRFGuard {
 		t.DialContext = guardrail.NewSSRFSafeDialer(mcpSSRFDialTimeout)

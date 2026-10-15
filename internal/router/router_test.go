@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -272,7 +273,9 @@ func TestResolver_Resolve_NoRouteErrorCarriesCircuitCause(t *testing.T) {
 	_, err := NewResolver(reg, disabledRepo, health, strategies, nil, nil, nil, nil).
 		Resolve(context.Background(), "test-model", 0)
 	require.Error(t, err)
-	assert.Equal(t, "no active provider found for model: test-model", err.Error())
+	assert.True(t, errors.Is(err, ErrNoActiveProvider),
+		"filtered-out model must match ErrNoActiveProvider (503 semantics), got %v", err)
+	assert.Contains(t, err.Error(), "no active provider for model: test-model")
 
 	// Circuit exclusion: the error now carries the recorded upstream cause.
 	repo := &mockProviderModelRepo{
@@ -289,8 +292,9 @@ func TestResolver_Resolve_NoRouteErrorCarriesCircuitCause(t *testing.T) {
 	_, err = NewResolver(reg, repo, health, strategies, nil, nil, nil, nil).
 		Resolve(context.Background(), "test-model", 0)
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoActiveProvider)
 	msg := err.Error()
-	assert.Contains(t, msg, "no active provider found for model: test-model")
+	assert.Contains(t, msg, "no active provider for model: test-model")
 	assert.Contains(t, msg, "deepseek circuit open")
 	assert.Contains(t, msg, "not_found")
 	assert.Contains(t, msg, "Model not exists")

@@ -148,6 +148,13 @@ func TestGatewayErrorStatus(t *testing.T) {
 		{"upstream 500 stays 500", &provider.ProviderError{StatusCode: 500}, 500},
 		{"translator missing model", translator.ErrMissingModel, 400},
 		{"generic error", errors.New("boom"), 500},
+		{
+			// Circuit-open resolve failure wrapped by GatewayService
+			// ("resolve route: %w") must surface 503, not 500.
+			"all routes circuit-open",
+			fmt.Errorf("resolve route: %w for model: m (mockup circuit open)", router.ErrNoActiveProvider),
+			http.StatusServiceUnavailable,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -323,6 +330,14 @@ func TestResolveErrorStatus(t *testing.T) {
 		{"alias on Community (Pro required)", router.ErrProRequired, http.StatusForbidden},
 		{"wrapped Pro required", fmt.Errorf("resolve route: %w", router.ErrProRequired), http.StatusForbidden},
 		{"generic resolve error", errors.New("no active provider"), http.StatusNotFound},
+		{
+			// soak1 attribution fix: model exists but every route is
+			// circuit-open/tier-gated -> temporary condition, 503 not 404.
+			"all routes circuit-open",
+			fmt.Errorf("%w for model: mock (mockup circuit open, reopens in 4s)", router.ErrNoActiveProvider),
+			http.StatusServiceUnavailable,
+		},
+		{"unknown model stays 404", errors.New("no provider found for model: nope"), http.StatusNotFound},
 		{"nil error", nil, http.StatusNotFound},
 	}
 	for _, tt := range tests {
@@ -332,6 +347,15 @@ func TestResolveErrorStatus(t *testing.T) {
 				t.Errorf("resolveErrorStatus() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveErrorMessage(t *testing.T) {
+	if msg := resolveErrorMessage(fmt.Errorf("%w for model: m (mockup circuit open, last error: rate_limit: secret)", router.ErrNoActiveProvider)); msg != "model temporarily unavailable: all provider routes are circuit-open or disabled; retry later" {
+		t.Errorf("sentinel message must state the condition without upstream detail, got %q", msg)
+	}
+	if msg := resolveErrorMessage(errors.New("no provider found for model: nope")); msg != "upstream provider error" {
+		t.Errorf("non-sentinel keeps safeProviderError fallback, got %q", msg)
 	}
 }
 

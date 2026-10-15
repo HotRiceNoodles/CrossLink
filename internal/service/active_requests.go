@@ -22,10 +22,13 @@ func NewActiveRequestTracker(rdb *redis.Client) *ActiveRequestTracker {
 	return &ActiveRequestTracker{rdb: rdb}
 }
 
-// incrExpireActiveScript atomically increments the active request counter and sets TTL.
+// incrExpireActiveScript atomically increments the active request counter and
+// refreshes the TTL. TTL-once-on-first-incr let a continuously busy
+// provider's key expire 30 minutes after creation, silently resetting its
+// load signal to 0 mid-traffic.
 var incrExpireActiveScript = redis.NewScript(`
 	local count = redis.call('INCR', KEYS[1])
-	if count == 1 then
+	if count == 1 or redis.call('TTL', KEYS[1]) < 0 then
 		redis.call('EXPIRE', KEYS[1], ARGV[1])
 	end
 	return count

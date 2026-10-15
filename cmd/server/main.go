@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/crosslink/internal/app"
 	"github.com/crosslink/internal/config"
@@ -44,6 +46,13 @@ func setupLogger(cfg *config.Config) {
 }
 
 func main() {
+	// -migrate-only: one-shot schema migration for the controlled Job flow
+	// (templates/kubernetes/migrate-job.yaml). Exit contract: 0 = migrations
+	// applied (or already up to date — idempotent), non-zero = failure. The
+	// server is never started in this mode.
+	migrateOnly := flag.Bool("migrate-only", false, "run schema migrations, then exit (0 = success/idempotent no-op, non-zero = failure)")
+	flag.Parse()
+
 	cfg, err := config.Load("")
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
@@ -89,15 +98,19 @@ func main() {
 		slog.Warn("stats_timezone DB override shadows database.timezone", "db", dbTZ, "config", cfg.Database.Timezone)
 	}
 	dia, err := dialect.New(dialect.DBConfig{
-		Driver:     cfg.Database.Driver,
-		Host:       cfg.Database.Host,
-		Port:       cfg.Database.Port,
-		User:       cfg.Database.User,
-		Password:   cfg.Database.Password,
-		DBName:     cfg.Database.DBName,
-		SSLMode:    cfg.Database.SSLMode,
-		SQLitePath: cfg.Database.SQLitePath,
-		Timezone:   effectiveTZ,
+		Driver:          cfg.Database.Driver,
+		Host:            cfg.Database.Host,
+		Port:            cfg.Database.Port,
+		User:            cfg.Database.User,
+		Password:        cfg.Database.Password,
+		DBName:          cfg.Database.DBName,
+		SSLMode:         cfg.Database.SSLMode,
+		SQLitePath:      cfg.Database.SQLitePath,
+		Timezone:        effectiveTZ,
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
 	})
 	if err != nil {
 		slog.Error("failed to create dialect", "error", err)
@@ -110,17 +123,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	release, err := dia.AcquireMigrationLock()
-	if err != nil {
-		slog.Error("failed to acquire migration lock", "error", err)
-		os.Exit(1)
-	}
-	if err := dia.RunMigrations(context.Background()); err != nil {
+	// CL_SKIP_MIGRATIONS=1/true: resident pods skip startup migrations — the
+	// one-shot migrate Job (see templates/kubernetes/migrate-job.yaml) owns
+	// schema changes in that deployment flow, so rolling pods never compete
+	// on the migration lock. Unset/other values keep the legacy
+	// migrate-at-boot behavior.
+	skipMigrations := func() bool {
+		v := strings.ToLower(strings.TrimSpace(os.Getenv("CL_SKIP_MIGRATIONS")))
+		return v == "1" || v == "true"
+	}()
+	if skipMigrations && !*migrateOnly {
+		slog.Info("startup migrations skipped (CL_SKIP_MIGRATIONS set); the migrate Job owns schema changes")
+	} else {
+		release, err := dia.AcquireMigrationLock()
+		if err != nil {
+			slog.Error("failed to acquire migration lock", "error", err)
+			os.Exit(1)
+		}
+		if err := dia.RunMigrations(context.Background()); err != nil {
+			release()
+			slog.Error("failed to run migrations", "error", err)
+			os.Exit(1)
+		}
 		release()
-		slog.Error("failed to run migrations", "error", err)
-		os.Exit(1)
 	}
-	release()
+	if *migrateOnly {
+		slog.Info("migrate-only: schema is up to date, exiting", "driver", cfg.Database.Driver)
+		os.Exit(0)
+	}
 
 	rdb := app.InitRedis(&cfg.Redis)
 

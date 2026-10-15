@@ -130,10 +130,10 @@ func TestCircuitLifecycle_EndToEnd(t *testing.T) {
 	}
 
 	// Phase 2 (open window): Resolve must reject with the production
-	// "no active provider found" error — now enriched with the circuit cause —
+	// "no active provider" error — now enriched with the circuit cause —
 	// and the upstream must NOT be called.
 	_, err := lifecycleRequest(ctx, resolver, health)
-	if err == nil || !strings.HasPrefix(err.Error(), "no active provider found for model: MiniMax-M3") {
+	if err == nil || !strings.HasPrefix(err.Error(), "no active provider for model: MiniMax-M3") {
 		t.Fatalf("expected resolve rejection while open, got %v", err)
 	}
 	if err == nil || !strings.Contains(err.Error(), "minimax circuit open") ||

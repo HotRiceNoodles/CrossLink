@@ -145,9 +145,14 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 						applyBudgetDelta(budgetSvc, bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, reservations)
 						go func() {
 							defer func() { recover() }()
-							org := orgCache.Get(context.Background(), orgID)
+							// Bounded ctx (matches the key/team alert branches):
+							// an un-timed Background goroutine piles up when the
+							// DB or alert path hangs.
+							orgCtx, orgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer orgCancel()
+							org := orgCache.Get(orgCtx, orgID)
 							if org != nil && org.BudgetLimit > 0 {
-								alertSvc.CheckAndAlert(context.Background(), "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
+								alertSvc.CheckAndAlert(orgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
 							}
 						}()
 					}
@@ -248,9 +253,12 @@ func AdminReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc s
 					budgetSvc.ReportUsage(bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost)
 					go func() {
 						defer func() { recover() }()
-						org := orgCache.Get(context.Background(), orgID)
+						// Bounded ctx (matches the key/team alert branches).
+						orgCtx, orgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer orgCancel()
+						org := orgCache.Get(orgCtx, orgID)
 						if org != nil && org.BudgetLimit > 0 {
-							alertSvc.CheckAndAlert(context.Background(), "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
+							alertSvc.CheckAndAlert(orgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, org.BudgetLimit)
 						}
 					}()
 				}

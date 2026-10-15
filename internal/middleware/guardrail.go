@@ -25,11 +25,15 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			return
 		}
 
-		// Multipart audio transcription/translation bodies carry binary media
-		// the text guardrail cannot inspect. Under strict coverage they are
+		// Multipart file-upload bodies (audio transcription/translation, image
+		// edits) carry binary media the text guardrail cannot inspect — and
+		// MUST NOT be buffered here: a truncated (maxGuardrailBodySize) copy
+		// replacing the original body corrupts the multipart framing for
+		// uploads larger than that (body.go exempts the same path set from
+		// ReadBody for exactly this reason). Under strict coverage they are
 		// rejected below; otherwise they pass through (documented gap).
-		multipartAudio := strings.HasPrefix(c.Request.Header.Get("Content-Type"), "multipart/form-data") &&
-			(strings.HasPrefix(c.Request.URL.Path, "/v1/audio/") ||
+		multipartFile := strings.HasPrefix(c.Request.Header.Get("Content-Type"), "multipart/form-data") &&
+			(isFileUploadPath(c.Request.URL.Path) ||
 				strings.HasPrefix(c.Request.URL.Path, "/admin/api/playground/transcribe") ||
 				strings.HasPrefix(c.Request.URL.Path, "/admin/api/playground/translate"))
 
@@ -44,7 +48,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			return
 		}
 
-		if multipartAudio && !svc.StrictCoverage() {
+		if multipartFile && !svc.StrictCoverage() {
 			c.Next()
 			return
 		}
@@ -68,7 +72,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 		var probe struct {
 			Model string `json:"model"`
 		}
-		if json.Unmarshal(bodyBytes, &probe) != nil && !multipartAudio {
+		if json.Unmarshal(bodyBytes, &probe) != nil && !multipartFile {
 			c.Next()
 			return
 		}
@@ -82,7 +86,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			(ex == nil || ex.uninspectable) {
 			reason := "endpoint content cannot be inspected by the guardrail under strict coverage policy"
 			switch {
-			case multipartAudio:
+			case multipartFile:
 				reason = "multipart media content cannot be inspected by the text guardrail under strict coverage policy"
 			case ex != nil && ex.uninspectable:
 				reason = "request contains non-text media parts that cannot be inspected by the text guardrail under strict coverage policy"
@@ -210,7 +214,18 @@ func applyRequestMask(c *gin.Context, ex *extractedContent, result *guardrail.Ch
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "guardrail mask could not be applied safely"}})
 		return
 	}
-	c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
+	// Rewrite BOTH the request body and the buffered copy: downstream consumers
+	// (cache key, handlers, usage logging) read via GetBodyBytes, which without
+	// this sync would keep serving the unmasked original to the upstream.
+	// The rewrite is budget-aware: a masked body larger than the original must
+	// stay inside the per-request ceiling and the in-flight budget (supervisor
+	// F26 review: rewrites may not silently widen memory beyond admission).
+	if !SetBodyBytes(c, newBody) {
+		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": gin.H{"type": "request_too_large", "message": "masked request body exceeds the body-size ceiling"},
+		})
+		return
+	}
 }
 
 func isGatewayContentPath(path string) bool {

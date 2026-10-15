@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -15,6 +16,14 @@ import (
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/secret"
 )
+
+// ErrNoActiveProvider is returned by Resolve when the model EXISTS with
+// enabled mappings, but every candidate was filtered out at request time —
+// typically because all of its providers' circuits are open, or tier/registry
+// gating removed them. This is a TEMPORARY server-side condition: clients
+// should retry (HTTP 503), not treat the model as unknown (404, reserved for
+// the plain "no provider found" case).
+var ErrNoActiveProvider = errors.New("no active provider")
 
 type Resolver struct {
 	registry       *provider.Registry
@@ -207,9 +216,9 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 		if len(openCircuits) > 0 {
 			// Carry the upstream cause (error type + message recorded when the
 			// circuit opened) into logs and the client-facing rejection.
-			return nil, fmt.Errorf("no active provider found for model: %s (%s)", modelName, strings.Join(openCircuits, "; "))
+			return nil, fmt.Errorf("%w for model: %s (%s)", ErrNoActiveProvider, modelName, strings.Join(openCircuits, "; "))
 		}
-		return nil, fmt.Errorf("no active provider found for model: %s", modelName)
+		return nil, fmt.Errorf("%w for model: %s", ErrNoActiveProvider, modelName)
 	}
 
 	// Determine strategy from first candidate
@@ -278,7 +287,7 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 	}
 
 	if len(routeCandidates) == 0 {
-		return nil, fmt.Errorf("no active provider found for model: %s", modelName)
+		return nil, fmt.Errorf("%w for model: %s", ErrNoActiveProvider, modelName)
 	}
 
 	// Resolve secrets in route candidates

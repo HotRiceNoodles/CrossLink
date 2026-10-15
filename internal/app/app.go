@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	// Registers /debug/pprof/* handlers on http.DefaultServeMux; exposed ONLY
+	// behind CL_PPROF=1 + gateway auth (see the gated route below).
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"bufio"
+	"net"
 
 	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/apidoc"
@@ -125,7 +131,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	admin.SetStatsTimezone(statsTZ)
 
 	// Services
-	svcs := service.ProvideServices(repos, rdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
+	cacheRdb := InitCacheRedis(cfg.Cache.Redis)
+	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
 
 	// Seed the default credential_detection baseline rule (zero-config safety
@@ -198,6 +205,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	// Infrastructure layer
+	// MUST run before ProvideInfrastructure: boot-registered providers build
+	// their stream transports here, and transports snapshot the per-host
+	// connection cap at creation time. Calling it later (as this used to)
+	// silently left every boot provider on the default cap — the configured
+	// gateway.upstream_max_conns_per_host only ever applied to providers
+	// created later via admin CRUD (found via the 1500-stream capacity run:
+	// upstream peak pinned at 200 despite an env override).
+	provider.SetMaxConnsPerHost(cfg.Gateway.UpstreamMaxConnsPerHost)
 	infra := ProvideInfrastructure(&InfraDeps{
 		Config:         cfg,
 		DB:             db,
@@ -292,10 +307,33 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	usageWorkers := worker.NewPool("usage", cfg.Usage.Workers, cfg.Usage.QueueSize, cfg.Usage.OverflowCap)
 	handler.SetUsageWorkers(usageWorkers)
+	// Disk spill for billing rows the pool cannot accept (queue + overflow
+	// full): rows persist as JSONL and replay once the pool recovers. This is
+	// the durability path that keeps usage_logs (the budget-calibration
+	// ground truth) complete through DB degradation.
+	usageSpool := handler.NewUsageSpool(cfg.Usage.SpoolDir, cfg.Usage.SpoolMaxBytes)
+	handler.SetUsageSpool(usageSpool)
+	// Replay flushes rows DIRECTLY to the DB (synchronous, per-row timeout)
+	// with ack semantics: a row leaves the spool only after Log returns nil.
+	// Bypassing the pool here is deliberate — enqueue-success is not a DB ack.
+	go handler.RunUsageSpoolReplay(appCtx, usageSpool, 30*time.Second, func(ctx context.Context, entry *service.UsageEntry) error {
+		return svcs.UsageSvc.LogChecked(ctx, entry)
+	})
 	modelsHandler := handler.NewModelsHandler(db)
 
 	// Whole-stream duration cap for SSE (0 = uncapped; see server.stream_max_duration)
 	service.SetStreamMaxDuration(cfg.Server.StreamMaxDuration)
+	// Stalled-stream cap: close an established SSE stream whose upstream went
+	// silent (0 = disabled; see server.stream_idle_timeout).
+	provider.SetStreamIdleTimeout(cfg.Server.StreamIdleTimeout)
+	// Non-streaming per-attempt cap (was a hardcoded 30s that failed every
+	// long reasoning generation as a 502; see gateway.provider_timeout).
+	service.SetPerProviderTimeout(cfg.Gateway.ProviderTimeout)
+	// Per-host upstream connection cap (gateway.upstream_max_conns_per_host).
+	// Only affects transports created after this point (provider registry
+	if cfg.Server.WriteTimeout > 0 {
+		slog.Warn("server.write_timeout is not applied: a global http.Server WriteTimeout would kill long SSE streams mid-flight. Use server.stream_max_duration / stream_idle_timeout to bound streams.")
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -322,12 +360,31 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Health endpoint (no auth)
 	r.GET("/health", healthCheck(db))
+	// /livez is process-liveness ONLY: always 200 while the process can serve
+	// HTTP. Liveness probes MUST use this — pointing them at /health turns a
+	// fleet-wide DB outage into a restart storm (pods are fine; the DB is
+	// not). Readiness keeps /health (DB ping) so dependency failures DO
+	// drain traffic from the pod. Redis is deliberately not probed: the
+	// gateway serves fail-open when Redis is down (rate-limit semantics,
+	// see D-020).
+	r.GET("/livez", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "live"})
+	})
 
 	// Public OpenAPI spec — for Postman/codegen import. No auth (published docs).
 	r.GET("/openapi.json", handler.OpenAPIHandler)
 
 	// Prometheus metrics endpoint (requires gateway auth key)
 	r.GET("/metrics", middleware.GatewayMetricsAuth(cfg.Gateway.AuthKey), gin.WrapH(promhttp.Handler()))
+
+	// Ops diagnostics, env-gated (CL_PPROF=1): goroutine/heap dumps for live
+	// incident debugging. Off by default; when enabled it MUST stay behind the
+	// same auth as /metrics. pprofHandlers (imported above, blank) registers
+	// the /debug/pprof/* handlers on http.DefaultServeMux.
+	if os.Getenv("CL_PPROF") == "1" {
+		auth := middleware.GatewayMetricsAuth(cfg.Gateway.AuthKey)
+		r.GET("/debug/pprof/*any", auth, gin.WrapH(http.DefaultServeMux))
+	}
 
 	// NOTE: the gateway serves API traffic only. Frontend static files (admin SPA
 	// + customer portal) are served by the reverse proxy (Caddy/nginx) or a
@@ -641,7 +698,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
 		return apidoc.ActiveDeprecations
 	}))
-	gwGroup.Use(middleware.ReadBody(10 << 20))
+	gwGroup.Use(middleware.ReadBodyWithBudget(10<<20,
+		middleware.NewInflightBodyBudget(cfg.Gateway.InflightBodyBudgetBytes),
+		cfg.Gateway.InflightMultipartReserveBytes))
 	gwGroup.Use(middleware.ContextAssembler(templateRegistry, ext.AssemblerHook))
 	gwGroup.Use(debug.Middleware(debugStore))
 	gwGroup.Use(middleware.UsageLog(svcs.UsageSvc))
@@ -709,11 +768,27 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	readHeaderTimeout := 15 * time.Second
+	if cfg.Server.ReadTimeout > 0 && cfg.Server.ReadTimeout < readHeaderTimeout {
+		readHeaderTimeout = cfg.Server.ReadTimeout
+	}
+	// Per-WRITE deadline for response bodies (acceptance blocker 3): with
+	// WriteTimeout=0 a client that keeps the connection open but never reads
+	// blocks the handler's SSE Write/Flush FOREVER — a request-context
+	// deadline cannot unblock a parked TCP write. The wrapper below arms a
+	// write deadline before every Write/Flush on the REAL connection
+	// (http.ResponseController), so a stalled consumer surfaces as a write
+	// error and the handler, admission slot, upstream stream and billing
+	// resources all unwind. Slow-but-alive readers are unaffected: each
+	// individual write completes as the socket drains. 0 disables (legacy).
+	streamWriteTimeout := cfg.Server.StreamWriteTimeout
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      r,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: 0, // disabled — SSE streaming relies on per-request context deadlines
+		Addr:              addr,
+		Handler:           sseDeadlineWrap(r, streamWriteTimeout),
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		ReadHeaderTimeout: readHeaderTimeout, // slowloris header holding must not occupy a conn for the full ReadTimeout
+		IdleTimeout:       90 * time.Second,  // keep-alive idling must not be bounded by ReadTimeout (30s default churns connections)
+		WriteTimeout:      0,                 // intentionally 0 — the per-write deadline above is the bounded-write policy
 	}
 
 	// Cleanup expired key hashes every 10 minutes
@@ -788,8 +863,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	<-quit
 	slog.Info("shutting down server...", "active_requests", dm.ActiveCount())
 
-	// Phase 1: Drain in-flight gateway streams
-	drainTimeout := 60 * time.Second
+	// Phase 1: Drain in-flight gateway streams (server.drain_timeout; the
+	// SUM of all three phase budgets must fit the container stop grace).
+	drainTimeout := cfg.Server.DrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = 60 * time.Second
+	}
 	remaining := dm.Drain(drainTimeout)
 	if remaining > 0 {
 		slog.Warn("drain timeout exceeded, forcing shutdown", "remaining", remaining)
@@ -798,14 +877,22 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	}
 
 	// Phase 2: Stop accepting new connections, wait for remaining
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownBudget := cfg.Server.ShutdownTimeout
+	if shutdownBudget <= 0 {
+		shutdownBudget = 10 * time.Second
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownBudget)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
 
 	// Phase 3: Flush usage worker pool
-	workerCtx, workerCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	flushBudget := cfg.Server.WorkerFlushTimeout
+	if flushBudget <= 0 {
+		flushBudget = 10 * time.Second
+	}
+	workerCtx, workerCancel := context.WithTimeout(context.Background(), flushBudget)
 	defer workerCancel()
 	usageWorkers.Shutdown(workerCtx)
 
@@ -910,6 +997,36 @@ func InitRedis(cfg *config.RedisConfig) *redis.Client {
 	return rdb
 }
 
+// InitCacheRedis returns the response-cache Redis client: a dedicated
+// instance when cache.redis is configured (cache keys tolerate eviction —
+// allkeys-lru — while quota/budget/idempotency keys on the main instance must
+// not be evicted; a separate maxmemory domain requires a separate instance,
+// DB numbers share maxmemory/eviction), otherwise nil (share the main one).
+func InitCacheRedis(cr *config.RedisConfig) *redis.Client {
+	if cr == nil || cr.Host == "" {
+		return nil
+	}
+	addr := fmt.Sprintf("%s:%d", cr.Host, cr.Port)
+	cacheRdb := redis.NewClient(&redis.Options{
+		Addr:         addr,
+		Password:     cr.Password,
+		DB:           cr.DB,
+		PoolSize:     cr.PoolSize,
+		MinIdleConns: cr.MinIdleConns,
+		DialTimeout:  3 * time.Second,
+		ReadTimeout:  500 * time.Millisecond,
+		WriteTimeout: 500 * time.Millisecond,
+	})
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer ccancel()
+	if err := cacheRdb.Ping(cctx).Err(); err != nil {
+		slog.Warn("cache redis ping failed at startup — will retry at runtime", "addr", addr, "error", err)
+	} else {
+		slog.Info("cache redis connected (dedicated instance)", "addr", addr)
+	}
+	return cacheRdb
+}
+
 func ensureAdminUser(db *gorm.DB, cfg *config.AdminConfig) {
 	var count int64
 	db.Model(&model.User{}).Where("role_id = (SELECT id FROM roles WHERE name = ?)", model.RoleAdmin).Count(&count)
@@ -953,3 +1070,58 @@ func syncAdminPermissions(db *gorm.DB) {
 		}
 	}
 }
+
+// sseDeadlineWrap installs the per-write response deadline (acceptance
+// blocker 3). It wraps OUTSIDE the gin engine so http.ResponseController is
+// built from the REAL *http.response (gin's writer boxing hides the conn's
+// SetWriteDeadline). Every Write/Flush arms a fresh deadline; a consumer
+// that never reads gets a write timeout error instead of parking the handler
+// forever. The wrapper must keep implementing http.Flusher and
+// http.Hijacker for gin's writer probe.
+func sseDeadlineWrap(next http.Handler, timeout time.Duration) http.Handler {
+	if timeout <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctl := http.NewResponseController(w)
+		dw := &deadlineResponseWriter{ResponseWriter: w, ctl: ctl, timeout: timeout}
+		next.ServeHTTP(dw, r)
+	})
+}
+
+type deadlineResponseWriter struct {
+	http.ResponseWriter
+	ctl     *http.ResponseController
+	timeout time.Duration
+}
+
+func (w *deadlineResponseWriter) Write(p []byte) (int, error) {
+	// Best-effort arming: controllers over exotic writers may not support
+	// deadlines; failing to arm must not break the response itself.
+	_ = w.ctl.SetWriteDeadline(time.Now().Add(w.timeout))
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *deadlineResponseWriter) Flush() {
+	_ = w.ctl.SetWriteDeadline(time.Now().Add(w.timeout))
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack delegates so websocket/upgrade paths keep working through the
+// wrapper (gin probes http.Hijacker on its writer; a bare embedded interface
+// would NOT satisfy that probe). Deadlines do not apply after a successful
+// hijack — the conn belongs to the hijacker.
+func (w *deadlineResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hj.Hijack()
+}
+
+// Unwrap lets http.ResponseController (and middleware built on it) see
+// through to the REAL connection instead of treating this wrapper as the
+// terminal writer.
+func (w *deadlineResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

@@ -140,7 +140,11 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	// Resolve routes
 	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "model not found", "type": "invalid_request_error"}})
+		if errors.Is(err, router.ErrNoActiveProvider) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": resolveErrorMessage(err), "type": "server_error"}})
+		} else {
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "model not found", "type": "invalid_request_error"}})
+		}
 		return
 	}
 
@@ -192,10 +196,15 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		if h.activeTracker != nil {
 			h.activeTracker.Incr(ctx, pn)
 		}
+		// Inner-provider retry is disabled for video task submission: the
+		// upstream POST creates a non-idempotent billed task, so retrying a
+		// timeout (where the upstream may already have accepted the first
+		// request) silently creates a duplicate task and double-bills.
+		// Cross-provider failover (one attempt per route) still applies; the
+		// residual duplicate risk of failover after a lost response is a
+		// documented limitation.
 		retryCfg := route.RetryConfig
-		if len(videoRoutes) > 1 {
-			retryCfg.NumRetries = 0
-		}
+		retryCfg.NumRetries = 0
 
 		var submitErr error
 		rr := provider.WithRetry(ctx, retryCfg, h.budget, func(retryCtx context.Context) error {
