@@ -487,6 +487,8 @@ Thanks to everyone who has contributed to CrossLink!
   <a href="https://github.com/jinghunsanzu"><img src="https://github.com/jinghunsanzu.png" width="80px" alt="jinghunsanzu" style="border-radius:50%"/></a>
   &nbsp;&nbsp;
   <a href="https://github.com/ahfkfdkhdkfka-afk"><img src="https://github.com/ahfkfdkhdkfka-afk.png" width="80px" alt="ahfkfdkhdkfka-afk" style="border-radius:50%"/></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/OldHunter0"><img src="https://github.com/OldHunter0.png" width="80px" alt="OldHunter0" style="border-radius:50%"/></a>
 </p>
 
 ### Development
