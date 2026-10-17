@@ -284,3 +284,23 @@ func (s *UsageService) LogChecked(ctx context.Context, entry *UsageEntry) error 
 	}
 	return nil
 }
+
+// LogBatchChecked is LogChecked for a WAL replay round: one multi-values
+// INSERT (one commit/fsync) instead of one transaction per row. nil means
+// EVERY row in entries is durably present — conflict-noop rows count as
+// present (EventID unique index), which is exactly the spool's ack
+// semantics. A non-nil error means the whole batch must stay in the WAL.
+func (s *UsageService) LogBatchChecked(ctx context.Context, entries []*UsageEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	logs := make([]*model.UsageLog, len(entries))
+	for i, e := range entries {
+		logs[i] = buildUsageLog(e)
+	}
+	if err := s.repo.CreateBatch(ctx, logs); err != nil {
+		slog.Error("failed to write usage log batch", "rows", len(logs), "error", err)
+		return err
+	}
+	return nil
+}

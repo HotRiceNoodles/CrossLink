@@ -19,13 +19,14 @@ import (
 func TestCompactIfWorthwhile_SmallFileCompacts(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 	for i := 0; i < 10; i++ {
 		e := service.UsageEntry{EventID: string(rune('a' + i)), RouteType: "openai", StatusCode: 200}
 		if !spool.Write(&e) {
 			t.Fatal("write failed")
 		}
 	}
-	spool.Replay(func(*service.UsageEntry) error { return nil }, 10) // flushes + acks
+	spool.Replay(perRow(func(*service.UsageEntry) error { return nil }), 10) // flushes + acks
 	spool.CompactIfWorthwhile()
 	if p := spool.Pending(); p != 0 {
 		t.Fatalf("small file must compact immediately, pending=%d", p)
@@ -35,6 +36,7 @@ func TestCompactIfWorthwhile_SmallFileCompacts(t *testing.T) {
 func TestCompactIfWorthwhile_LargeFileDefersUntilHalvingOrStale(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
+	t.Cleanup(spool.Close)
 	for i := 0; i < 10000; i++ {
 		e := service.UsageEntry{EventID: fmtGateID("e", i), RouteType: "openai", StatusCode: 200}
 		if !spool.Write(&e) {

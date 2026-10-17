@@ -25,6 +25,7 @@ func faultSpool(t *testing.T) (*UsageSpool, string) {
 	t.Helper()
 	dir := t.TempDir()
 	s := NewUsageSpool(dir, 64<<20)
+	t.Cleanup(s.Close)
 	if s == nil {
 		t.Fatal("spool not armed")
 	}
@@ -224,13 +225,13 @@ func TestReplay_LegacyLineFlushedAndStripped(t *testing.T) {
 	os.WriteFile(spoolFile(dir), []byte(legacy), 0o644)
 
 	flushed := 0
-	s.Replay(func(e *service.UsageEntry) error {
+	s.Replay(perRow(func(e *service.UsageEntry) error {
 		flushed++
 		if e.OutputTokens != 7 {
 			t.Fatalf("legacy row corrupted: %+v", e)
 		}
 		return nil
-	}, 10)
+	}), 10)
 	if flushed != 1 {
 		t.Fatalf("legacy line not flushed: %d", flushed)
 	}

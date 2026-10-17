@@ -73,6 +73,7 @@ func spoolFile(dir string) string { return filepath.Join(dir, "usage-spill.jsonl
 func TestUsageSpool_CorruptLineDroppedLoudly(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 	if spool == nil {
 		t.Fatal("spool not armed")
 	}
@@ -89,13 +90,13 @@ func TestUsageSpool_CorruptLineDroppedLoudly(t *testing.T) {
 
 	before := testutil.ToFloat64(usageSpoolCorruptTotal)
 	flushed := 0
-	spool.Replay(func(e *service.UsageEntry) error {
+	spool.Replay(perRow(func(e *service.UsageEntry) error {
 		flushed++
 		if e.RouteType != "a" && e.RouteType != "b" && e.RouteType != "c" {
 			t.Fatalf("unexpected row: %+v", e)
 		}
 		return nil
-	}, 10)
+	}), 10)
 	if flushed != 3 {
 		t.Fatalf("flushed %d rows, want 3 (corrupt line must not block others)", flushed)
 	}
@@ -115,12 +116,13 @@ func TestUsageSpool_TornTailDroppedAndCountedInReplay(t *testing.T) {
 	os.WriteFile(spoolFile(dir), append(append([]byte{}, valid...), '\n', '{', '"', 't'), 0o644) // + torn line
 
 	spool := NewUsageSpool(dir, 1<<20) // startup sanitize truncates the torn tail
+	t.Cleanup(spool.Close)
 	before := testutil.ToFloat64(usageSpoolCorruptTotal)
 	flushed := 0
-	spool.Replay(func(e *service.UsageEntry) error {
+	spool.Replay(perRow(func(e *service.UsageEntry) error {
 		flushed++
 		return nil
-	}, 10)
+	}), 10)
 	if flushed != 1 {
 		t.Fatalf("flushed %d, want 1", flushed)
 	}
@@ -135,7 +137,9 @@ func TestUsageSpool_TornTailDroppedAndCountedInReplay(t *testing.T) {
 // immediately after submit, even while the async task has not run.
 func TestSubmitUsageEntry_WALBeforeEnqueue(t *testing.T) {
 	dir := t.TempDir()
-	SetUsageSpool(NewUsageSpool(dir, 1<<20))
+	spoolForTest := NewUsageSpool(dir, 1<<20)
+	SetUsageSpool(spoolForTest)
+	t.Cleanup(spoolForTest.Close)
 	t.Cleanup(func() { SetUsageSpool(nil) })
 	oldWorkers := UsageWorkers
 	UsageWorkers = worker.NewPool("usage", 1, 2, 0) // tiny: queue backs up fast
@@ -159,7 +163,9 @@ func TestSubmitUsageEntry_WALBeforeEnqueue(t *testing.T) {
 // it), and the loss counter must NOT move.
 func TestRunUsageTask_DBFailureStaysInWALNotLost(t *testing.T) {
 	dir := t.TempDir()
-	SetUsageSpool(NewUsageSpool(dir, 1<<20))
+	spoolForTest := NewUsageSpool(dir, 1<<20)
+	SetUsageSpool(spoolForTest)
+	t.Cleanup(spoolForTest.Close)
 	t.Cleanup(func() { SetUsageSpool(nil) })
 
 	entry := &service.UsageEntry{RouteType: "openai", EventID: "evt-wal-1", OutputTokens: 5}
@@ -186,7 +192,9 @@ func TestRunUsageTask_LossCountedWhenNoWAL(t *testing.T) {
 // (async goroutine or spool line both carry the same id).
 func TestSubmitUsageEntry_MintsStableEventID(t *testing.T) {
 	dir := t.TempDir()
-	SetUsageSpool(NewUsageSpool(dir, 1<<20))
+	spoolForTest := NewUsageSpool(dir, 1<<20)
+	SetUsageSpool(spoolForTest)
+	t.Cleanup(spoolForTest.Close)
 	t.Cleanup(func() { SetUsageSpool(nil) })
 	oldWorkers := UsageWorkers
 	UsageWorkers = nil
@@ -215,6 +223,7 @@ func TestUsageDurability_CrashAfterCommitBeforeSpoolRewrite(t *testing.T) {
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 
 	entry := &service.UsageEntry{RouteType: "openai", EventID: "evt-crash", OutputTokens: 100}
 	// (1) Normal path commits the row.
@@ -229,9 +238,9 @@ func TestUsageDurability_CrashAfterCommitBeforeSpoolRewrite(t *testing.T) {
 
 	// (3) Replay the stale line: must ack (row IS durably present) and clear
 	// the line without inserting a second row.
-	spool.Replay(func(e *service.UsageEntry) error {
+	spool.Replay(perRow(func(e *service.UsageEntry) error {
 		return db.svc.LogChecked(context.Background(), e)
-	}, 10)
+	}), 10)
 
 	rows, tokens := db.count(t)
 	if rows != 1 || tokens != 100 {
@@ -265,6 +274,7 @@ func TestUsageDurability_DBDownThenRecover_BudgetConsistent(t *testing.T) {
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 
 	// DB goes down AFTER the service is built.
 	if err := db.raw.Close(); err != nil {
@@ -288,18 +298,18 @@ func TestUsageDurability_DBDownThenRecover_BudgetConsistent(t *testing.T) {
 	// Recovery: fresh DB (simulate DB coming back) and replay.
 	db2 := newUsageDB(t)
 	flushed := 0
-	spool.Replay(func(e *service.UsageEntry) error {
+	spool.Replay(perRow(func(e *service.UsageEntry) error {
 		flushed++
 		return db2.svc.LogChecked(context.Background(), e)
-	}, 10)
+	}), 10)
 	if flushed != 3 {
 		t.Fatalf("replayed %d rows, want 3", flushed)
 	}
 	// Replay once MORE (another crash-window duplicate) — still exactly 3 rows.
 	spool.Write(entries[0])
-	spool.Replay(func(e *service.UsageEntry) error {
+	spool.Replay(perRow(func(e *service.UsageEntry) error {
 		return db2.svc.LogChecked(context.Background(), e)
-	}, 10)
+	}), 10)
 
 	rows, tokens := db2.count(t)
 	if rows != 3 || tokens != 600 {
@@ -346,14 +356,20 @@ func TestUsageWAL_PlateauUnderSustainedLoad(t *testing.T) {
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
+	t.Cleanup(spool.Close)
 	SetUsageSpool(spool)
 	t.Cleanup(func() { SetUsageSpool(nil) })
 
 	stop := make(chan struct{})
 	go func() {
 		RunUsageSpoolReplay(context.Background(), spool, 30*time.Second,
-			func(ctx context.Context, e *service.UsageEntry) error {
-				return db.svc.LogChecked(ctx, e)
+			func(ctx context.Context, entries []*service.UsageEntry) error {
+				for _, e := range entries {
+					if err := db.svc.LogChecked(ctx, e); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 	}()
 	t.Cleanup(func() { close(stop) })
@@ -399,6 +415,7 @@ func TestUsageWAL_DBOutageThenDrain(t *testing.T) {
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
+	t.Cleanup(spool.Close)
 
 	if err := db.raw.Close(); err != nil {
 		t.Fatal(err)
@@ -415,9 +432,9 @@ func TestUsageWAL_DBOutageThenDrain(t *testing.T) {
 	// Recovery: fresh DB, one drain pass (what the 30s tick runs).
 	db2 := newUsageDB(t)
 	for spool.Pending() > 0 {
-		spool.Replay(func(e *service.UsageEntry) error {
+		spool.Replay(perRow(func(e *service.UsageEntry) error {
 			return db2.svc.LogChecked(context.Background(), e)
-		}, 200)
+		}), 200)
 	}
 	if got := spool.Pending(); got != 0 {
 		t.Fatalf("drain left %d lines (must run back-to-back rounds)", got)
@@ -433,6 +450,7 @@ func TestUsageWAL_CapFallsBackToSyncCommit(t *testing.T) {
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 2048) // ~2KB: fits a couple of lines only
+	t.Cleanup(spool.Close)
 	SetUsageSpool(spool)
 	t.Cleanup(func() { SetUsageSpool(nil) })
 	oldWorkers := UsageWorkers
@@ -472,16 +490,17 @@ func TestUsageWAL_PerEventWalHeld(t *testing.T) {
 func TestUsageWAL_ReplayDoesNotBlockAppends(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
+	t.Cleanup(spool.Close)
 	for i := 0; i < 300; i++ {
 		spool.Write(&service.UsageEntry{EventID: fmt.Sprint("pre-", i)})
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		spool.Replay(func(e *service.UsageEntry) error {
+		spool.Replay(perRow(func(e *service.UsageEntry) error {
 			time.Sleep(50 * time.Millisecond) // 300 rows × 50ms = 15s if locked
 			return errors.New("db always down in this test")
-		}, 300)
+		}), 300)
 	}()
 	time.Sleep(300 * time.Millisecond) // let the replay batch get going
 	maxWrite := time.Duration(0)

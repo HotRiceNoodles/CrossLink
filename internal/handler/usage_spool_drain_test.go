@@ -20,6 +20,7 @@ import (
 func TestReplay_ReturnsFlushedCount(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 	for i := 0; i < 5; i++ {
 		e := service.UsageEntry{EventID: string(rune('a' + i)), RouteType: "openai", StatusCode: 200}
 		if !spool.Write(&e) {
@@ -27,34 +28,36 @@ func TestReplay_ReturnsFlushedCount(t *testing.T) {
 		}
 	}
 
-	if n := spool.Replay(func(*service.UsageEntry) error { return nil }, 10); n != 5 {
+	if n := spool.Replay(perRow(func(*service.UsageEntry) error { return nil }), 10); n != 5 {
 		t.Fatalf("full round flushed = %d, want 5", n)
 	}
-	if n := spool.Replay(func(*service.UsageEntry) error { return nil }, 10); n != 0 {
+	if n := spool.Replay(perRow(func(*service.UsageEntry) error { return nil }), 10); n != 0 {
 		t.Fatalf("empty spool flushed = %d, want 0", n)
 	}
 }
 
-// Mid-batch DB failure must report only the accepted prefix (the drain loop
-// treats 0 as "DB refusing rows" and stops; a partial count keeps it going on
-// the next round — never a false stop, never an infinite retry of dead rows).
-func TestReplay_ReturnsPartialCountOnMidBatchFailure(t *testing.T) {
+// A refused batch reports 0 (the drain loop treats 0 as "DB refusing rows"
+// and stops this tick); the retry round reports the full batch. Never a
+// false stop, never an infinite retry of dead rows.
+func TestReplay_ReturnsZeroOnRefusedBatchAndFullOnRetry(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 1<<20)
+	t.Cleanup(spool.Close)
 	for i := 0; i < 4; i++ {
 		e := service.UsageEntry{EventID: string(rune('a' + i)), RouteType: "openai", StatusCode: 200}
 		if !spool.Write(&e) {
 			t.Fatal("write failed")
 		}
 	}
-	n := spool.Replay(func(e *service.UsageEntry) error {
-		if e.EventID >= "c" {
-			return errors.New("db down mid-batch")
-		}
-		return nil
-	}, 10)
-	if n != 2 {
-		t.Fatalf("partial round flushed = %d, want 2", n)
+	n := spool.Replay(perRow(func(*service.UsageEntry) error {
+		return errors.New("db down")
+	}), 10)
+	if n != 0 {
+		t.Fatalf("refused batch flushed = %d, want 0", n)
+	}
+	n = spool.Replay(perRow(func(*service.UsageEntry) error { return nil }), 10)
+	if n != 4 {
+		t.Fatalf("retry round flushed = %d, want 4", n)
 	}
 }
 
@@ -66,6 +69,7 @@ func TestReplay_ReturnsPartialCountOnMidBatchFailure(t *testing.T) {
 func TestReplay_DrainLoopProgressesUnderArrivals(t *testing.T) {
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 8<<20)
+	t.Cleanup(spool.Close)
 	const backlog = 300
 	for i := 0; i < backlog; i++ {
 		e := service.UsageEntry{EventID: fmtDrainID("backlog-", i), RouteType: "openai", StatusCode: 200}
@@ -77,8 +81,8 @@ func TestReplay_DrainLoopProgressesUnderArrivals(t *testing.T) {
 	var flushed atomic.Int64
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	go RunUsageSpoolReplay(ctx, spool, 500*time.Millisecond, func(_ context.Context, _ *service.UsageEntry) error {
-		flushed.Add(1)
+	go RunUsageSpoolReplay(ctx, spool, 500*time.Millisecond, func(_ context.Context, entries []*service.UsageEntry) error {
+		flushed.Add(int64(len(entries)))
 		return nil
 	})
 
@@ -103,7 +107,7 @@ func TestReplay_DrainLoopProgressesUnderArrivals(t *testing.T) {
 	// Settle: stop arrivals, let the loop drain the rest, then a final full
 	// round must leave nothing pending.
 	time.Sleep(700 * time.Millisecond)
-	spool.Replay(func(*service.UsageEntry) error { return nil }, 100000)
+	spool.Replay(perRow(func(*service.UsageEntry) error { return nil }), 100000)
 	spool.Compact()
 	if p := spool.Pending(); p != 0 {
 		t.Fatalf("pending after settled drain = %d, want 0", p)

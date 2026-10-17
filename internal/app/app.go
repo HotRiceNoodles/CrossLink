@@ -313,11 +313,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// ground truth) complete through DB degradation.
 	usageSpool := handler.NewUsageSpool(cfg.Usage.SpoolDir, cfg.Usage.SpoolMaxBytes)
 	handler.SetUsageSpool(usageSpool)
-	// Replay flushes rows DIRECTLY to the DB (synchronous, per-row timeout)
-	// with ack semantics: a row leaves the spool only after Log returns nil.
-	// Bypassing the pool here is deliberate — enqueue-success is not a DB ack.
-	go handler.RunUsageSpoolReplay(appCtx, usageSpool, 30*time.Second, func(ctx context.Context, entry *service.UsageEntry) error {
-		return svcs.UsageSvc.LogChecked(ctx, entry)
+	// Replay flushes rounds DIRECTLY to the DB (one multi-values INSERT per
+	// round — per-row commits cost one fsync round trip each and capped drain
+	// at ~10 rows/s under live load) with ack semantics: a row leaves the
+	// spool only after the batch returns nil. Bypassing the pool here is
+	// deliberate — enqueue-success is not a DB ack.
+	go handler.RunUsageSpoolReplay(appCtx, usageSpool, 30*time.Second, func(ctx context.Context, entries []*service.UsageEntry) error {
+		return svcs.UsageSvc.LogBatchChecked(ctx, entries)
 	})
 	modelsHandler := handler.NewModelsHandler(db)
 
