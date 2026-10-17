@@ -959,10 +959,10 @@ func gatewayErrorStatus(err error) int {
 		status = http.StatusBadRequest
 	case errors.Is(err, router.ErrProRequired):
 		status = http.StatusForbidden
-	case errors.Is(err, router.ErrNoActiveProvider):
-		// Model exists but every route is circuit-open/tier-gated: temporary
-		// server condition, not a client error — same mapping as the OpenAI
-		// path's resolveErrorStatus.
+	case errors.Is(err, router.ErrNoActiveProvider), errors.Is(err, router.ErrResolveDegraded):
+		// Model exists but every route is circuit-open/tier-gated, or the
+		// mapping lookup itself failed: temporary server condition, not a
+		// client error — same mapping as the OpenAI path's resolveErrorStatus.
 		status = http.StatusServiceUnavailable
 	}
 

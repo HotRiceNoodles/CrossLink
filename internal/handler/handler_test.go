@@ -338,6 +338,12 @@ func TestResolveErrorStatus(t *testing.T) {
 			http.StatusServiceUnavailable,
 		},
 		{"unknown model stays 404", errors.New("no provider found for model: nope"), http.StatusNotFound},
+		{
+			// Resolve DB failure must NOT look like an unknown model.
+			"resolve db degraded",
+			fmt.Errorf("%w: query model mappings: connection refused", router.ErrResolveDegraded),
+			http.StatusServiceUnavailable,
+		},
 		{"nil error", nil, http.StatusNotFound},
 	}
 	for _, tt := range tests {

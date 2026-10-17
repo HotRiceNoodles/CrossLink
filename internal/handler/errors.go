@@ -27,7 +27,7 @@ func resolveErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, router.ErrProRequired):
 		return http.StatusForbidden
-	case errors.Is(err, router.ErrNoActiveProvider):
+	case errors.Is(err, router.ErrNoActiveProvider), errors.Is(err, router.ErrResolveDegraded):
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusNotFound
@@ -41,6 +41,9 @@ func resolveErrorStatus(err error) int {
 func resolveErrorMessage(err error) string {
 	if errors.Is(err, router.ErrNoActiveProvider) {
 		return "model temporarily unavailable: all provider routes are circuit-open or disabled; retry later"
+	}
+	if errors.Is(err, router.ErrResolveDegraded) {
+		return "model routing temporarily unavailable (directory degraded); retry later"
 	}
 	return safeProviderError(err)
 }

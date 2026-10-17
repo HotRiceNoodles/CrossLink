@@ -25,6 +25,11 @@ import (
 // the plain "no provider found" case).
 var ErrNoActiveProvider = errors.New("no active provider")
 
+// ErrResolveDegraded is returned when the mapping lookup itself failed (DB
+// unreachable / pool exhausted): the model is NOT unknown — the gateway
+// cannot answer right now. Maps to 503, never 404.
+var ErrResolveDegraded = errors.New("resolve degraded")
+
 type Resolver struct {
 	registry       *provider.Registry
 	repo           ProviderModelRepo
@@ -152,7 +157,16 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 					}
 					return healthy, nil
 				}
-				// All cached providers unhealthy — cache miss
+				// All cached providers circuit-open: serve the REJECTION from
+				// the cached mappings instead of falling through to the DB.
+				// The previous fallthrough re-queried provider_models for EVERY
+				// rejected request — an upstream outage under load became a DB
+				// query storm (measured in soak r2: 178k slow provider_models
+				// queries at ~200ms each saturated Postgres, exhausting its
+				// connections and cascading into resolve-degraded errors).
+				// Circuit state is still checked live per request (pure read
+				// above); mapping edits invalidate this cache explicitly.
+				return nil, r.unroutableFromCache(modelName, entry.results)
 			} else {
 				if r.healthFn != nil {
 					return r.reorderByHealth(entry.results), nil
@@ -183,7 +197,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
 	models, err := r.repo.FindByModelName(ctx, modelName, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("query model mappings: %w", err)
+		return nil, fmt.Errorf("%w: query model mappings for model %s: %v", ErrResolveDegraded, modelName, err)
 	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("no provider found for model: %s", modelName)
@@ -320,6 +334,24 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 // via the deferred ClearProbe in attemptNonStream/attemptStream. Resolve never
 // claims the lease itself — a lease claimed here is never released (the engine
 // would see it and skip the provider), deadlocking the model's routes.
+// unroutableFromCache builds the ErrNoActiveProvider rejection for a model
+// whose cached mappings are all circuit-open, carrying the recorded upstream
+// cause (in-memory health read — no DB access).
+func (r *Resolver) unroutableFromCache(modelName string, results []*RouteResult) error {
+	var open []string
+	if r.health != nil {
+		for _, rr := range results {
+			if d := r.health.OpenCircuitDescription(rr.Provider.Name(), rr.ProviderModel); d != "" {
+				open = append(open, d)
+			}
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("%w for model: %s (%s)", ErrNoActiveProvider, modelName, strings.Join(open, "; "))
+	}
+	return fmt.Errorf("%w for model: %s", ErrNoActiveProvider, modelName)
+}
+
 func (r *Resolver) healthAllows(name, model string) bool {
 	if r.health == nil {
 		return true
