@@ -27,6 +27,15 @@ const bodyReservationKey = "_body_reservation"
 type InflightBodyBudget struct {
 	limit    int64
 	inflight atomic.Int64
+
+	// Unknown-length (chunked) reads are gated by SLOTS so their collective
+	// worst-case footprint always fits the budget (see ReadBodyWithBudget).
+	// unkCeil is the largest per-request ceiling any route registered; the
+	// slot channel is (re)built under unkMu whenever that value changes.
+	unkMu    sync.Mutex
+	unkCeil  atomic.Int64
+	unkSlots chan struct{}
+	unkBuilt int64 // ceiling the current channel was sized for
 }
 
 // activeBodyBudget + budgetMetricsOnce expose the effective budget through
@@ -101,6 +110,49 @@ func (b *InflightBodyBudget) Release(n int64) {
 			return
 		}
 	}
+}
+
+// admissionWait bounds how long an unknown-length request may queue for a
+// slot or budget before 503. It is a saturation backstop ONLY — liveness
+// never depends on it (see ReadBodyWithBudget): an admitted reader completes
+// without budget contention from other unknown readers by construction.
+const admissionWait = 500 * time.Millisecond
+
+// registerUnknownCeiling records the per-request ceiling of a route reading
+// unknown-length bodies (called at middleware construction, i.e. startup).
+// The slot gate is sized from the WORST (largest) ceiling so the collective
+// bound K * (2C + block) <= limit holds across routes.
+func (b *InflightBodyBudget) registerUnknownCeiling(ceil int64) {
+	if b == nil || b.limit <= 0 || ceil <= 0 {
+		return
+	}
+	for {
+		cur := b.unkCeil.Load()
+		if ceil <= cur || b.unkCeil.CompareAndSwap(cur, ceil) {
+			return
+		}
+	}
+}
+
+// unknownSlots returns the gate for unknown-length reads. Rebuilding on a
+// newly-registered larger ceiling starts a fresh (empty) channel — old slot
+// holders drain into the garbage channel — which can only OVER-admit in the
+// pathological "route registered after traffic started" case; safety never
+// depends on the gate (Acquire enforces the cap), only liveness does.
+func (b *InflightBodyBudget) unknownSlots() chan struct{} {
+	ceil := b.unkCeil.Load()
+	b.unkMu.Lock()
+	defer b.unkMu.Unlock()
+	if b.unkSlots != nil && b.unkBuilt == ceil {
+		return b.unkSlots
+	}
+	k := b.limit / (2*ceil + readBodyBlock)
+	if k < 1 {
+		k = 1
+	}
+	b.unkSlots = make(chan struct{}, k)
+	b.unkBuilt = ceil
+	return b.unkSlots
 }
 
 // AcquireWait is Acquire with bounded queueing (acceptance round 3 —
@@ -178,9 +230,14 @@ func budgetExhausted(c *gin.Context) {
 //   - known Content-Length > maxSize → 413 immediately, reserving NOTHING;
 //   - known Content-Length ≤ maxSize → reserved up front, corrected to the
 //     actual buffered size once read;
-//   - unknown length (chunked / HTTP2) → the buffer grows in 512KiB blocks,
-//     each block acquired BEFORE allocation (bounded exit on budget
-//     exhaustion; at most one block over-reserved per request);
+//   - unknown length (chunked / HTTP2) → ENTRY: one slot from a gate sized
+//     so the WORST collective read footprint fits the budget, plus one
+//     scratch block, both via bounded queueing; GROWTH: the reservation
+//     always covers scratch + block chain + transient assembled copy
+//     (2T+block), bodies over the per-request ceiling get a deterministic
+//     413 (they can never fit the budget), growth within the ceiling can
+//     only queue behind holders that never wait themselves (known-CL,
+//     multipart, rewrites) — no hold-and-wait, hence no tiling livelock;
 //   - every exit path (success, read error, client cancel, over-limit,
 //     budget exhaustion) releases exactly what it holds; the success path
 //     holds the ACTUAL size until the whole chain (incl. SSE) completes;
@@ -191,6 +248,12 @@ func budgetExhausted(c *gin.Context) {
 func ReadBodyWithBudget(maxSize int64, budget *InflightBodyBudget, multipartReserve int64) gin.HandlerFunc {
 	if multipartReserve <= 0 {
 		multipartReserve = 32 << 20
+	}
+	if budget != nil && budget.limit > 0 {
+		// Register this route's unknown-read ceiling at construction so the
+		// slot gate (built lazily at first request, after ALL routes are
+		// wired) is sized from the worst footprint across routes.
+		budget.registerUnknownCeiling(min64(maxSize, (budget.limit-readBodyBlock)/2))
 	}
 	return func(c *gin.Context) {
 		multipart := isFileUploadPath(c.Request.URL.Path) &&
@@ -256,91 +319,115 @@ func ReadBodyWithBudget(maxSize int64, budget *InflightBodyBudget, multipartRese
 			}
 			bodyBytes = b
 		} else {
-			// Unknown length: reserve-and-read so allocation ALWAYS trails
-			// the budget check. Reservation granularity is BYTES (rounded to
-			// 512KiB steps), NOT per Read call: a chunked body arrives in
-			// small frames (KBs per Read), and reserving a block per Read
-			// would multiply the reservation by the frame count (found via
-			// runtime evidence). The 512KiB scratch buffer is a REAL
-			// allocation held for the whole read — it is budgeted like the
-			// payload (acceptance blocker 2), and the payload buffer grows in
-			// block steps so its CAPACITY never exceeds the reservation by
-			// more than one block (bytes.Buffer doubling would).
-			acquireBlock := func() bool {
-				if budget != nil && budget.limit > 0 {
-					// Bounded queueing instead of instant failure: a flood of
-					// partial reservations must not starve everyone (acc=0
-					// livelock found by independent re-verification). Waiters
-					// drain as completing requests release; real saturation
-					// still rejects within the bound.
-					if !budget.AcquireWait(readBodyBlock, 500*time.Millisecond) {
-						return false
-					}
-				}
-				res.held += int64(readBodyBlock)
-				return true
-			}
-			if !acquireBlock() { // covers the scratch buffer itself
+			// Unknown length (chunked / HTTP2). STRUCTURAL no-hold-and-wait
+			// admission (partial-reservation tiling livelock fix):
+			//
+			//   * Ceiling C = min(route maxSize, (limit−block)/2) is the
+			//     largest body ONE unknown read may buffer. The budget covers
+			//     the full peak footprint — scratch block + block chain (T) +
+			//     the transient assembled copy (T) ⇒ 2T+block — so a body over
+			//     C can never be served under this budget: deterministic 413,
+			//     never a wait. C ≤ maxSize also subsumes the route cap.
+			//   * Entry takes ONE slot from a gate sized K = limit / (2C_worst
+			//     + block) ≥ 1, so at most K unknown reads are in their read
+			//     phase at once and K × worst footprint ≤ limit: an admitted
+			//     reader's growth can never be blocked by ANOTHER unknown
+			//     reader. That removes the tiling livelock (six 512KiB
+			//     first-blocks tiling a 3MiB budget, everyone holding while
+			//     waiting) BY CONSTRUCTION, not by timeout.
+			//   * The slot and the entry scratch block use bounded queueing;
+			//     they can only ever wait on holders that NEVER wait
+			//     themselves (known-CL, multipart and rewrites acquire
+			//     immediately-or-fail), so the wait graph is acyclic.
+			//   * Small requests stay usable when limit < maxSize (the naive
+			//     slots=floor(limit/maxSize) would round to zero and starve
+			//     everything): C shrinks to fit, K floors at 1, bodies ≤ C
+			//     still complete — only bodies that can never fit are 413ed.
+			ceil := min64(maxSize, (budget.limit-readBodyBlock)/2)
+			if ceil <= 0 {
+				// Budget smaller than one scratch block + copy headroom: no
+				// unknown read can ever fit — reject deterministically.
 				c.Request.Body.Close()
 				budgetExhausted(c)
 				return
 			}
-			tmp := make([]byte, readBodyBlock)
-			var blocks [][]byte // block chain: no grown-buffer realloc (old+new coexist in the naive grow)
-			var total int64
-			reservedLen := int64(readBodyBlock) // one block: scratch buffer
-			for {
-				n, rerr := c.Request.Body.Read(tmp)
-				if n > 0 {
-					// Acquire BEFORE any allocation; one block of headroom.
-					for total+int64(n)+int64(readBodyBlock) > reservedLen {
-						if !acquireBlock() {
+			slots := budget.unknownSlots()
+			select {
+			case slots <- struct{}{}:
+			case <-time.After(admissionWait):
+				c.Request.Body.Close()
+				budgetExhausted(c)
+				return
+			}
+			readUnknown := func() ([]byte, bool) {
+				// Slot is held for the READ phase only; downstream handler /
+				// SSE lifetime holds just the settled body reservation.
+				defer func() { <-slots }()
+				if !budget.AcquireWait(readBodyBlock, admissionWait) {
+					budgetExhausted(c)
+					return nil, false
+				}
+				res.held += readBodyBlock
+				reserved := int64(readBodyBlock) // scratch buffer
+				tmp := make([]byte, readBodyBlock)
+				var blocks [][]byte // block chain: no grown-buffer realloc (old+new coexist in the naive grow)
+				var total int64
+				for {
+					n, rerr := c.Request.Body.Read(tmp)
+					if n > 0 {
+						if total+int64(n) > ceil {
 							c.Request.Body.Close()
-							budgetExhausted(c)
-							return
+							c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+							return nil, false
 						}
-						reservedLen += readBodyBlock
+						// Reserve BEFORE any allocation, covering the chain
+						// (total+n), the transient assembled copy (total+n)
+						// and the scratch block — rounded up to whole blocks.
+						need := 2*(total+int64(n)) + readBodyBlock
+						for need > reserved {
+							delta := ((need - reserved + readBodyBlock - 1) / readBodyBlock) * readBodyBlock
+							if !budget.AcquireWait(delta, admissionWait) {
+								budgetExhausted(c)
+								return nil, false
+							}
+							reserved += delta
+							res.held += delta
+						}
+						blk := make([]byte, n)
+						copy(blk, tmp[:n])
+						blocks = append(blocks, blk)
+						total += int64(n)
 					}
-					blk := make([]byte, n)
-					copy(blk, tmp[:n])
-					blocks = append(blocks, blk)
-					total += int64(n)
+					if rerr == io.EOF {
+						break
+					}
+					// Client cancel surfaces here as a read error too — the
+					// deferred releaseAll returns every held block.
+					if rerr != nil {
+						c.Request.Body.Close()
+						c.AbortWithStatus(http.StatusBadRequest)
+						return nil, false
+					}
 				}
-				if total > maxSize {
-					c.Request.Body.Close()
-					c.AbortWithStatus(http.StatusRequestEntityTooLarge)
-					return
+				c.Request.Body.Close()
+				// Single final assembly: the transient 2x (chain + assembled
+				// body) was covered by the reservation above; the chain is
+				// garbage afterwards (heap-peak regression test documents the
+				// bound). Settle at the ACTUAL size for the handler lifetime.
+				body := make([]byte, total)
+				var off int64
+				for _, b := range blocks {
+					copy(body[off:], b)
+					off += int64(len(b))
 				}
-				if rerr == io.EOF {
-					break
-				}
-				// Client cancel surfaces here as a read error too — the
-				// deferred releaseAll returns every held block.
-				if rerr != nil {
-					c.Request.Body.Close()
-					c.AbortWithStatus(http.StatusBadRequest)
-					return
-				}
+				budget.Release(reserved - total)
+				res.held -= reserved - total
+				return body, true
 			}
-			c.Request.Body.Close()
-			// Single final assembly: transient peak = chain + assembled body
-			// (~2x payload) for ONE bounded moment, then the chain is garbage
-			// (heap-peak regression test documents the bound).
-			bodyBytes = make([]byte, total)
-			var off int64
-			for _, b := range blocks {
-				copy(bodyBytes[off:], b)
-				off += int64(len(b))
-			}
-			// Correction: keep the scratch block reserved until handler
-			// return; release the payload slack above it.
-			keep := ((total/readBodyBlock)+1)*readBodyBlock + int64(readBodyBlock)
-			if keep > reservedLen {
-				keep = reservedLen
-			}
-			if slack := reservedLen - keep; slack > 0 {
-				budget.Release(slack)
-				res.held -= slack
+			var ok bool
+			bodyBytes, ok = readUnknown()
+			if !ok {
+				return
 			}
 		}
 
