@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,4 +124,28 @@ func TestLoad_InflightBodyBudgetEnvOverride(t *testing.T) {
 		"CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES must apply without a config file")
 	assert.Equal(t, int64(16777216), cfg.Gateway.InflightMultipartReserveBytes,
 		"CL_GATEWAY_INFLIGHT_MULTIPART_RESERVE_BYTES must apply without a config file")
+}
+
+// Regression (soak r2): the pool keys had no SetDefault, so the deployment
+// template's CL_DATABASE_* env overrides were silently ignored by viper —
+// the gateway ran on dialect defaults no matter what was configured, and the
+// 1-minute default idle-time churned connections under load oscillations
+// (measured 48 re-dials/s, PG max_connections exhaustion, host port
+// exhaustion via Docker's forwarder).
+func TestLoad_DatabasePoolEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("CL_DATABASE_MAX_OPEN_CONNS", "60")
+	t.Setenv("CL_DATABASE_MAX_IDLE_CONNS", "60")
+	t.Setenv("CL_DATABASE_CONN_MAX_LIFETIME", "1h")
+	t.Setenv("CL_DATABASE_CONN_MAX_IDLE_TIME", "30m")
+	t.Setenv("CL_GATEWAY_AUTH_KEY", "k")
+	t.Setenv("CL_ADMIN_JWT_SECRET", "this-must-be-at-least-thirty-two-characters-long")
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 60, cfg.Database.MaxOpenConns, "CL_DATABASE_MAX_OPEN_CONNS must apply without a config file")
+	assert.Equal(t, 60, cfg.Database.MaxIdleConns, "CL_DATABASE_MAX_IDLE_CONNS must apply without a config file")
+	assert.Equal(t, time.Hour, cfg.Database.ConnMaxLifetime, "CL_DATABASE_CONN_MAX_LIFETIME must apply without a config file")
+	assert.Equal(t, 30*time.Minute, cfg.Database.ConnMaxIdleTime, "CL_DATABASE_CONN_MAX_IDLE_TIME must apply without a config file")
 }

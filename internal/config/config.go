@@ -587,6 +587,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.dbname", "crosslink")
 	v.SetDefault("database.sslmode", "disable")
 	v.SetDefault("database.sqlite_path", "")
+	// Pool keys MUST have defaults or viper silently ignores their env
+	// overrides (CL_DATABASE_*) — same trap as inflight_body_budget_bytes.
+	// 0 keeps the dialect built-ins (PG/MySQL: 100 open / 50 idle / 5m
+	// lifetime / 1m idle-time; SQLite single-connection).
+	v.SetDefault("database.max_open_conns", 0)
+	v.SetDefault("database.max_idle_conns", 0)
+	v.SetDefault("database.conn_max_lifetime", 0)
+	v.SetDefault("database.conn_max_idle_time", 0)
+	v.SetDefault("database.timezone", "")
 
 	v.SetDefault("redis.host", "localhost")
 	v.SetDefault("redis.port", 6379)
