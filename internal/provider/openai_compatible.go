@@ -84,7 +84,7 @@ func (p *OpenAICompatibleProvider) Embeddings(ctx context.Context, req *domain.E
 	}
 
 	var embeddingsResp domain.EmbeddingsResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&embeddingsResp); err != nil {
+	if err := decodeBoundedJSON(resp, &embeddingsResp, maxResponseRead, "embeddings response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -114,7 +114,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, req *domain.OpenAIR
 	}
 
 	var openaiResp domain.OpenAIResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&openaiResp); err != nil {
+	if err := decodeBoundedJSON(resp, &openaiResp, maxResponseRead, "chat response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -162,8 +162,11 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// U-34: parse BEFORE closing — parseProviderError reads the body;
+		// the old order lost the error detail and broke connection reuse.
+		perr := parseProviderError(resp)
 		resp.Body.Close()
-		return nil, parseProviderError(resp)
+		return nil, perr
 	}
 
 	ch := make(chan domain.SSEChunk, 64)
@@ -410,7 +413,7 @@ func (p *OpenAICompatibleProvider) GenerateImage(ctx context.Context, req *domai
 		return nil, parseProviderError(resp)
 	}
 	var result domain.ImageResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
@@ -447,7 +450,7 @@ func (p *OpenAICompatibleProvider) SubmitVideoTask(ctx context.Context, req *dom
 		return nil, parseProviderError(resp)
 	}
 	var result domain.VideoTask
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	result.Status = mapOpenAIStatus(result.Status)
@@ -470,7 +473,7 @@ func (p *OpenAICompatibleProvider) GetVideoTaskStatus(ctx context.Context, taskI
 		return nil, parseProviderError(resp)
 	}
 	var result domain.VideoTask
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	result.Status = mapOpenAIStatus(result.Status)
@@ -517,8 +520,10 @@ func (p *OpenAICompatibleProvider) CreateSpeech(ctx context.Context, req *domain
 		return nil, "", fmt.Errorf("send request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// U-34: parse BEFORE closing (parseProviderError reads the body).
+		perr := parseProviderError(resp)
 		resp.Body.Close()
-		return nil, "", parseProviderError(resp)
+		return nil, "", perr
 	}
 	return resp.Body, resp.Header.Get("Content-Type"), nil
 }
@@ -577,14 +582,19 @@ func (p *OpenAICompatibleProvider) transcribeOrTranslate(ctx context.Context, re
 	}
 	// Handle non-JSON response formats (text, srt, vtt)
 	if req.ResponseFormat != "" && req.ResponseFormat != "json" && req.ResponseFormat != "verbose_json" {
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
+		// Text formats: same bounded-total-length contract — read max+1 and
+		// reject over-cap instead of silently truncating the transcript.
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseRead+1))
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
+		}
+		if int64(len(data)) > maxResponseRead {
+			return nil, fmt.Errorf("transcription response exceeds %d byte cap", maxResponseRead)
 		}
 		return &domain.TranscriptionResponse{Text: string(data)}, nil
 	}
 	var result domain.TranscriptionResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
@@ -608,7 +618,7 @@ func (p *OpenAICompatibleProvider) CreateBatch(ctx context.Context, req *domain.
 		return nil, parseProviderError(resp)
 	}
 	var result domain.BatchResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
@@ -630,7 +640,7 @@ func (p *OpenAICompatibleProvider) GetBatch(ctx context.Context, batchID string,
 		return nil, parseProviderError(resp)
 	}
 	var result domain.BatchResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
@@ -655,7 +665,7 @@ func (p *OpenAICompatibleProvider) ListBatches(ctx context.Context, params url.V
 		return nil, parseProviderError(resp)
 	}
 	var result domain.BatchListResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
@@ -675,8 +685,10 @@ func (p *OpenAICompatibleProvider) GetFileContent(ctx context.Context, fileID, a
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// U-34: parse BEFORE closing (parseProviderError reads the body).
+		perr := parseProviderError(resp)
 		resp.Body.Close()
-		return nil, parseProviderError(resp)
+		return nil, perr
 	}
 	return resp.Body, nil
 }
@@ -698,7 +710,7 @@ func (p *OpenAICompatibleProvider) CancelBatch(ctx context.Context, batchID stri
 		return nil, parseProviderError(resp)
 	}
 	var result domain.BatchResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&result); err != nil {
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil

@@ -12,7 +12,14 @@ import (
 // It tolerates both the OpenAI envelope {"data":[{id,owned_by}]} and a bare
 // top-level array [{id,...}] returned by some compatible servers.
 func (p *OpenAICompatibleProvider) ListUpstreamModels(ctx context.Context, apiKey string) ([]UpstreamModel, error) {
-	url := p.baseURL + "/models"
+	return p.ListUpstreamModelsAtPath(ctx, apiKey, "/models")
+}
+
+// ListUpstreamModelsAtPath is ListUpstreamModels with the endpoint path chosen
+// by the caller (circuit-probe deployments point it at wherever THIS upstream
+// actually exposes a model list, which is not universally /models).
+func (p *OpenAICompatibleProvider) ListUpstreamModelsAtPath(ctx context.Context, apiKey, path string) ([]UpstreamModel, error) {
+	url := p.baseURL + path
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -30,9 +37,12 @@ func (p *OpenAICompatibleProvider) ListUpstreamModels(ctx context.Context, apiKe
 		return nil, parseProviderError(resp)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseRead))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseRead+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(body)) > maxResponseRead {
+		return nil, fmt.Errorf("models response exceeds %d byte cap", maxResponseRead)
 	}
 
 	// Try the canonical OpenAI envelope first.

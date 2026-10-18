@@ -243,6 +243,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 			repos.ProviderRepo, repos.ProviderModelCRUDRepo,
 			secrets.SecretResolver,
 			time.Duration(rcProbe.CircuitProbeInterval)*time.Second,
+			cfg.Gateway.CircuitProbePath,
 		)
 		go prober.Run(appCtx)
 	}

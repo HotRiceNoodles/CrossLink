@@ -91,7 +91,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *domain.OpenAIRequest,
 	}
 
 	var anthropicResp domain.AnthropicResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAnthropicResponseSize)).Decode(&anthropicResp); err != nil {
+	if err := decodeBoundedJSON(resp, &anthropicResp, maxAnthropicResponseSize, "anthropic response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -124,8 +124,11 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// U-34: parse BEFORE closing — parseProviderError reads the body;
+		// the old order lost the error detail and broke connection reuse.
+		perr := parseProviderError(resp)
 		resp.Body.Close()
-		return nil, parseProviderError(resp)
+		return nil, perr
 	}
 
 	ch := make(chan domain.SSEChunk, 64)

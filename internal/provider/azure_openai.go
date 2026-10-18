@@ -95,7 +95,7 @@ func (p *AzureOpenAIProvider) Embeddings(ctx context.Context, req *domain.Embedd
 	}
 
 	var embeddingsResp domain.EmbeddingsResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseRead)).Decode(&embeddingsResp); err != nil {
+	if err := decodeBoundedJSON(resp, &embeddingsResp, maxResponseRead, "embeddings response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -128,7 +128,9 @@ func (p *AzureOpenAIProvider) Chat(ctx context.Context, req *domain.OpenAIReques
 	}
 
 	var openaiResp domain.OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+	// U-35: bounded decode — embeddings above already used LimitReader; the
+	// chat path must not read an unbounded upstream body into memory.
+	if err := decodeBoundedJSON(resp, &openaiResp, maxResponseRead, "chat response"); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
