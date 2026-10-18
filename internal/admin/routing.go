@@ -181,7 +181,7 @@ func (h *RoutingHandler) Stats(c *gin.Context) {
 		Select(`provider_id,
 			COUNT(*) AS requests,
 			SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors,
-			AVG(latency_ms)::float8 AS avg_latency_ms,
+			AVG(latency_ms) AS avg_latency_ms,
 			SUM(input_tokens + output_tokens) AS tokens,
 			SUM(cost) AS cost`).
 		Where("model_requested = ? AND created_at >= ?", modelName, since).

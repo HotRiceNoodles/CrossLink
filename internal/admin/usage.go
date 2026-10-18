@@ -130,6 +130,15 @@ func (h *UsageHandler) Get(c *gin.Context) {
 }
 
 func (h *UsageHandler) List(c *gin.Context) {
+	// U-04: an unbounded COUNT on a multi-hundred-million-row retention table
+	// pinned a pool connection for tens of seconds on every panel refresh.
+	// Give List the same default 30-day window as Stats — set once here so
+	// BOTH the list query and the COUNT below see identical filters.
+	if c.Query("start_date") == "" {
+		q := c.Request.URL.Query()
+		q.Set("start_date", time.Now().AddDate(0, 0, -30).Format("2006-01-02"))
+		c.Request.URL.RawQuery = q.Encode()
+	}
 	query := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Order("created_at DESC"), c), c), c)
 
 	var total int64
@@ -183,17 +192,28 @@ type usageStats struct {
 }
 
 func (h *UsageHandler) Stats(c *gin.Context) {
-	base := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c), c)
-
-	// Default 30-day range when no start_date specified
-	if c.Query("start_date") == "" {
-		base = base.Where("created_at >= ?", time.Now().AddDate(0, 0, -30))
+	// U-09 fix: a query FACTORY, not a shared chain. GORM clause state
+	// (Group/Order/Limit/Select) persists on a reused *gorm.DB — the old
+	// single `base` chain leaked the currency probe's GROUP BY currency /
+	// ORDER BY SUM(cost) DESC / LIMIT 1 into every later aggregation, so
+	// mixed-currency deployments got stats for ONLY the top currency (and
+	// the per-currency breakdown itself was truncated to one row by the
+	// leftover LIMIT). Session{NewDB:true} is NOT used deliberately: it
+	// would also drop the Model, tenant scoping, time filters and request
+	// context bound here. Each consumer builds a fresh query.
+	newQuery := func() *gorm.DB {
+		q := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}), c), c), c)
+		if c.Query("start_date") == "" {
+			q = q.Where("created_at >= ?", time.Now().AddDate(0, 0, -30))
+		}
+		return q
 	}
 
-	// Determine primary currency (same pattern as DailyTrend/TeamStats)
+	// Determine primary currency (independent query — pollutes nothing).
 	primaryCurrency := "CNY"
 	var topCur struct{ Currency string }
-	base.Select("currency").
+	newQuery().
+		Select("currency").
 		Group("currency").
 		Order("SUM(cost) DESC").
 		Limit(1).
@@ -204,37 +224,38 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Main aggregation query
 	var stats usageStats
-	base.Select(
-		"COUNT(*) as total_requests, " +
-			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) as total_sessions, " +
-			"COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, " +
-			"COALESCE(SUM(input_tokens), 0) as input_tokens, " +
-			"COALESCE(SUM(output_tokens), 0) as output_tokens, " +
-			"COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, " +
-			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, " +
-			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, " +
-			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, " +
-			"COUNT(DISTINCT api_key_id) as active_api_keys, " +
+	newQuery().Select(
+		"COUNT(*) as total_requests, "+
+			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) as total_sessions, "+
+			"COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, "+
+			"COALESCE(SUM(input_tokens), 0) as input_tokens, "+
+			"COALESCE(SUM(output_tokens), 0) as output_tokens, "+
+			"COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, "+
+			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, "+
+			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, "+
+			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, "+
+			"COUNT(DISTINCT api_key_id) as active_api_keys, "+
 			"COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as total_images",
 	).Scan(&stats)
 
-	// Error/fallback/retry/guardrail counts (same base query)
+	// Error/fallback/retry/guardrail counts (independent query)
 	var rates struct {
 		ErrorCount     int64
 		FallbackCount  int64
 		RetryCount     int64
 		GuardrailCount int64
 	}
-	base.Select(
-		"COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count, " +
-			"COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count, " +
-			"COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count, " +
+	newQuery().Select(
+		"COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count, "+
+			"COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count, "+
+			"COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count, "+
 			"COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count",
 	).Scan(&rates)
 
-	// Cost: filtered to primary currency only
+	// Cost: filtered to primary currency only (independent query)
 	var costResult struct{ Total float64 }
-	base.Where("currency = ?", primaryCurrency).
+	newQuery().
+		Where("currency = ?", primaryCurrency).
 		Select("COALESCE(SUM(cost), 0) as total").
 		Scan(&costResult)
 	stats.TotalCost = costResult.Total
@@ -254,7 +275,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Per-currency breakdown (backward compat)
 	var currencySums []CurrencyCostSum
-	base.Select("currency, COALESCE(SUM(cost), 0) as total").
+	newQuery().Select("currency, COALESCE(SUM(cost), 0) as total").
 		Group("currency").
 		Scan(&currencySums)
 
@@ -320,6 +341,11 @@ type DailyStat struct {
 func (h *UsageHandler) DailyTrend(c *gin.Context) {
 	days := 7
 	if d, err := strconv.Atoi(c.Query("days")); err == nil && d > 0 {
+		// U-04: clamp the trend window — days=36500 was accepted and scanned
+		// the whole retention.
+		if d > 90 {
+			d = 90
+		}
 		days = d
 	}
 	var results []DailyStat
