@@ -106,11 +106,53 @@ func effectiveMaxConnsPerHost() int {
 	return defaultMaxConnsPerHost
 }
 
+// maxIdleConnsPerHostOverride / maxIdleConnsOverride make the upstream idle
+// pool configurable (gateway.upstream_max_idle_conns_per_host /
+// _max_idle_conns). The hardcoded defaults (20 per host, 400 total) caused
+// measurable connection churn at high stream-completion rates: released
+// conns beyond the idle cap are closed immediately (~111 closes/s at
+// 1200 concurrent streams, saturating a 16,384-port ephemeral range in
+// ~100s — r12c/r13 evidence). Deployments running thousands of concurrent
+// streams per upstream should raise the per-host idle cap to roughly their
+// steady concurrent-stream count so released conns are REUSED instead of
+// closed-and-redialed. 0 = keep the defaults.
+var (
+	maxIdleConnsPerHostOverride atomic.Int32
+	maxIdleConnsOverride        atomic.Int32
+)
+
+// SetMaxIdleConnsPerHost overrides the upstream idle pool sizes for transports
+// created after this call (non-positive resets to the defaults).
+func SetMaxIdleConns(perHost, total int) {
+	if perHost <= 0 {
+		perHost = defaultMaxIdleConnsPerHost
+	}
+	if total <= 0 {
+		total = defaultMaxIdleConns
+	}
+	maxIdleConnsPerHostOverride.Store(int32(perHost))
+	maxIdleConnsOverride.Store(int32(total))
+}
+
+func effectiveIdleConnsPerHost() int {
+	if n := int(maxIdleConnsPerHostOverride.Load()); n > 0 {
+		return n
+	}
+	return defaultMaxIdleConnsPerHost
+}
+
+func effectiveIdleConns() int {
+	if n := int(maxIdleConnsOverride.Load()); n > 0 {
+		return n
+	}
+	return defaultMaxIdleConns
+}
+
 func newStreamTransport() *http.Transport {
 	t := &http.Transport{
 		MaxConnsPerHost:       effectiveMaxConnsPerHost(),
-		MaxIdleConns:          defaultMaxIdleConns,
-		MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
+		MaxIdleConns:          effectiveIdleConns(),
+		MaxIdleConnsPerHost:   effectiveIdleConnsPerHost(),
 		IdleConnTimeout:       defaultIdleConnTimeout,
 		ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 	}
@@ -130,8 +172,8 @@ func newStreamTransport() *http.Transport {
 func newDefaultTransport() *http.Transport {
 	t := &http.Transport{
 		MaxConnsPerHost:     effectiveMaxConnsPerHost(),
-		MaxIdleConns:        defaultMaxIdleConns,
-		MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
+		MaxIdleConns:        effectiveIdleConns(),
+		MaxIdleConnsPerHost: effectiveIdleConnsPerHost(),
 		IdleConnTimeout:     defaultIdleConnTimeout,
 	}
 	if outboundSSRFGuard {

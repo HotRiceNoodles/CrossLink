@@ -213,6 +213,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// created later via admin CRUD (found via the 1500-stream capacity run:
 	// upstream peak pinned at 200 despite an env override).
 	provider.SetMaxConnsPerHost(cfg.Gateway.UpstreamMaxConnsPerHost)
+	// Idle-pool sizing is a deployment property (default 20/host, 400 total
+	// churned ~111 conns/s at 1200 concurrent streams and saturated the
+	// Windows ephemeral range in ~100s — r12c/r13). Raise toward the steady
+	// concurrent-stream count so released conns are reused, not redialed.
+	provider.SetMaxIdleConns(cfg.Gateway.UpstreamMaxIdleConnsPerHost, cfg.Gateway.UpstreamMaxIdleConns)
 	infra := ProvideInfrastructure(&InfraDeps{
 		Config:         cfg,
 		DB:             db,

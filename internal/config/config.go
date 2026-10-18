@@ -191,6 +191,14 @@ type GatewayConfig struct {
 	// high-concurrency deployments or add more provider rows for the same
 	// upstream (pools are per provider instance).
 	UpstreamMaxConnsPerHost int `mapstructure:"upstream_max_conns_per_host"`
+	// UpstreamMaxIdleConnsPerHost / UpstreamMaxIdleConns size the upstream
+	// idle pool (0 = defaults 20 per host / 400 total). Released conns beyond
+	// the idle cap are closed and redialed: at high stream-completion rates
+	// the defaults churned ~111 closes/s (r12c/r13) — raise toward the steady
+	// concurrent-stream count per upstream host. Env overrides:
+	// CL_GATEWAY_UPSTREAM_MAX_IDLE_CONNS_PER_HOST / _MAX_IDLE_CONNS.
+	UpstreamMaxIdleConnsPerHost int `mapstructure:"upstream_max_idle_conns_per_host"`
+	UpstreamMaxIdleConns        int `mapstructure:"upstream_max_idle_conns"`
 	// CircuitProbePath is where the circuit prober looks for a models list
 	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
 	// any other outcome falls back to a 1-token real chat probe. Empty string
@@ -628,6 +636,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.concurrency_limit", 2000)
 	v.SetDefault("gateway.provider_timeout", "180s")
 	v.SetDefault("gateway.upstream_max_conns_per_host", 200)
+	// Registered (0 = defaults 20/400) so the CL_GATEWAY_UPSTREAM_MAX_IDLE_*
+	// env overrides are honored env-only — viper's AutomaticEnv only resolves
+	// keys it already knows.
+	v.SetDefault("gateway.upstream_max_idle_conns_per_host", 0)
+	v.SetDefault("gateway.upstream_max_idle_conns", 0)
 	// F-12: circuit-probe models path is a deployment property of the
 	// upstream, not an adapter constant. Registered with a default so
 	// CL_GATEWAY_CIRCUIT_PROBE_PATH env override is honored; set "" for
