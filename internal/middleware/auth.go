@@ -88,6 +88,20 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 				c.Next()
 				return
 			}
+			if errors.Is(err, service.ErrAuthUnavailable) {
+				// Authentication BACKEND failure (DB unreachable / query error)
+				// — NOT a credential verdict. Answer temporary-unavailable so
+				// clients retry, and never record an auth failure: a valid key
+				// must recover automatically once the backend returns instead
+				// of being IP-locked for the failure window.
+				c.Header("Retry-After", "2")
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "api_error", "message": "authentication temporarily unavailable, retry"},
+				})
+				c.Abort()
+				return
+			}
 			if errors.Is(err, service.ErrKeyExpired) {
 				c.JSON(http.StatusForbidden, gin.H{
 					"type":  "error",

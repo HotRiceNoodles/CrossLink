@@ -20,6 +20,13 @@ import (
 
 var ErrKeyExpired = errors.New("api key expired")
 
+// ErrAuthUnavailable marks an authentication-BACKEND failure (DB unreachable,
+// query timeout, connection refused) as distinct from a credential verdict.
+// The auth middleware answers 503 + Retry-After and never counts it toward
+// the IP auth-failure lock: a valid key must recover automatically once the
+// backend returns, not be locked out for the lock's TTL.
+var ErrAuthUnavailable = errors.New("auth backend unavailable")
+
 const authCachePrefix = "auth:key:"
 const authCacheTTL = 60 * time.Second
 
@@ -175,7 +182,8 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 	key, err := s.hashRepo.GetKeyByHash(ctx, keyHash)
 	if err != nil {
 		if !errors.Is(err, repository.ErrHashNotFound) {
-			return nil, fmt.Errorf("lookup key by hash: %w", err)
+			// Infrastructure failure (repo/connection error), NOT a bad key.
+			return nil, fmt.Errorf("%w: lookup key by hash: %v", ErrAuthUnavailable, err)
 		}
 		// Fallback: try SHA-256 for legacy keys when in GM mode
 		if s.crypto.Algorithms().Hash == crypto.AlgoSM3 {
@@ -186,7 +194,7 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 				if errors.Is(err, repository.ErrHashNotFound) {
 					return nil, repository.ErrKeyNotFound
 				}
-				return nil, fmt.Errorf("lookup key by hash (legacy): %w", err)
+				return nil, fmt.Errorf("%w: lookup key by hash (legacy): %v", ErrAuthUnavailable, err)
 			}
 		} else {
 			return nil, repository.ErrKeyNotFound
