@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,17 +12,23 @@ import (
 	"github.com/crosslink/internal/router"
 )
 
-// probeProvider counts calls and controls the outcome of Chat. lister controls
-// whether it advertises a /models endpoint (and whether that succeeds).
+// probeProvider counts calls and controls the outcome of Chat and the models
+// probe. listerErr simulates the /models endpoint outcome (nil = 2xx list);
+// lastPath records the path the prober asked for.
 type probeProvider struct {
 	scriptedProvider
-	lister    bool
 	listerErr error
 	modelHits int
+	lastPath  string
 }
 
-func (p *probeProvider) ListUpstreamModels(_ context.Context, _ string) ([]provider.UpstreamModel, error) {
+func (p *probeProvider) ListUpstreamModels(ctx context.Context, key string) ([]provider.UpstreamModel, error) {
+	return p.ListUpstreamModelsAtPath(ctx, key, "/models")
+}
+
+func (p *probeProvider) ListUpstreamModelsAtPath(_ context.Context, _ string, path string) ([]provider.UpstreamModel, error) {
 	p.modelHits++
+	p.lastPath = path
 	if p.listerErr != nil {
 		return nil, p.listerErr
 	}
@@ -45,16 +52,20 @@ func (m probeModels) FirstByProviderID(_ context.Context, _ int64) (*model.Provi
 }
 
 func newTestProber(health *provider.HealthTracker, prov *probeProvider) *CircuitProber {
+	return newTestProberPath(health, prov, "/models")
+}
+
+func newTestProberPath(health *provider.HealthTracker, prov *probeProvider, path string) *CircuitProber {
 	reg := provider.NewRegistry()
 	reg.Register(prov.Name(), prov)
 	row := &model.Provider{ID: 1, Name: prov.Name(), Status: 1, APIKey: "sk-test"}
-	return NewCircuitProber(health, reg, probeRows{row}, probeModels{first: &model.ProviderModel{ProviderModel: "pm-1"}}, nil, time.Second)
+	return NewCircuitProber(health, reg, probeRows{row}, probeModels{first: &model.ProviderModel{ProviderModel: "pm-1"}}, nil, time.Second, path)
 }
 
 // A successful /models probe closes an open circuit early.
 func TestCircuitProber_ModelsProbeClosesCircuit(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
-	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}, lister: true}
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}}
 	prov.outcomes = []bool{false}
 	health.RecordTransientFailure("minimax", "", 0) // open for an hour
 	if health.IsHealthy("minimax") {
@@ -72,14 +83,54 @@ func TestCircuitProber_ModelsProbeClosesCircuit(t *testing.T) {
 	if prov.modelHits != 1 {
 		t.Fatalf("expected exactly 1 models probe, got %d", prov.modelHits)
 	}
+	if prov.lastPath != "/models" {
+		t.Fatalf("default probe path must be /models, got %q", prov.lastPath)
+	}
 }
 
-// A failing /models probe leaves the circuit exactly as it was — openUntil
-// must not move (a prober failure must never extend the cooldown).
+// F-12: a NON-2xx /models outcome (endpoint missing / auth-gated /
+// rate-limited / 5xx / network error) is inconclusive for model
+// serviceability — the prober must fall back to a real 1-token chat, and a
+// successful chat closes the circuit. This is the mockgate/r12d failure mode:
+// upstream without /models previously NEVER recovered.
+func TestCircuitProber_ModelsNon2xxFallsBackToChat(t *testing.T) {
+	modelsErrs := map[string]error{
+		"404 not implemented": &provider.ProviderError{StatusCode: 404, ErrorType: provider.ErrorNotFound, Message: "404 page not found"},
+		"401 auth required":   &provider.ProviderError{StatusCode: 401, ErrorType: provider.ErrorAuth, Message: "unauthorized"},
+		"429 rate limited":    &provider.ProviderError{StatusCode: 429, ErrorType: provider.ErrorRateLimit, Message: "rate limited"},
+		"500 server error":    &provider.ProviderError{StatusCode: 500, ErrorType: provider.ErrorServer, Message: "boom"},
+		"network unreachable": fmt.Errorf("send request: dial tcp 10.0.0.9:443: connectex: timed out"),
+	}
+	for name, merr := range modelsErrs {
+		t.Run(name, func(t *testing.T) {
+			health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+			prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}, listerErr: merr}
+			prov.outcomes = []bool{true} // chat succeeds
+			health.RecordTransientFailure("minimax", "", 0)
+			if health.IsHealthy("minimax") {
+				t.Fatal("circuit should be open")
+			}
+
+			newTestProber(health, prov).ProbeOnce(context.Background())
+
+			if !health.IsHealthy("minimax") {
+				t.Fatal("failed /models probe must fall back to chat and close on chat success")
+			}
+			if prov.modelHits != 1 || prov.callCount() != 1 {
+				t.Fatalf("expected 1 models probe + 1 chat probe, got models=%d chats=%d", prov.modelHits, prov.callCount())
+			}
+		})
+	}
+}
+
+// F-12: when BOTH the models probe and the chat probe fail, the circuit stays
+// open and — critically — the prober must never extend openUntil (a failed
+// out-of-band probe must not turn the cooldown into an indefinite block).
 func TestCircuitProber_FailedProbeLeavesStateUntouched(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
-	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}, lister: true,
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"},
 		listerErr: context.DeadlineExceeded}
+	prov.outcomes = []bool{false, false} // both chat probes fail
 	health.RecordTransientFailure("minimax", "", 0)
 	var until time.Time
 	for _, s := range health.Snapshot() {
@@ -92,11 +143,108 @@ func TestCircuitProber_FailedProbeLeavesStateUntouched(t *testing.T) {
 	newTestProber(health, prov).ProbeOnce(context.Background())
 
 	if health.IsHealthy("minimax") {
-		t.Fatal("failed probe must not close the circuit")
+		t.Fatal("failed probes must not close the circuit")
 	}
 	for _, s := range health.Snapshot() {
 		if s.Model == "" && !s.Until.Equal(until) {
 			t.Fatalf("openUntil moved after failed probes: %v -> %v", until, s.Until)
+		}
+	}
+	if prov.modelHits != 2 || prov.callCount() != 2 {
+		t.Fatalf("expected exactly one models+chat pair per pass, got models=%d chats=%d", prov.modelHits, prov.callCount())
+	}
+}
+
+// F-12: transient upstream failure then recovery — the first pass sees the
+// upstream still failing and stays open; once real traffic would succeed, the
+// next pass closes the circuit (bounded: exactly one chat per pass).
+func TestCircuitProber_TransientFailureThenRecovers(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"},
+		listerErr: &provider.ProviderError{StatusCode: 404, ErrorType: provider.ErrorNotFound, Message: "404"}}
+	prov.outcomes = []bool{false} // first chat probe fails too
+	health.RecordTransientFailure("minimax", "", 0)
+
+	p := newTestProber(health, prov)
+	p.ProbeOnce(context.Background())
+	if health.IsHealthy("minimax") {
+		t.Fatal("upstream still failing: circuit must stay open")
+	}
+
+	p.ProbeOnce(context.Background()) // chat now succeeds (outcomes exhausted)
+	if !health.IsHealthy("minimax") {
+		t.Fatal("recovered upstream: circuit must close on the next pass")
+	}
+}
+
+// F-12: the models probe path is configurable; the prober must ask the
+// upstream at exactly the configured path.
+func TestCircuitProber_CustomProbePath(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}}
+	prov.outcomes = []bool{false}
+	health.RecordTransientFailure("minimax", "", 0)
+
+	newTestProberPath(health, prov, "/v1/models").ProbeOnce(context.Background())
+
+	if prov.lastPath != "/v1/models" {
+		t.Fatalf("probe must use configured path /v1/models, got %q", prov.lastPath)
+	}
+	if !health.IsHealthy("minimax") {
+		t.Fatal("2xx at the configured path must close the circuit")
+	}
+	if prov.callCount() != 0 {
+		t.Fatalf("models 2xx must not spend chat calls, got %d", prov.callCount())
+	}
+}
+
+// F-12: an empty probe path disables the models probe entirely — decisions
+// come from the real chat probe alone (chat-only deployments).
+func TestCircuitProber_EmptyPathIsChatOnly(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"},
+		listerErr: &provider.ProviderError{StatusCode: 404, ErrorType: provider.ErrorNotFound, Message: "404"}}
+	prov.outcomes = []bool{false}
+	health.RecordTransientFailure("minimax", "", 0)
+
+	p := newTestProberPath(health, prov, "")
+	p.ProbeOnce(context.Background())
+
+	if prov.modelHits != 0 {
+		t.Fatalf("empty path must skip the models probe, got %d hits", prov.modelHits)
+	}
+	if health.IsHealthy("minimax") {
+		t.Fatal("chat probe failed: circuit must stay open")
+	}
+	if prov.callCount() != 1 {
+		t.Fatalf("exactly one chat probe expected, got %d", prov.callCount())
+	}
+}
+
+// F-12 herd bound: one pass probes each open circuit exactly once, however
+// many are open (per-circuit-per-interval bound; the half-open single-flight
+// gate bounds real traffic on top of this).
+func TestCircuitProber_OneProbePerCircuitPerPass(t *testing.T) {
+	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
+	names := []string{"pa", "pb", "pc"}
+	provs := make([]*probeProvider, len(names))
+	reg := provider.NewRegistry()
+	for i, n := range names {
+		provs[i] = &probeProvider{scriptedProvider: scriptedProvider{name: n}}
+		provs[i].outcomes = []bool{false}
+		reg.Register(n, provs[i])
+		health.RecordTransientFailure(n, "", 0)
+	}
+	row := &model.Provider{ID: 1, Name: "pa", Status: 1, APIKey: "sk-test"}
+	NewCircuitProber(health, reg, probeRows{row}, probeModels{first: &model.ProviderModel{ProviderModel: "pm-1"}}, nil, time.Second, "/models").
+		ProbeOnce(context.Background())
+
+	for i, n := range names {
+		if provs[i].modelHits != 1 {
+			t.Fatalf("%s: expected exactly 1 models probe, got %d", n, provs[i].modelHits)
+		}
+		if !health.IsHealthy(n) {
+			t.Fatalf("%s: 2xx models must close", n)
 		}
 	}
 }
@@ -105,14 +253,14 @@ func TestCircuitProber_FailedProbeLeavesStateUntouched(t *testing.T) {
 // circuit's model and closes on success.
 func TestCircuitProber_ChatFallbackClosesCircuit(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
-	// scriptedProvider has no ListUpstreamModels method → chat fallback path.
+	// scriptedProvider has no models methods at all → chat-only path.
 	prov := &scriptedProvider{name: "minimax"}
 	health.RecordPersistentFailure("minimax", "MiniMax-M3", "model", time.Hour)
 
 	reg := provider.NewRegistry()
 	reg.Register("minimax", prov)
 	row := &model.Provider{ID: 1, Name: "minimax", Status: 1, APIKey: "sk-test"}
-	NewCircuitProber(health, reg, probeRows{row}, probeModels{first: &model.ProviderModel{ProviderModel: "pm-1"}}, nil, time.Second).
+	NewCircuitProber(health, reg, probeRows{row}, probeModels{first: &model.ProviderModel{ProviderModel: "pm-1"}}, nil, time.Second, "/models").
 		ProbeOnce(context.Background())
 
 	if !health.IsHealthyModel("minimax", "MiniMax-M3") {
@@ -126,7 +274,7 @@ func TestCircuitProber_ChatFallbackClosesCircuit(t *testing.T) {
 // Steady state: closed circuits produce no upstream traffic at all.
 func TestCircuitProber_NoProbeWhenClosed(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
-	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}, lister: true}
+	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}}
 
 	newTestProber(health, prov).ProbeOnce(context.Background())
 

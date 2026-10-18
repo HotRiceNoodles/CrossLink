@@ -191,6 +191,12 @@ type GatewayConfig struct {
 	// high-concurrency deployments or add more provider rows for the same
 	// upstream (pools are per provider instance).
 	UpstreamMaxConnsPerHost int `mapstructure:"upstream_max_conns_per_host"`
+	// CircuitProbePath is where the circuit prober looks for a models list
+	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
+	// any other outcome falls back to a 1-token real chat probe. Empty string
+	// disables the models probe entirely (chat-only probing). Env override:
+	// CL_GATEWAY_CIRCUIT_PROBE_PATH.
+	CircuitProbePath string `mapstructure:"circuit_probe_path"`
 	// InflightBodyBudgetBytes caps the TOTAL bytes of buffered request bodies
 	// across all in-flight gateway requests (0 = disabled). The concurrency
 	// limit alone bounds request COUNT, not memory: 2000 slots x the 10MiB
@@ -622,6 +628,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.concurrency_limit", 2000)
 	v.SetDefault("gateway.provider_timeout", "180s")
 	v.SetDefault("gateway.upstream_max_conns_per_host", 200)
+	// F-12: circuit-probe models path is a deployment property of the
+	// upstream, not an adapter constant. Registered with a default so
+	// CL_GATEWAY_CIRCUIT_PROBE_PATH env override is honored; set "" for
+	// chat-only probing.
+	v.SetDefault("gateway.circuit_probe_path", "/models")
 	// Registered (0 = disabled) so CL_GATEWAY_INFLIGHT_BODY_BUDGET_BYTES /
 	// CL_GATEWAY_INFLIGHT_MULTIPART_RESERVE_BYTES env overrides are honored
 	// env-only — viper's AutomaticEnv only resolves keys it already knows.
@@ -673,6 +684,21 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("license.heartbeat_enabled", false)
 	v.SetDefault("license.heartbeat_interval", "24h")
+
+	// U-06: viper's AutomaticEnv only resolves REGISTERED keys — these were
+	// documented as env-overridable (config.example.yaml) but silently
+	// ignored in pure-env deployments. Empty-string defaults keep the YAML
+	// path unchanged; CL_SMTP_*/CL_LICENSE_* now actually work.
+	v.SetDefault("smtp.host", "")
+	v.SetDefault("smtp.port", 587)
+	v.SetDefault("smtp.username", "")
+	v.SetDefault("smtp.password", "")
+	v.SetDefault("smtp.from", "")
+	v.SetDefault("license.server_url", "")
+	v.SetDefault("license.license_key", "")
+	v.SetDefault("license.license_file", "")
+	v.SetDefault("license.offline_file", "")
+	v.SetDefault("license.node_id", "")
 
 	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.max_servers", 0)

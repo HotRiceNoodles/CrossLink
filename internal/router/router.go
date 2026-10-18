@@ -49,6 +49,41 @@ type Resolver struct {
 	// so the cache-hit hot path doesn't do N Redis reads per request. Bounded
 	// staleness (≤2s) is far better than the 30s resolver cache alone.
 	healthScoreCache sync.Map // key "pn|pm" -> *healthScoreCacheEntry
+	// degraded: BOUNDED negative cache for ErrResolveDegraded per (model,org).
+	// Without it, a DB outage turns EVERY request into a fresh mapping query
+	// through a pool that cannot dial — the query failure storm observed in
+	// the ladder campaigns (cap3: 345k 503s, each one a DB attempt plus a
+	// usage write). One failure suppresses further lookups for a short window.
+	// Bounded (degradedCacheCap) with lazy expiry on read AND insert-time
+	// sweeping — unbounded (model,org) churn must not accumulate.
+	degradedMu sync.Mutex
+	degraded   map[string]time.Time // cacheKey -> suppressed-until
+	// probes: per-key single-flight for resolveUncached. Cold start or the
+	// instant a degradation window expires would otherwise let N concurrent
+	// requests query the DB together; one probe runs, the rest share its
+	// outcome.
+	probesMu sync.Mutex
+	probes   map[string]*resolveProbe
+}
+
+// resolveDegradedTTL bounds how long a resolve-degradation negative-cache
+// entry suppresses DB lookups. Short on purpose: after the DB recovers,
+// traffic sees at most this much extra 503 latency.
+var resolveDegradedTTL = 3 * time.Second
+
+// degradedCacheCap bounds the negative cache. Keys are "model:orgID"; 8192
+// entries is far beyond any real model/org fan-out and costs < 1MB.
+var degradedCacheCap = 8192
+
+// resolveProbe is one in-flight resolveUncached for a key; late arrivals
+// wait on done and reuse result/err verbatim. cancelled marks an outcome
+// produced by the OWNER's request cancellation — it carries no verdict about
+// DB health and must not be cached or treated as degradation.
+type resolveProbe struct {
+	done      chan struct{}
+	result    []*RouteResult
+	err       error
+	cancelled bool
 }
 
 type cacheEntry struct {
@@ -116,6 +151,8 @@ func NewResolver(
 		latencySvc:     latencySvc,
 		activeTracker:  activeTracker,
 		secretResolver: secretResolver,
+		degraded:       make(map[string]time.Time),
+		probes:         make(map[string]*resolveProbe),
 	}
 }
 
@@ -129,66 +166,233 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		}
 	}
 
-	// Check cache
 	cacheKey := fmt.Sprintf("%s:%d", modelName, orgID)
-	if v, ok := r.cache.Load(cacheKey); ok {
-		entry := v.(*cacheEntry)
-		if time.Now().Before(entry.expire) {
-			// Filter out circuit-open providers from cached results via a
-			// PURE READ (healthAllows → CircuitState). Resolve must NOT use
-			// IsHealthyModel here: it claims the half-open probe lease
-			// (probeInFlight), and the FallbackEngine re-checks
-			// IsHealthyModel before each attempt — it would see the lease
-			// Resolve just claimed, skip the provider, and never run the
-			// attempt whose deferred ClearProbe releases it. The leaked
-			// lease then permanently filters the provider out of Resolve
-			// ("no available route for model" deadlock). P4.4b health-score
-			// reorder stays ON TOP of this filter.
-			if r.health != nil {
-				var healthy []*RouteResult
-				for _, rr := range entry.results {
-					if r.healthAllows(rr.Provider.Name(), rr.ProviderModel) {
-						healthy = append(healthy, rr)
-					}
-				}
-				if len(healthy) > 0 {
-					if r.healthFn != nil {
-						healthy = r.reorderByHealth(healthy)
-					}
-					return healthy, nil
-				}
-				// All cached providers circuit-open: serve the REJECTION from
-				// the cached mappings instead of falling through to the DB.
-				// The previous fallthrough re-queried provider_models for EVERY
-				// rejected request — an upstream outage under load became a DB
-				// query storm (measured in soak r2: 178k slow provider_models
-				// queries at ~200ms each saturated Postgres, exhausting its
-				// connections and cascading into resolve-degraded errors).
-				// Circuit state is still checked live per request (pure read
-				// above); mapping edits invalidate this cache explicitly.
-				return nil, r.unroutableFromCache(modelName, entry.results)
-			} else {
-				if r.healthFn != nil {
-					return r.reorderByHealth(entry.results), nil
-				}
-				return entry.results, nil
-			}
-		}
-		r.cache.Delete(cacheKey)
-	}
-
-	ordered, err := r.resolveUncached(ctx, modelName, orgID)
-	if err != nil {
+	// Degradation negative-cache: while a recent mapping-lookup failure
+	// suppresses DB access, answer 503 from memory instead of re-dialing a
+	// failing pool per request.
+	if err := r.degradedError(cacheKey, modelName); err != nil {
 		return nil, err
 	}
+	if routes, err, hit := r.serveFromCache(cacheKey, modelName); hit {
+		return routes, err
+	}
 
-	// Store in cache
-	r.cache.Store(cacheKey, &cacheEntry{
-		results: ordered,
-		expire:  time.Now().Add(r.ttl),
+	// Single-flight the uncached probe per key: cold start and the instant a
+	// degradation window expires would otherwise stampede the DB with N
+	// concurrent identical queries. The probe owner runs resolveUncached and
+	// publishes; everyone else waits and reuses the outcome verbatim.
+	//
+	// The caching/degradation policy runs INSIDE the probe, before the
+	// outcome is published (close(done)) and before the probe unregisters —
+	// so a post-completion arrival sees the caches already filled and never
+	// starts a second query (the tail race the owner-side Store used to lose).
+	return r.probeResolve(ctx, cacheKey, func(pctx context.Context) ([]*RouteResult, error) {
+		// Tail-race guard: an earlier probe may have completed (and filled
+		// either cache) between this caller's checks and its probe
+		// registration. The new owner re-checks both before touching the DB
+		// so the stampede stays collapsed at one real query.
+		if derr := r.degradedError(cacheKey, modelName); derr != nil {
+			return nil, derr
+		}
+		if routes, cerr, hit := r.serveFromCache(cacheKey, modelName); hit {
+			return routes, cerr
+		}
+		ordered, err := r.resolveUncached(pctx, modelName, orgID)
+		if err != nil {
+			// Negative-cache ONLY the degradation case (the DB lookup itself
+			// failed on the DB's merits). Cancellations come back as raw ctx
+			// errors from resolveUncached and must NOT poison the negative
+			// cache — the DB may be perfectly healthy when one request goes
+			// away.
+			if errors.Is(err, ErrResolveDegraded) {
+				r.markDegraded(cacheKey)
+			}
+			return nil, err
+		}
+		r.clearDegraded(cacheKey)
+		r.cache.Store(cacheKey, &cacheEntry{
+			results: ordered,
+			expire:  time.Now().Add(r.ttl),
+		})
+		return ordered, nil
 	})
+}
 
-	return ordered, nil
+// serveFromCache returns the cached routes for cacheKey with circuit-open
+// providers filtered out, or hit=false when no fresh entry exists. Extracted
+// from the Resolve fast path so the single-flight probe owner can re-check it
+// as a tail-race guard.
+func (r *Resolver) serveFromCache(cacheKey, modelName string) ([]*RouteResult, error, bool) {
+	v, ok := r.cache.Load(cacheKey)
+	if !ok {
+		return nil, nil, false
+	}
+	entry := v.(*cacheEntry)
+	if !time.Now().Before(entry.expire) {
+		r.cache.Delete(cacheKey)
+		return nil, nil, false
+	}
+	// Filter out circuit-open providers from cached results via a
+	// PURE READ (healthAllows → CircuitState). Resolve must NOT use
+	// IsHealthyModel here: it claims the half-open probe lease
+	// (probeInFlight), and the FallbackEngine re-checks
+	// IsHealthyModel before each attempt — it would see the lease
+	// Resolve just claimed, skip the provider, and never run the
+	// attempt whose deferred ClearProbe releases it. The leaked
+	// lease then permanently filters the provider out of Resolve
+	// ("no available route for model" deadlock). P4.4b health-score
+	// reorder stays ON TOP of this filter.
+	if r.health != nil {
+		var healthy []*RouteResult
+		for _, rr := range entry.results {
+			if r.healthAllows(rr.Provider.Name(), rr.ProviderModel) {
+				healthy = append(healthy, rr)
+			}
+		}
+		if len(healthy) > 0 {
+			if r.healthFn != nil {
+				healthy = r.reorderByHealth(healthy)
+			}
+			return healthy, nil, true
+		}
+		// All cached providers circuit-open: serve the REJECTION from
+		// the cached mappings instead of falling through to the DB.
+		// The previous fallthrough re-queried provider_models for EVERY
+		// rejected request — an upstream outage under load became a DB
+		// query storm (measured in soak r2: 178k slow provider_models
+		// queries at ~200ms each saturated Postgres, exhausting its
+		// connections and cascading into resolve-degraded errors).
+		// Circuit state is still checked live per request (pure read
+		// above); mapping edits invalidate this cache explicitly.
+		return nil, r.unroutableFromCache(modelName, entry.results), true
+	}
+	if r.healthFn != nil {
+		return r.reorderByHealth(entry.results), nil, true
+	}
+	return entry.results, nil, true
+}
+
+// probeResolve runs fn for cacheKey at most once among concurrent callers.
+// Cancellation semantics (review directive): every caller brings its own ctx —
+//   - a WAITER whose ctx is cancelled returns immediately instead of pinning
+//     the request on someone else's probe;
+//   - an OWNER whose ctx is cancelled mid-probe publishes a cancelled
+//     (non-verdict) outcome and unregisters; live waiters retry once rather
+//     than inheriting a foreign cancellation, and nothing about the DB is
+//     cached or marked degraded from a cancellation.
+func (r *Resolver) probeResolve(ctx context.Context, cacheKey string, fn func(context.Context) ([]*RouteResult, error)) ([]*RouteResult, error) {
+	for attempt := 0; ; attempt++ {
+		r.probesMu.Lock()
+		if p, ok := r.probes[cacheKey]; ok {
+			r.probesMu.Unlock()
+			select {
+			case <-p.done:
+				if p.cancelled && attempt == 0 && ctx.Err() == nil {
+					// Owner was cancelled — DB verdict unknown. Become the
+					// next owner once instead of propagating the foreign
+					// cancellation (bounded retry: a second cancellation
+					// falls through to the caller).
+					continue
+				}
+				return p.result, p.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		p := &resolveProbe{done: make(chan struct{})}
+		r.probes[cacheKey] = p
+		r.probesMu.Unlock()
+
+		result, err := fn(ctx)
+		if ctx.Err() != nil && err != nil {
+			// Owner cancelled with no usable outcome: publish a cancelled
+			// (non-verdict) outcome so current waiters return promptly; live
+			// waiters/next arrivals re-probe instead of inheriting it. A
+			// SUCCESSFUL result stands even when the ctx fired late — it is
+			// a real verdict (this keeps e.g. pre-cancelled playground
+			// requests whose repo ignores ctx recording their usage).
+			//
+			// Ordering (review fix): UNREGISTER BEFORE PUBLISHING. With
+			// close(done) first, a woken waiter could loop, re-read the SAME
+			// still-registered cancelled probe, burn its single retry on it,
+			// and return the owner's ctx error. With the registration gone
+			// before done closes, a retrying waiter cannot find this probe
+			// again: it becomes the next owner and probes with its own ctx.
+			p.cancelled = true
+			p.result, p.err = nil, err
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				p.err = fmt.Errorf("%w: %v", context.Canceled, err)
+			}
+			r.forgetProbe(cacheKey, p)
+			close(p.done)
+			return nil, p.err
+		}
+		p.result, p.err = result, err
+		// Same unregister-before-publish ordering as the cancel branch: the
+		// registration is gone before waiters can wake, so a post-completion
+		// arrival always observes the caches (filled above by fn's policy)
+		// instead of finding a finished-but-registered probe.
+		r.forgetProbe(cacheKey, p)
+		close(p.done)
+		return result, err
+	}
+}
+
+func (r *Resolver) forgetProbe(cacheKey string, p *resolveProbe) {
+	r.probesMu.Lock()
+	if cur, ok := r.probes[cacheKey]; ok && cur == p {
+		delete(r.probes, cacheKey)
+	}
+	r.probesMu.Unlock()
+}
+
+// markDegraded suppresses lookups for cacheKey for one TTL window. The map is
+// bounded: at cap, expired entries are swept first, then arbitrary entries
+// are evicted — unbounded (model,org) churn must not accumulate memory.
+func (r *Resolver) markDegraded(cacheKey string) {
+	r.degradedMu.Lock()
+	defer r.degradedMu.Unlock()
+	if len(r.degraded) >= degradedCacheCap {
+		now := time.Now()
+		for k, until := range r.degraded {
+			if now.After(until) {
+				delete(r.degraded, k)
+			}
+		}
+		for k := range r.degraded {
+			if len(r.degraded) < degradedCacheCap {
+				break
+			}
+			delete(r.degraded, k)
+		}
+	}
+	r.degraded[cacheKey] = time.Now().Add(resolveDegradedTTL)
+}
+
+func (r *Resolver) clearDegraded(cacheKey string) {
+	r.degradedMu.Lock()
+	delete(r.degraded, cacheKey)
+	r.degradedMu.Unlock()
+}
+
+// degradedError returns the cached degradation error for cacheKey when a
+// recent failure suppressed lookups, or nil when lookups should proceed.
+// Expired entries are removed lazily on read.
+func (r *Resolver) degradedError(cacheKey, modelName string) error {
+	now := time.Now()
+	r.degradedMu.Lock()
+	until, ok := r.degraded[cacheKey]
+	if ok {
+		if now.After(until) {
+			delete(r.degraded, cacheKey)
+			ok = false
+		}
+	}
+	r.degradedMu.Unlock()
+	if !ok {
+		return nil
+	}
+	return fmt.Errorf("%w: query model mappings for model %s: recently failed (suppressed %s)", ErrResolveDegraded, modelName, time.Until(until).Round(time.Millisecond))
 }
 
 // resolveUncached performs the DB query, candidate filtering, strategy selection,
@@ -197,6 +401,13 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
 	models, err := r.repo.FindByModelName(ctx, modelName, orgID)
 	if err != nil {
+		// A cancelled caller says NOTHING about DB health — return the raw
+		// cancellation so callers neither negative-cache nor report this as
+		// a degradation (a healthy DB must not be suppressed because one
+		// request went away mid-query).
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("%w: query model mappings for model %s: %v", ErrResolveDegraded, modelName, err)
 	}
 	if len(models) == 0 {
