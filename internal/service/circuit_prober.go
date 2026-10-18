@@ -95,6 +95,12 @@ func (p *CircuitProber) Run(ctx context.Context) {
 	}
 }
 
+// probeConcurrency caps how many circuits ProbeOnce probes SIMULTANEOUSLY.
+// Without a global bound, a mass-open event (e.g. an upstream blip opening
+// thousands of model circuits) would launch one probe goroutine per circuit
+// and stampede the recovering upstream with a burst of /models+chat calls.
+const probeConcurrency = 8
+
 // ProbeOnce runs a single probe pass — exported for tests and manual triggers.
 func (p *CircuitProber) ProbeOnce(ctx context.Context) { p.probeAll(ctx) }
 
@@ -110,13 +116,23 @@ func (p *CircuitProber) probeAll(ctx context.Context) {
 		return // steady state: zero upstream traffic
 	}
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, probeConcurrency)
 	for _, s := range p.health.Snapshot() {
 		if s.State != provider.CircuitOpen.String() {
 			continue
 		}
 		wg.Add(1)
+		select {
+		case sem <- struct{}{}: // bounded: at most probeConcurrency probes in flight
+		case <-ctx.Done(): // cancellation is honored WHILE WAITING for a slot,
+			// so a full semaphore under a cancelled/shutting-down pass does
+			// not leave goroutines parked indefinitely (review fix).
+			wg.Done()
+			return
+		}
 		go func(s provider.ProviderHealthSnapshot) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			p.probeOne(ctx, s)
 		}(s)
 	}
@@ -124,18 +140,26 @@ func (p *CircuitProber) probeAll(ctx context.Context) {
 }
 
 func (p *CircuitProber) probeOne(ctx context.Context, s provider.ProviderHealthSnapshot) {
+	// The timeout covers the WHOLE probe chain — provider row lookup, secret
+	// resolution, models probe and chat probe. It used to be created AFTER the
+	// row query and secret resolution, so a slow repo or secret backend could
+	// consume unbounded time (and hold a concurrency slot) before any bound
+	// applied (review fix).
+	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	prov, ok := p.registry.Get(s.Provider)
 	if !ok {
 		return // provider not registered (removed/renamed) — nothing to probe
 	}
-	row, err := p.rows.GetByName(ctx, s.Provider)
+	row, err := p.rows.GetByName(pctx, s.Provider)
 	if err != nil {
 		slog.Warn("circuit prober: provider row not found", "provider", s.Provider, "error", err)
 		return
 	}
 	apiKey := row.APIKey
 	if p.secrets != nil {
-		resolved, err := p.secrets.Resolve(ctx, apiKey)
+		resolved, err := p.secrets.Resolve(pctx, apiKey)
 		if err != nil {
 			slog.Warn("circuit prober: secret resolution failed", "provider", s.Provider, "error", err)
 			return
@@ -143,15 +167,18 @@ func (p *CircuitProber) probeOne(ctx context.Context, s provider.ProviderHealthS
 		apiKey = resolved
 	}
 
-	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	modelName := s.Model
 
-	// Cheap first signal: the models list at the configured path. Only a 2xx
-	// closes here; every other outcome is inconclusive for model
-	// serviceability and falls through to the authoritative chat probe.
-	if p.probePath != "" {
+	// Model-scope circuits guard ONE model's serviceability. A healthy
+	// /models LIST proves the API host+auth are back but says NOTHING about
+	// whether the TARGET model's inference recovered (review F-12 follow-up:
+	// list-health != model-health) — so for a model-scope circuit the
+	// authoritative 1-token chat on THAT model is REQUIRED; the models probe
+	// is skipped entirely for closing decisions.
+	// Account-scope circuits (s.Model == "") open on account-wide signals
+	// (network/5xx), for which a 2xx models list IS a valid recovery signal;
+	// it remains the cheap fast path below.
+	if p.probePath != "" && modelName == "" {
 		if lister, ok := prov.(provider.PathModelsLister); ok {
 			if _, err := lister.ListUpstreamModelsAtPath(pctx, apiKey, p.probePath); err != nil {
 				// F-12: do NOT stay-open on a failed /models probe alone — the
