@@ -463,10 +463,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		gateCfg, sliderCfg := captchaConfigsFrom(s.Captcha)
 		captchaGate.ApplyConfig(gateCfg, sliderCfg)
 	})
-	// Captcha issue: pre-auth, image generation is cheap; dedicated per-IP
-	// issue rate limit deferred (login limiter already caps the real attack
-	// surface — failed logins). See docs/plans/2026-07-03-login-captcha-design.md §3.4.
-	r.GET("/admin/api/auth/captcha/issue", admin.CaptchaIssueHandler(captchaGate))
+	// Captcha issue: pre-auth, image generation is ~2.2ms CPU each — a bot
+	// farm can eat 10-20 cores issuing captchas even though failed LOGINS
+	// are capped. U-16: per-IP issue limiter (30/min), same limiter family
+	// as login.
+	r.GET("/admin/api/auth/captcha/issue", middleware.LoginRateLimit(rdb, 30, time.Minute), admin.CaptchaIssueHandler(captchaGate))
 	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider, captchaGate, loginReadiness))
 	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
 
@@ -701,6 +702,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
 		return apidoc.ActiveDeprecations
 	}))
+	if cfg.Gateway.InflightBodyBudgetBytes <= 0 {
+		// U-23: 0 means EXPLICITLY DISABLED (no aggregate inbound-body cap) —
+		// make that loud and observable instead of silent: the metric reports
+		// 0 and this warning is greppable. Default stays 0 (a numeric default
+		// is a per-host memory decision; see deployment docs).
+		slog.Warn("gateway.inflight_body_budget_bytes=0: in-flight request-body budget DISABLED — aggregate inbound memory is unbounded up to concurrency × per-request caps")
+	}
 	gwGroup.Use(middleware.ReadBodyWithBudget(10<<20,
 		middleware.NewInflightBodyBudget(cfg.Gateway.InflightBodyBudgetBytes),
 		cfg.Gateway.InflightMultipartReserveBytes))
@@ -751,6 +759,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		return apidoc.ActiveDeprecations
 	}))
 	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
+	// U-17: this group authenticates keys with the same DB-backed KeyService
+	// (no negative cache) — random-key scanning here was an unbounded DB
+	// point-query path. Share the gateway group's per-IP auth-failure budget
+	// (same prefix/params) so scanning EITHER surface throttles the IP.
+	usageGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 	// Portal self-service API: same auth, but returns the portal-owned clean
 	// contract (decoupled from /v1/usage internal shape). See PortalUsageHandler.
@@ -797,19 +810,54 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Cleanup expired key hashes every 10 minutes
 	// Budget calibration every hour
 	go svcs.BudgetCalSvc.Run(appCtx)
-	// DataLens aggregation background goroutine
-	if cfg.DataLens.Enabled {
-		if dia.PartitionSupport() == dialect.PartitionNative {
-			var relkind string
-			db.Raw("SELECT relkind FROM pg_class WHERE relname = 'usage_logs'").Scan(&relkind)
-			if relkind != "p" {
-				slog.Warn("usage_logs is not partitioned. Run 'crosslink migrate-partition' to enable partitioning. DataLens aggregation will use unpartitioned table (slower).")
+
+	// U-13: renew the mcp_tool_call_logs partition horizon (start + daily).
+	// The maintenance method existed but had ZERO production callers — from
+	// 2027-01 inserts into MySQL would fail (or pile into p_future) with no
+	// warning. dialects: mysql reorganizes the p_future tail; pg/kingbase
+	// add partitions idempotently; sqlite's implementation is archive
+	// cleanup (harmless to call).
+	go func() {
+		ensure := func() {
+			ctx, cancel := context.WithTimeout(appCtx, 2*time.Minute)
+			defer cancel()
+			if err := dia.EnsureMonthlyPartitions(ctx, db, "mcp_tool_call_logs", 6); err != nil {
+				slog.Error("partition renewal failed (mcp_tool_call_logs) — inserts may fail when the horizon is reached", "error", err)
 			}
 		}
-		// Retention day counts hot-reload via runtime settings (interval /
-		// lookback / enabled stay boot-pinned, labeled restart-required).
-		svcs.DataLensAggSvc.SetSettingsProvider(settingsProvider)
-		go svcs.DataLensAggSvc.Run(appCtx)
+		ensure()
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-appCtx.Done():
+				return
+			case <-t.C:
+				ensure()
+			}
+		}
+	}()
+	// DataLens aggregation background goroutine
+	if cfg.DataLens.Enabled {
+		// U-11: the aggregation SQL is Postgres-dialect ($N placeholders,
+		// expression-target ON CONFLICT ... EXCLUDED). MySQL cannot parse it
+		// and SQLite has no expression conflict targets — refuse to start the
+		// loop there instead of erroring every cycle.
+		if n := dia.Name(); n != "postgres" && n != "kingbase" {
+			slog.Error("DataLens aggregation requires PostgreSQL/Kingbase (aggregation SQL uses $N placeholders and expression ON CONFLICT targets); DataLens disabled on this dialect", "dialect", n)
+		} else {
+			if dia.PartitionSupport() == dialect.PartitionNative {
+				var relkind string
+				db.Raw("SELECT relkind FROM pg_class WHERE relname = 'usage_logs'").Scan(&relkind)
+				if relkind != "p" {
+					slog.Warn("usage_logs is not partitioned. Run 'crosslink migrate-partition' to enable partitioning. DataLens aggregation will use unpartitioned table (slower).")
+				}
+			}
+			// Retention day counts hot-reload via runtime settings (interval /
+			// lookback / enabled stay boot-pinned, labeled restart-required).
+			svcs.DataLensAggSvc.SetSettingsProvider(settingsProvider)
+			go svcs.DataLensAggSvc.Run(appCtx)
+		}
 	}
 	// Update cache size gauge periodically via approximate counter
 	go func() {

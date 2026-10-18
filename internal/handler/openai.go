@@ -189,6 +189,7 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
 	if err != nil {
 		logRequestStageError(h.usageSvc, c, "openai", req.Model, resolveErrorStatus(err), "resolve_error", "resolve", err.Error())
+		resolveRetryAfterHeader(c, err)
 		c.JSON(resolveErrorStatus(err), gin.H{"error": map[string]string{"message": resolveErrorMessage(err)}})
 		return
 	}

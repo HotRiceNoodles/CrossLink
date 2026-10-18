@@ -266,18 +266,36 @@ func (s *CacheService) FlushAll(ctx context.Context) {
 }
 
 func (s *CacheService) FlushByModel(ctx context.Context, modelName string) int {
+	// U-20: SSCAN with cursor batches + chunked DEL. SMembers materialized
+	// the whole index set (unbounded for high-frequency models whose members
+	// include long-expired keys) and a single Del(members...) could carry
+	// millions of arguments. SREM the batch as it is deleted so a crash
+	// mid-flush leaves a consistent index; the index key itself is dropped
+	// at the end.
 	idxKey := "cl:cache:idx:" + modelName
-	members, err := s.rdb.SMembers(ctx, idxKey).Result()
-	if err != nil {
-		slog.Warn("flush by model: failed to read index", "error", err, "model", modelName)
-		return 0
-	}
-	if len(members) == 0 {
-		return 0
-	}
-	deleted, err := s.rdb.Del(ctx, members...).Result()
-	if err != nil {
-		slog.Warn("flush by model: del failed", "error", err, "model", modelName)
+	const batch = 500
+	var cursor uint64
+	deleted := int64(0)
+	for {
+		members, next, err := s.rdb.SScan(ctx, idxKey, cursor, "", batch).Result()
+		if err != nil {
+			slog.Warn("flush by model: sscan failed", "error", err, "model", modelName)
+			break
+		}
+		if len(members) > 0 {
+			pipe := s.rdb.Pipeline()
+			delCmd := pipe.Del(ctx, members...)
+			pipe.SRem(ctx, idxKey, members)
+			if _, err := pipe.Exec(ctx); err != nil {
+				slog.Warn("flush by model: batch del failed", "error", err, "model", modelName, "batch", len(members))
+			} else {
+				deleted += delCmd.Val()
+			}
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
 	}
 	s.rdb.Del(ctx, idxKey)
 	s.rdb.HDel(ctx, "cl:cache:stats:counts", modelName)

@@ -66,6 +66,15 @@ type ModelsLister interface {
 	ListUpstreamModels(ctx context.Context, apiKey string) ([]UpstreamModel, error)
 }
 
+// PathModelsLister is the path-parameterized form of ModelsLister used by the
+// circuit prober: upstreams expose the model list at different paths
+// (/v1/models vs /models vs a private health route), so the probe path is a
+// deployment decision, not an adapter constant.
+type PathModelsLister interface {
+	Provider
+	ListUpstreamModelsAtPath(ctx context.Context, apiKey, path string) ([]UpstreamModel, error)
+}
+
 // UpstreamModel is a single entry returned by an adapter's ListUpstreamModels.
 type UpstreamModel struct {
 	ID      string `json:"id"`

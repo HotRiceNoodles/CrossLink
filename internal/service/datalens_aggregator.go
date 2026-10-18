@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/config"
@@ -27,6 +28,9 @@ type DataLensAggregatorService struct {
 	backfillDays int
 	hourlyDays   int
 	dailyDays    int
+	rawLogsDays  int // informational only (U-14): raw usage_logs are never deleted
+	// rawLogsWarned guards the one-shot U-14 honesty warning per process.
+	rawLogsWarned atomic.Bool
 	// settings, when wired (SetRetentionProvider), supplies the retention
 	// day counts per cleanup cycle (hot-reload via PUT /system/config).
 	// nil ⇒ boot values. The interval/lookback/backfill remain boot-pinned.
@@ -53,6 +57,21 @@ func (s *DataLensAggregatorService) effRetention() (hourly, daily int) {
 	return s.hourlyDays, s.dailyDays
 }
 
+// effRawLogsDays returns the configured raw-log retention day count. It is
+// informational only (U-14): no code path deletes raw usage_logs.
+func (s *DataLensAggregatorService) effRawLogsDays() int {
+	if s.settings != nil {
+		return s.settings.DataLens().Retention.RawLogsDays
+	}
+	return s.rawLogsDays
+}
+
+// rawLogsWarnSwap flips the one-shot warn flag, returning true exactly once
+// per process for the U-14 honesty log.
+func (s *DataLensAggregatorService) rawLogsWarnSwap(_ bool) bool {
+	return s.rawLogsWarned.CompareAndSwap(false, true)
+}
+
 func NewDataLensAggregatorService(db *gorm.DB, d dialect.Dialect, cfg config.DataLensConfig) *DataLensAggregatorService {
 	interval, _ := time.ParseDuration(cfg.Agg.Interval)
 	lookback, _ := time.ParseDuration(cfg.Agg.Lookback)
@@ -71,6 +90,7 @@ func NewDataLensAggregatorService(db *gorm.DB, d dialect.Dialect, cfg config.Dat
 		backfillDays: cfg.Agg.BackfillDays,
 		hourlyDays:   cfg.Retention.HourlyDays,
 		dailyDays:    cfg.Retention.DailyDays,
+		rawLogsDays:  cfg.Retention.RawLogsDays,
 	}
 }
 
@@ -602,6 +622,14 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) error {
 	var firstErr error
 	hourlyDays, dailyDays := s.effRetention()
+	// U-14: raw_logs_days has no enforcement by design — usage_logs are the
+	// financial audit trail (billing/reconciliation), and DataLens aggregates
+	// are not billing-complete. Surface the truth once instead of letting
+	// operators believe old raw logs are being pruned. Enabling deletion is a
+	// pending product decision (partition DROP vs bounded batch delete).
+	if raw := s.effRawLogsDays(); raw > 0 && s.rawLogsWarnSwap(true) {
+		slog.Warn("datalens retention: raw_logs_days is configured but NOT enforced — raw usage_logs are never deleted (financial audit trail); see docs/deployment for the retention decision plan", "raw_logs_days", raw)
+	}
 	if hourlyDays > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -hourlyDays)
 		result := s.db.WithContext(ctx).Exec(

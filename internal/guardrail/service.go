@@ -76,6 +76,11 @@ type GuardrailService struct {
 type modelCfgEntry struct {
 	config ModelGuardrailConfig
 	loaded time.Time
+	// exists=false marks a NEGATIVE cache entry: the model has no guardrail
+	// config (U-15). Most models are in this state — not caching it made
+	// getModelConfig the only unconditional per-request DB read on the proxy
+	// chain. Invalidation (modelCfgs reset) covers negatives too.
+	exists bool
 }
 
 // Detection policy defaults. All overridable via system_settings (see
@@ -381,6 +386,9 @@ func (s *GuardrailService) getModelConfig(ctx context.Context, model string) *Mo
 	s.modelCfgMu.RLock()
 	if entry, ok := s.modelCfgs[model]; ok && time.Since(entry.loaded) < s.ttl {
 		s.modelCfgMu.RUnlock()
+		if !entry.exists {
+			return nil // cached negative: this model has no guardrail config
+		}
 		return &entry.config
 	}
 	s.modelCfgMu.RUnlock()
@@ -395,17 +403,23 @@ func (s *GuardrailService) getModelConfig(ctx context.Context, model string) *Mo
 		Limit(1).
 		Find(&row).Error; err != nil {
 		slog.Warn("guardrail: failed to load model config", "model", model, "error", err)
-		return nil
+		return nil // transient DB error: do NOT cache the miss
 	}
 	var ec struct {
 		Guardrails *ModelGuardrailConfig `json:"guardrails"`
 	}
 	if json.Unmarshal(row.ExtraConfig, &ec) != nil || ec.Guardrails == nil {
+		// U-15: cache the NEGATIVE result — models without guardrail config
+		// are the common case and this query was the last unconditional
+		// per-request DB read on the proxy chain.
+		s.modelCfgMu.Lock()
+		s.modelCfgs[model] = modelCfgEntry{loaded: time.Now(), exists: false}
+		s.modelCfgMu.Unlock()
 		return nil
 	}
 
 	s.modelCfgMu.Lock()
-	s.modelCfgs[model] = modelCfgEntry{config: *ec.Guardrails, loaded: time.Now()}
+	s.modelCfgs[model] = modelCfgEntry{config: *ec.Guardrails, loaded: time.Now(), exists: true}
 	s.modelCfgMu.Unlock()
 
 	return ec.Guardrails

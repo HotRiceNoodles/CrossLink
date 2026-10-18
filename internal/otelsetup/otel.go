@@ -104,8 +104,14 @@ func newOTLPExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 		return otlptracegrpc.New(ctx, opts...)
 
 	case strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://"):
+		// U-40 (source-verified against otlptracehttp v1.47.0): WithEndpoint
+		// stores the value VERBATIM as the URL Host — a scheme-bearing string
+		// makes every export dial a garbage host. WithEndpointURL is the API
+		// that parses scheme/host/port/path. Scheme alone does NOT set
+		// Insecure in this SDK version — http:// keeps requiring the explicit
+		// insecure flag (unchanged behavior for existing deployments).
 		var opts []otlptracehttp.Option
-		opts = append(opts, otlptracehttp.WithEndpoint(endpoint))
+		opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
 		if insecure == "true" {
 			opts = append(opts, otlptracehttp.WithInsecure())
 		}

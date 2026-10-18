@@ -84,6 +84,32 @@ func PeriodTTL(period string) time.Duration {
 	}
 }
 
+// PeriodStart returns the UTC start of the CURRENT period — the matching
+// lower bound for queries that must land in the same bucket as PeriodKey.
+// Calibration SUMs use this so a recalibrate never charges an org for its
+// entire history (U-28).
+func PeriodStart(period string) time.Time {
+	return periodStartAt(period, time.Now().UTC())
+}
+
+func periodStartAt(period string, now time.Time) time.Time {
+	now = now.UTC()
+	switch period {
+	case "daily":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	case "weekly":
+		// Jan 4 is always in ISO week 1; walk to that week's Monday, then
+		// forward (w-1) weeks.
+		jan4 := time.Date(now.Year(), 1, 4, 0, 0, 0, 0, time.UTC)
+		_, wk1 := jan4.ISOWeek()
+		_, w := now.ISOWeek()
+		monday := jan4.AddDate(0, 0, -((int(jan4.Weekday()) + 6) % 7))
+		return monday.AddDate(0, 0, (w-wk1)*7)
+	default: // monthly
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+}
+
 func (s *BudgetService) CheckBudget(ctx context.Context, scope, targetID, period string, budgetLimit float64) (float64, float64, bool) {
 	if budgetLimit <= 0 {
 		return 0, 0, false

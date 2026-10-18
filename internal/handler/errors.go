@@ -75,6 +75,18 @@ func providerRetryAfterHeader(c *gin.Context, err error) {
 	}
 }
 
+// resolveRetryAfterHeader marks gateway-side temporary rejections (503: all
+// routes circuit-open, or the mapping directory is degraded) with Retry-After
+// so well-behaved clients throttle instead of instantly re-submitting. During
+// a DB outage a fail-fast 503 without a backoff hint turns closed-loop
+// clients into a self-sustaining dial storm (ladder cap2: 87k failed upstream
+// attempts in 2 minutes).
+func resolveRetryAfterHeader(c *gin.Context, err error) {
+	if errors.Is(err, router.ErrNoActiveProvider) || errors.Is(err, router.ErrResolveDegraded) {
+		c.Header("Retry-After", "1")
+	}
+}
+
 // safeProviderError returns a client-safe error message.
 // It preserves provider error messages (already user-facing) but replaces
 // internal errors with a generic message to avoid leaking infrastructure details.

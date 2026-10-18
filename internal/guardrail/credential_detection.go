@@ -256,40 +256,56 @@ func validateMediumConfidenceMatch(match string) bool {
 	return runeCount >= 20
 }
 
+// maxDecodedExpansion bounds the decoded-append total: decoded segments are
+// appended for DETECTION only, and their combined size is capped at 4x the
+// original content (U-22) — a large context of decodable lines must not turn
+// into an unbounded secondary buffer per request.
 func preprocessCredentialContent(content string) string {
+	var parts []string
 	// Try base64 decode on segments that look base64-encoded
 	if decoded := tryBase64Decode(content); decoded != "" {
-		content += "\n" + decoded
+		parts = append(parts, content, decoded)
+	} else {
+		parts = append(parts, content)
 	}
 	// URL decode
-	if idx := strings.IndexByte(content, '%'); idx >= 0 {
+	base := parts[len(parts)-1]
+	if idx := strings.IndexByte(base, '%'); idx >= 0 {
 		// Only attempt if there are percent signs suggesting URL encoding
-		decoded := decodeURL(content)
-		if decoded != content {
-			content += "\n" + decoded
+		decoded := decodeURL(base)
+		if decoded != base {
+			parts = append(parts, decoded)
 		}
 	}
-	return content
+	return strings.Join(parts, "\n")
 }
 
 func tryBase64Decode(s string) string {
-	// Look for lines that are pure base64 (long enough to be meaningful)
-	var result string
+	// Look for lines that are pure base64 (long enough to be meaningful).
+	// U-22: accumulate into a slice + single Join (the old per-line string +=
+	// was O(n²) on large contexts) and cap the decoded total at 4x the input.
+	capTotal := len(s) * 4
+	var parts []string
+	total := 0
 	for _, line := range splitLines(s) {
 		line = strings.TrimSpace(line)
 		if len(line) >= 40 && isLikelyBase64(line) {
-			if decoded, err := base64.StdEncoding.DecodeString(line); err == nil {
-				if utf8.Valid(decoded) {
-					result += string(decoded) + "\n"
-				}
-			} else if decoded, err := base64.URLEncoding.DecodeString(line); err == nil {
-				if utf8.Valid(decoded) {
-					result += string(decoded) + "\n"
-				}
+			var decoded []byte
+			var err error
+			if decoded, err = base64.StdEncoding.DecodeString(line); err != nil {
+				decoded, err = base64.URLEncoding.DecodeString(line)
 			}
+			if err != nil || !utf8.Valid(decoded) {
+				continue
+			}
+			total += len(decoded) + 1
+			if total > capTotal {
+				break
+			}
+			parts = append(parts, string(decoded))
 		}
 	}
-	return result
+	return strings.Join(parts, "\n")
 }
 
 func isLikelyBase64(s string) bool {

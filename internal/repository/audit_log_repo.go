@@ -124,11 +124,22 @@ func (r *AuditLogRepo) StreamAll(ctx context.Context, f AuditFilter, fn func(mod
 }
 
 func (r *AuditLogRepo) DeleteBefore(ctx context.Context, before time.Time) (int64, error) {
+	// Bounded batches only. MySQL cannot reference the delete target in its
+	// own subquery (ERROR 1093), so it takes the native single-statement
+	// DELETE ... LIMIT; PG/SQLite keep the id-subquery shape.
+	const batchSize = 5000
 	var total int64
 	for {
-		result := r.db.WithContext(ctx).
-			Where("id IN (SELECT id FROM audit_logs WHERE created_at < ? LIMIT 5000)", before).
-			Delete(&model.AuditLog{})
+		var result *gorm.DB
+		if r.db.Dialector.Name() == "mysql" {
+			result = r.db.WithContext(ctx).Exec(
+				"DELETE FROM audit_logs WHERE created_at < ? LIMIT ?",
+				before, batchSize)
+		} else {
+			result = r.db.WithContext(ctx).
+				Where("id IN (SELECT id FROM audit_logs WHERE created_at < ? LIMIT ?)", before, batchSize).
+				Delete(&model.AuditLog{})
+		}
 		if result.Error != nil {
 			return total, result.Error
 		}

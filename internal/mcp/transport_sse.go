@@ -38,13 +38,20 @@ func NewSSETransport(serverURL string, auth Authenticator, customHeaders map[str
 }
 
 func (t *SSETransport) discoverEndpoint(ctx context.Context) error {
+	// Fast path under a short lock: an already-discovered endpoint needs no
+	// network round trip.
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	if t.messageURL != "" {
+		t.mu.Unlock()
 		return nil
 	}
+	t.mu.Unlock()
 
+	// U-19: the discovery HTTP call (up to the client timeout, ~30s on a
+	// wedged upstream) used to run UNDER t.mu — every Send/Notify on this
+	// server serialized behind it and goroutines piled up. Discover outside
+	// the lock; concurrent discoverers race harmlessly (same result, the
+	// first writer wins) and the lock now only guards the field itself.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("create SSE request: %w", err)
@@ -71,7 +78,11 @@ func (t *SSETransport) discoverEndpoint(ctx context.Context) error {
 			if err := validateSameOrigin(t.serverURL, discovered); err != nil {
 				return fmt.Errorf("SSE endpoint validation: %w", err)
 			}
-			t.messageURL = discovered
+			t.mu.Lock()
+			if t.messageURL == "" {
+				t.messageURL = discovered
+			}
+			t.mu.Unlock()
 			return nil
 		}
 	}

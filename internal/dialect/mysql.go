@@ -124,22 +124,69 @@ func (m *MySQLDialect) AcquireMigrationLock() (func(), error) {
 	}, nil
 }
 
-// EnsureMonthlyPartitions creates monthly partitions using ALTER TABLE ... ADD PARTITION
-// with DATETIME(3) boundaries. Skips partitions that already exist.
+// EnsureMonthlyPartitions guarantees monthly partitions exist for the next
+// `months` months. U-13: the table carries a catch-all tail partition
+// (p_future, VALUES LESS THAN 2030) — plain ADD PARTITION is INVALID there
+// ("values must be strictly increasing"): the tail must be REORGANIZEd into
+// (missing months..., p_future) instead. Absent a tail, missing months are
+// added one by one.
 func (m *MySQLDialect) EnsureMonthlyPartitions(ctx context.Context, db *gorm.DB, table string, months int) error {
+	// Existing partition names → detect what's missing.
+	var existing []string
+	if err := db.WithContext(ctx).Raw(
+		"SELECT PARTITION_NAME FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+		table,
+	).Scan(&existing).Error; err != nil {
+		return fmt.Errorf("list partitions: %w", err)
+	}
+	has := make(map[string]bool, len(existing))
+	hasTail := false
+	for _, p := range existing {
+		has[strings.ToLower(p)] = true
+		if strings.ToLower(p) == "p_future" {
+			hasTail = true
+		}
+	}
+
 	now := time.Now()
+	type part struct{ name, bound string }
+	var missing []part
 	for i := 0; i < months; i++ {
 		t := now.AddDate(0, i, 0)
 		next := t.AddDate(0, 1, 0)
-		partName := fmt.Sprintf("p_%d_%02d", t.Year(), t.Month())
+		name := fmt.Sprintf("p_%d_%02d", t.Year(), t.Month())
+		if !has[name] {
+			missing = append(missing, part{name, next.Format("2006-01-02 15:04:05.000")})
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	if hasTail {
+		// Split the tail IN PLACE: p_future → (missing..., p_future). The
+		// tail bound stays 2030 so later calls reorganize the same tail.
+		var defs []string
+		for _, p := range missing {
+			defs = append(defs, fmt.Sprintf("PARTITION %s VALUES LESS THAN ('%s')", p.name, p.bound))
+		}
+		defs = append(defs, "PARTITION p_future VALUES LESS THAN ('2030-01-01 00:00:00.000')")
+		sql := fmt.Sprintf("ALTER TABLE %s REORGANIZE PARTITION p_future INTO (%s)",
+			table, strings.Join(defs, ", "))
+		if err := db.WithContext(ctx).Exec(sql).Error; err != nil {
+			return fmt.Errorf("reorganize p_future into %d new partition(s): %w", len(missing), err)
+		}
+		return nil
+	}
+
+	for _, p := range missing {
 		sql := fmt.Sprintf(
 			"ALTER TABLE %s ADD PARTITION (PARTITION %s VALUES LESS THAN ('%s'))",
-			table, partName, next.Format("2006-01-02 15:04:05.000"),
-		)
+			table, p.name, p.bound)
 		if err := db.WithContext(ctx).Exec(sql).Error; err != nil {
 			errMsg := strings.ToLower(err.Error())
 			if !strings.Contains(errMsg, "duplicate") && !strings.Contains(errMsg, "already exists") {
-				return fmt.Errorf("add partition %s: %w", partName, err)
+				return fmt.Errorf("add partition %s: %w", p.name, err)
 			}
 		}
 	}

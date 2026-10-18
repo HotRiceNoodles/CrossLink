@@ -993,6 +993,8 @@ func (h *AnthropicHandler) writeError(c *gin.Context, err error, model string) {
 	} else if errors.Is(err, router.ErrNoActiveProvider) {
 		errType = "overloaded_error"
 	}
+	// Gateway-side temporary rejections carry a backoff hint too.
+	resolveRetryAfterHeader(c, err)
 	c.JSON(gatewayErrorStatus(err), gin.H{
 		"type":  "error",
 		"error": gin.H{"type": errType, "message": resolveErrorMessage(err)},

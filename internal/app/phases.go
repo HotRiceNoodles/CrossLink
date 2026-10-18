@@ -245,22 +245,13 @@ func backfillOrgID(db *gorm.DB, defaultOrgID int64, adminUserID int64) {
 	db.Exec("UPDATE budget_requests SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
 	db.Exec("UPDATE budget_snapshots SET org_id = ? WHERE org_id IS NULL", defaultOrgID)
 	db.Exec("UPDATE mcp_servers SET org_id = ? WHERE org_id IS NULL AND deleted_at IS NULL", defaultOrgID)
-	// Phase 4 large tables: batch backfill
-	backfillLargeTableOrgID(db, "usage_logs", defaultOrgID)
-	backfillLargeTableOrgID(db, "mcp_tool_call_logs", defaultOrgID)
-}
-
-func backfillLargeTableOrgID(db *gorm.DB, table string, defaultOrgID int64) {
-	const batchSize = 5000
-	for {
-		result := db.Table(table).Where("org_id IS NULL").Limit(batchSize).Update("org_id", defaultOrgID)
-		if result.Error != nil {
-			slog.Warn("batch backfill error", "table", table, "error", result.Error)
-			return
-		}
-		if result.RowsAffected == 0 {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	// F-9: usage_logs / mcp_tool_call_logs are EVENT logs — org_id is the
+	// tenant OBSERVED at event time, and NULL is a legitimate observation
+	// (unauthenticated / config-key traffic). The former boot-time backfill
+	// force-stamped every NULL row to the default org on EVERY start,
+	// mis-attributing global events to org 1 and corrupting per-tenant
+	// reporting (verified live: two boots flipped 381k+193k rows; its
+	// UPDATE..LIMIT batching was also invalid on PostgreSQL). Event logs are
+	// therefore NEVER auto-backfilled; historical re-attribution, if ever
+	// wanted, must be an explicit operator action with a defined scope.
 }

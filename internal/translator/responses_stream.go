@@ -1,6 +1,8 @@
 package translator
 
 import (
+	"strings"
+
 	"github.com/crosslink/internal/domain"
 )
 
@@ -16,9 +18,12 @@ type ResponsesStreamBuilder struct {
 	respID    string
 	model     string
 	started   bool
-	itemID    string            // message item id
-	textAdded bool              // content_part.added emitted for the message
-	textOut   string            // accumulated output_text
+	itemID    string // message item id
+	textAdded bool   // content_part.added emitted for the message
+	// textBuf accumulates output_text — a Builder, not string +=, so a long
+	// stream (extended reasoning / huge tool arguments) stays O(n) instead of
+	// O(n²) (U-21).
+	textBuf   strings.Builder
 	toolItems map[int]*toolItem // by chunk tool_calls index
 	// output_index assignment: message item first (0), then function calls 1..n
 	messageEmitted bool
@@ -26,12 +31,12 @@ type ResponsesStreamBuilder struct {
 }
 
 type toolItem struct {
-	id        string
-	outIndex  int
-	arguments string
-	added     bool
-	name      string
-	callID    string
+	id       string
+	outIndex int
+	argsBuf  strings.Builder // U-21: O(n) argument accumulation
+	added    bool
+	name     string
+	callID   string
 }
 
 func NewResponsesStreamBuilder(respID, model string) *ResponsesStreamBuilder {
@@ -82,7 +87,7 @@ func (b *ResponsesStreamBuilder) Next(chunk *domain.OpenAIChunk) []domain.Respon
 			)
 			b.textAdded = true
 		}
-		b.textOut += delta.Content
+		b.textBuf.WriteString(delta.Content)
 		events = append(events, domain.ResponsesEvent{
 			Type: "response.output_text.delta",
 			Payload: map[string]any{
@@ -115,7 +120,7 @@ func (b *ResponsesStreamBuilder) Next(chunk *domain.OpenAIChunk) []domain.Respon
 			events = append(events, b.functionCallItemAdded(ti))
 		}
 		if tc.Function.Arguments != "" {
-			ti.arguments += tc.Function.Arguments
+			ti.argsBuf.WriteString(tc.Function.Arguments)
 			events = append(events, domain.ResponsesEvent{
 				Type: "response.function_call_arguments.delta",
 				Payload: map[string]any{
@@ -140,12 +145,12 @@ func (b *ResponsesStreamBuilder) Finish(usage domain.OpenAIUsage, finishReason, 
 		events = append(events,
 			domain.ResponsesEvent{Type: "response.output_text.done", Payload: map[string]any{
 				"type": "response.output_text.done", "item_id": b.itemID,
-				"output_index": 0, "content_index": 0, "text": b.textOut,
+				"output_index": 0, "content_index": 0, "text": b.textBuf.String(),
 			}},
 			domain.ResponsesEvent{Type: "response.content_part.done", Payload: map[string]any{
 				"type": "response.content_part.done", "item_id": b.itemID,
 				"output_index": 0, "content_index": 0,
-				"part": map[string]any{"type": "output_text", "text": b.textOut},
+				"part": map[string]any{"type": "output_text", "text": b.textBuf.String()},
 			}},
 		)
 	}
@@ -159,13 +164,13 @@ func (b *ResponsesStreamBuilder) Finish(usage domain.OpenAIUsage, finishReason, 
 		events = append(events,
 			domain.ResponsesEvent{Type: "response.function_call_arguments.done", Payload: map[string]any{
 				"type": "response.function_call_arguments.done", "item_id": ti.id,
-				"output_index": ti.outIndex, "arguments": ti.arguments,
+				"output_index": ti.outIndex, "arguments": ti.argsBuf.String(),
 			}},
 			domain.ResponsesEvent{Type: "response.output_item.done", Payload: map[string]any{
 				"type": "response.output_item.done", "output_index": ti.outIndex,
 				"item": map[string]any{
 					"type": "function_call", "id": ti.id, "status": "completed",
-					"call_id": ti.callID, "name": ti.name, "arguments": ti.arguments,
+					"call_id": ti.callID, "name": ti.name, "arguments": ti.argsBuf.String(),
 				},
 			}},
 		)
@@ -208,13 +213,13 @@ func (b *ResponsesStreamBuilder) finalOutput() []map[string]any {
 	if b.messageEmitted {
 		out = append(out, map[string]any{
 			"type": "message", "id": b.itemID, "role": "assistant", "status": "completed",
-			"content": []map[string]any{{"type": "output_text", "text": b.textOut}},
+			"content": []map[string]any{{"type": "output_text", "text": b.textBuf.String()}},
 		})
 	}
 	for _, ti := range b.orderedToolItems() {
 		out = append(out, map[string]any{
 			"type": "function_call", "id": ti.id, "status": "completed",
-			"call_id": ti.callID, "name": ti.name, "arguments": ti.arguments,
+			"call_id": ti.callID, "name": ti.name, "arguments": ti.argsBuf.String(),
 		})
 	}
 	return out
@@ -253,7 +258,7 @@ func (b *ResponsesStreamBuilder) messageItemDone() domain.ResponsesEvent {
 		"type": "response.output_item.done", "output_index": 0,
 		"item": map[string]any{
 			"type": "message", "id": b.itemID, "role": "assistant", "status": "completed",
-			"content": []map[string]any{{"type": "output_text", "text": b.textOut}},
+			"content": []map[string]any{{"type": "output_text", "text": b.textBuf.String()}},
 		},
 	}}
 }

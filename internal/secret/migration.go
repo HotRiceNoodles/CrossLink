@@ -26,6 +26,25 @@ func MigratePlaintextSecrets(db *gorm.DB, encStore *EncryptedDBStore) (*Migratio
 		return &MigrationResult{}, nil
 	}
 
+	// U-18: cheap pre-count short-circuit. This runs on every watcher tick
+	// (30s); the old code did a full providers Find (api_key + extra_config
+	// columns) and opened a Begin/Rollback PER PROVIDER even when everything
+	// was already encrypted — a permanent no-op loop per instance. The
+	// predicate approximates both targets: plaintext api_key, and
+	// extra_config that still contains plaintext secrets (already-migrated
+	// rows carry enc:/sref: markers).
+	var pending int64
+	if err := db.Table("providers").
+		Where("api_key != '' AND api_key NOT LIKE 'enc:%' AND api_key NOT LIKE 'sref:%'").
+		Or("extra_config IS NOT NULL AND extra_config != '' AND extra_config NOT LIKE '%enc:%' AND extra_config NOT LIKE '%sref:%'").
+		Count(&pending).Error; err != nil {
+		// Count must not BLOCK migration on dialect quirks (e.g. bytea
+		// comparison): fall through to the full scan on error.
+		pending = 1
+	} else if pending == 0 {
+		return &MigrationResult{}, nil
+	}
+
 	var providers []struct {
 		ID          int64  `gorm:"primaryKey"`
 		Name        string `gorm:"column:name"`

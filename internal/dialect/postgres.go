@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -76,6 +78,14 @@ func (p *PostgresDialect) InitDB() (*gorm.DB, error) {
 	sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
+	// F-3: the effective pool config is part of the capacity evidence — log
+	// it at boot so every run's ground truth is in its own gw.log (ladder
+	// campaigns observed behavior consistent with the DIALECT defaults on
+	// some launches and the env overrides on others; this line makes the
+	// divergence diagnosable per-process instead of inferential).
+	slog.Info("postgres pool armed",
+		"max_open", pool.MaxOpenConns, "max_idle", pool.MaxIdleConns,
+		"conn_max_lifetime", pool.ConnMaxLifetime.String(), "conn_max_idle_time", pool.ConnMaxIdleTime.String())
 
 	return db, nil
 }
@@ -203,9 +213,20 @@ func (p *PostgresDialect) Shutdown(db *gorm.DB) error {
 }
 
 // dsn returns the PostgreSQL keyword=value connection string.
+// pgApplicationName tags every gateway connection in pg_stat_activity and
+// the connection logs (F-3: campaign forensics could not distinguish gateway
+// conns from psql probes — application_name makes the source explicit per
+// connection). Overridable for multi-instance deployments via CL_DB_APP_NAME.
+var pgApplicationName = func() string {
+	if v := os.Getenv("CL_DB_APP_NAME"); v != "" {
+		return v
+	}
+	return "crosslink_gateway"
+}()
+
 func (p *PostgresDialect) dsn() string {
-	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		p.cfg.Host, p.cfg.Port, p.cfg.User, p.cfg.Password, p.cfg.DBName, p.cfg.SSLMode)
+	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s application_name=%s",
+		p.cfg.Host, p.cfg.Port, p.cfg.User, p.cfg.Password, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName)
 	if p.cfg.Timezone != "" {
 		s += fmt.Sprintf(" timezone=%s", p.cfg.Timezone)
 	}
@@ -214,8 +235,8 @@ func (p *PostgresDialect) dsn() string {
 
 // dsnURL returns the postgres:// URL format for golang-migrate.
 func (p *PostgresDialect) dsnURL() string {
-	s := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		p.cfg.User, p.cfg.Password, p.cfg.Host, p.cfg.Port, p.cfg.DBName, p.cfg.SSLMode)
+	s := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s&application_name=%s",
+		p.cfg.User, p.cfg.Password, p.cfg.Host, p.cfg.Port, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName+"_migrate")
 	if p.cfg.Timezone != "" {
 		s += fmt.Sprintf("&timezone=%s", p.cfg.Timezone)
 	}

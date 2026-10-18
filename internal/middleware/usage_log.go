@@ -2,11 +2,25 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// usageMidSem bounds the per-failed-request logging goroutines (U-24): an
+// error storm (bot flood → 401/429) otherwise spawns unbounded goroutines
+// each holding a 5s DB write. Overflow is counted and skipped — these rows
+// are diagnostics for 0-cost failures, never billing.
+var usageMidSem = make(chan struct{}, 256)
+
+var usageMidDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "cl_usage_middleware_dropped_total",
+	Help: "Failure-path usage log rows skipped because the bounded logging semaphore was full (error storms).",
+})
 
 func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -37,8 +51,18 @@ func UsageLog(usageSvc *service.UsageService) gin.HandlerFunc {
 			return
 		}
 
+		select {
+		case usageMidSem <- struct{}{}:
+		default:
+			usageMidDroppedTotal.Inc()
+			slog.Warn("usage middleware log dropped: logging semaphore full", "status", status, "error_type", errorType)
+			return
+		}
 		go func() {
-			defer func() { recover() }()
+			defer func() {
+				recover()
+				<-usageMidSem
+			}()
 			logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			usageSvc.Log(logCtx, &service.UsageEntry{

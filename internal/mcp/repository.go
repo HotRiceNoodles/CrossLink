@@ -118,12 +118,23 @@ func (r *MCPRepo) UpdateToolCount(ctx context.Context, id int64, count int) erro
 }
 
 func (r *MCPRepo) DeleteLogsBefore(ctx context.Context, before time.Time) error {
+	// U-36: GORM's DELETE builder ignores Limit on most dialects — the old
+	// Limit(5000).Delete() compiled to a single-statement FULL delete in one
+	// transaction. Delete in真实有界 batches: id-subquery for PG/SQLite
+	// (same shape as AuditLogRepo.DeleteBefore), raw LIMIT for MySQL
+	// (subquery-on-self is ERROR 1093 there).
 	const batchSize = 5000
 	for {
-		result := r.db.WithContext(ctx).
-			Where("created_at < ?", before).
-			Limit(batchSize).
-			Delete(&MCPToolCallLog{})
+		var result *gorm.DB
+		if r.db.Dialector.Name() == "mysql" {
+			result = r.db.WithContext(ctx).Exec(
+				"DELETE FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?",
+				before, batchSize)
+		} else {
+			result = r.db.WithContext(ctx).
+				Where("id IN (SELECT id FROM mcp_tool_call_logs WHERE created_at < ? LIMIT ?)", before, batchSize).
+				Delete(&MCPToolCallLog{})
+		}
 		if result.Error != nil {
 			return result.Error
 		}
