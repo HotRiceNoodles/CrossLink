@@ -18,6 +18,7 @@ import (
 	"net"
 
 	"github.com/crosslink/internal/admin"
+	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/apidoc"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
@@ -41,6 +42,12 @@ import (
 )
 
 func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensions, dia dialect.Dialect) {
+	// Rig/ops forensics switch (CL_LOG_LEVEL=debug): lowers the default
+	// slog logger to Debug so settlement/probe traces are emitted. Default
+	// (unset/any other value) keeps Info — zero production noise.
+	if os.Getenv("CL_LOG_LEVEL") == "debug" {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	if ext == nil {
 		ext = NoopExtensions()
 	}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/worker"
 	"github.com/google/uuid"
@@ -73,6 +74,7 @@ func runUsageTask(log usageEntryLogger, entry *service.UsageEntry, walHeld bool)
 	if err := log.LogChecked(ctx, entry); err != nil {
 		if !walHeld {
 			usageRowsLostTotal.Inc()
+			billingintegrity.ReportLoss("db write failed; event not WAL-backed", entry.EventID)
 			slog.Error("usage row LOST: db write failed and this event was NOT WAL-backed",
 				"event_id", entry.EventID, "error", err)
 			return
@@ -85,6 +87,7 @@ func runUsageTask(log usageEntryLogger, entry *service.UsageEntry, walHeld bool)
 	// threshold) — the WAL plateaus under sustained load instead of waiting
 	// for the 30s replay.
 	usageSpool.Ack(entry.EventID)
+	billingintegrity.ReportDurableSuccess()
 }
 
 // submitUsageEntry submits one billing row. Protocol (acceptance rounds
@@ -114,9 +117,12 @@ func submitUsageEntryFunc(log usageEntryLogger, entry *service.UsageEntry, prepa
 		cancel()
 		if err != nil {
 			usageRowsLostTotal.Inc()
+			billingintegrity.ReportLoss("WAL unavailable; synchronous db write failed", entry.EventID)
 			slog.Error("usage row LOST: WAL unavailable and synchronous db write failed",
 				"event_id", entry.EventID, "error", err)
+			return
 		}
+		billingintegrity.ReportDurableSuccess()
 		return
 	}
 	fn := func() { runUsageTask(log, entry, walHeld) }
