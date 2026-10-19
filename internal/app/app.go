@@ -703,6 +703,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// Gateway endpoints (auth + model permission + rate limit)
 	gwGroup := r.Group("/")
 	gwGroup.Use(dm.Middleware())
+	// Ledger-integrity gate (usage.loss_policy=block, decided 2026-10-19):
+	// mounted FIRST so a DB+WAL double failure rejects new billable requests
+	// before any upstream work; in-flight responses are untouched.
+	billingintegrity.Configure(cfg.Usage.LossPolicy)
+	gwGroup.Use(middleware.BillingIntegrityGate())
 	concurrencyLimit := cfg.Gateway.ConcurrencyLimit
 	if concurrencyLimit <= 0 {
 		concurrencyLimit = 2000
@@ -1049,6 +1054,21 @@ func InitRedis(cfg *config.RedisConfig) *redis.Client {
 		DialTimeout:  3 * time.Second,
 		ReadTimeout:  500 * time.Millisecond,
 		WriteTimeout: 500 * time.Millisecond,
+		// NO automatic command retries. go-redis v9.18.0 Options.init()
+		// normalizes MaxRetries: -1 -> 0 (disabled); 0 (unset OR explicit!)
+		// -> 3. A previous attempt set 0 explicitly — silently restored to
+		// the default 3 retries (review catch; runs with retries enabled are
+		// kept as controls). The default retries network errors for EVERY
+		// command including non-idempotent budget writes (reserve EVAL /
+		// INCRBYFLOAT settlements): during a Redis pause the queued first
+		// attempt executes on unpause AND the retry executes again — a
+		// silent double-apply that raises the counters above the ledger, a
+		// residue the raise-only calibration can never remove (observed
+		// r22: post-outage redis +1.019 over DB). Failed ops surface to
+		// callers, which already have explicit error paths (fail-open
+		// checks, warn + skip). Budget divergence must stay in the
+		// under-count direction the hourly calibration heals.
+		MaxRetries: -1,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
