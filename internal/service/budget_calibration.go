@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +89,13 @@ func (s *BudgetCalibrationService) calibrateOnceLocked(ctx context.Context) erro
 
 	runCtx, cancel := context.WithTimeout(ctx, calibrationRunBudget)
 	defer cancel()
+
+	// F1′ orphan reaper first: reservations whose marks expired without a
+	// settlement (gateway crash mid-request) are removed (budget/resv -= e);
+	// their true cost returns via the DB-based raise below from the WAL row.
+	if n := NewBudgetService(s.rdb).ReapExpiredReservations(runCtx, time.Now()); n > 0 {
+		slog.Warn("budget calibration: reaped expired reservations", "count", n)
+	}
 
 	for _, step := range []func(context.Context, string) error{
 		s.calibrateTeams, s.calibrateOrgs, s.calibrateKeys,
@@ -299,23 +307,42 @@ func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context, token stri
 	return nil
 }
 
-// calibratedWriteScript performs the read-modify-write of one budget
+// calibratedWriteScript performs the raise-only convergence of one budget
 // counter ATOMICALLY and ONLY while the caller still owns the calibration
 // lease: -1 = ownership lost (stale holder must stop), 1 = key created,
 // 0 = reconciled in place. This also removes the old GET→delta→INCRBYFLOAT
 // interleave two replicas could double-apply.
+//
+// Raise-only is a concurrency requirement, not a stylistic choice: the
+// calibration lock only mutual-excludes CALIBRATORS. Normal traffic keeps
+// running Reserve (pre-request) and Adjust (settlement) on the same keys
+// with no coordination, and `spent` is a DB snapshot that is already stale
+// by the time this runs — so the write must never move the counter DOWN:
+//   - counter ABOVE the snapshot = in-flight reservations plus consumption
+//     newer than the snapshot. Lowering erases live reservations; their
+//     settlements then apply (cost-reserved) against a counter missing the
+//     reserve, under-counting by the reserve amount (the review's
+//     "in-flight wipe" hazard — every hourly round under traffic would do it).
+//   - counter BELOW the snapshot = under-count (outage fail-open residue);
+//     raising converges it to ledger truth.
+// Known boundary: when the counter is below the snapshot WHILE a
+// reservation is in flight, the raise absorbs that reservation and its
+// settlement lands (cost-reserved) net-short by the reserve amount. That
+// residue is bounded by the in-flight reserves at write time and is closed
+// by the NEXT hourly round (the request has settled; the fresh SUM covers
+// it). The counter is derived data; the ledger (usage_logs) is untouched.
 var calibratedWriteScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
 	return -1
 end
 local cur = redis.call('GET', KEYS[2])
 local spent = tonumber(ARGV[2])
-if not cur then
+if not cur or not tonumber(cur) then
 	redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
 	return 1
 end
 local curVal = tonumber(cur)
-if curVal ~= spent then
+if curVal < spent then
 	redis.call('INCRBYFLOAT', KEYS[2], spent - curVal)
 end
 redis.call('EXPIRE', KEYS[2], ARGV[3])
@@ -333,6 +360,13 @@ func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, tok
 		return fmt.Errorf("%w: key=%s", ErrCalibrationLockLost, key)
 	}
 
+	// F1′ counters: one-time migration, then the invariant check and the
+	// audit watermark every round.
+	if err := s.migrateOrCheckInvariant(ctx, scope, targetID, pk, period, spent); err == nil {
+		s.rdb.Set(ctx, fmt.Sprintf("budgetaudit:%s:%d:%s", scope, targetID, pk),
+			fmt.Sprintf("%.9f|%d", spent, time.Now().Unix()), PeriodTTL(period))
+	}
+
 	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "target_type"}, {Name: "target_id"}, {Name: "period_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"spent", "budget"}),
@@ -344,6 +378,52 @@ func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, tok
 		Budget:     budget,
 	}).Error; err != nil {
 		slog.Warn("budget calibration: failed to save snapshot", "scope", scope, "id", targetID, "error", err)
+	}
+	return nil
+}
+
+// migrateOrCheckInvariant maintains the F1′ Redis-side triple
+// (budget == budgetset + budgetresv). First sight of a scope initializes
+// budgetset from the ledger snapshot and budgetresv from the (post-raise)
+// overhang — until then the invariant is undefined and NOT alerted on
+// (avoids false alarms during migration). Afterwards any drift beyond noise
+// is a corruption signal (lost settle, double apply, alien writer) and is
+// logged as such; drift also implies settled != SUM(DB), the audit-ring
+// condition documented with the replay-repair semantics.
+func (s *BudgetCalibrationService) migrateOrCheckInvariant(ctx context.Context, scope string, targetID int64, pk, period string, spent float64) error {
+	bKey := fmt.Sprintf("budget:%s:%d:%s", scope, targetID, pk)
+	rKey := budgetResvKey(scope, fmt.Sprintf("%d", targetID), pk)
+	setKey := budgetSettledKey(scope, fmt.Sprintf("%d", targetID), pk)
+	migKey := fmt.Sprintf("budgetmig:%s:%d:%s", scope, targetID, pk)
+	ttl := PeriodTTL(period)
+
+	ok, err := s.rdb.SetNX(ctx, migKey, "1", ttl).Result()
+	if err != nil {
+		slog.Warn("budget calibration: migration flag write failed", "key", bKey, "error", err)
+		return err
+	}
+	if ok {
+		cur, _ := s.rdb.Get(ctx, bKey).Float64()
+		over := cur - spent
+		if over < 0 {
+			over = 0
+		}
+		s.rdb.Set(ctx, setKey, strconv.FormatFloat(spent, 'f', -1, 64), ttl)
+		s.rdb.Set(ctx, rKey, strconv.FormatFloat(over, 'f', -1, 64), ttl)
+		slog.Info("budget calibration: F1' counters migrated (settled=SUM(DB), resv=overhang)",
+			"key", bKey, "settled", spent, "resv", over)
+		return nil
+	}
+	b, _ := s.rdb.Get(ctx, bKey).Float64()
+	st, _ := s.rdb.Get(ctx, setKey).Float64()
+	rv, _ := s.rdb.Get(ctx, rKey).Float64()
+	drift := b - st - rv
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > 0.01 {
+		slog.Warn("budget calibration: INVARIANT DRIFT budget != settled+resv (corruption signal; settled-vs-DB audit applies; replay-repair per decision-packages §A.2-impl)",
+			"key", bKey, "budget", b, "settled", st, "resv", rv, "drift", drift)
 	}
 	return nil
 }

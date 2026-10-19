@@ -50,6 +50,13 @@ type UsageConfig struct {
 	SpoolDir string `mapstructure:"spool_dir"`
 	// SpoolMaxBytes caps the spill file; beyond it rows drop (counted).
 	SpoolMaxBytes int64 `mapstructure:"spool_max_bytes"`
+	// LossPolicy decides what happens when a billing row can be persisted
+	// NOWHERE (DB write failed AND the WAL could not take it):
+	//   count (legacy) — increment cl_usage_rows_lost_total, keep serving;
+	//   block (DECIDED DEFAULT, 2026-10-19) — ledger-integrity-first: engage
+	//     the billing-integrity block, reject NEW billable requests with 503
+	//     until durability recovers. Env: CL_USAGE_LOSS_POLICY.
+	LossPolicy string `mapstructure:"loss_policy"`
 }
 
 type ServerConfig struct {
@@ -199,6 +206,13 @@ type GatewayConfig struct {
 	// CL_GATEWAY_UPSTREAM_MAX_IDLE_CONNS_PER_HOST / _MAX_IDLE_CONNS.
 	UpstreamMaxIdleConnsPerHost int `mapstructure:"upstream_max_idle_conns_per_host"`
 	UpstreamMaxIdleConns        int `mapstructure:"upstream_max_idle_conns"`
+	// BudgetMarkerTTL bounds the lifetime of the F1′ per-request
+	// reservation/settlement idempotency markers (resvmark/settledmark) and
+	// the orphan-reaper latency: an unsettled reservation is removed once
+	// its marker expires, preventing permanent over-count from crashed
+	// requests. Must exceed stream_max_duration plus any replay window.
+	// Env override: CL_GATEWAY_BUDGET_MARKER_TTL.
+	BudgetMarkerTTL string `mapstructure:"budget_marker_ttl"`
 	// CircuitProbePath is where the circuit prober looks for a models list
 	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
 	// any other outcome falls back to a 1-token real chat probe. Empty string
@@ -321,6 +335,17 @@ type LicenseConfig struct {
 	HeartbeatEnabled  bool          `mapstructure:"heartbeat_enabled" yaml:"heartbeat_enabled"`
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval" yaml:"heartbeat_interval"`
 	NodeID            string        `mapstructure:"node_id" yaml:"node_id"`
+	// U-37 Ed25519 signature verification (user-authorized 2026-10-19;
+	// production signing keys held by the user — this tree ships none).
+	// VerifyMode off|warn|enforce, DEFAULT off (the enforcement date is the
+	// user's call; do not flip unilaterally). VerifyKeys is inline key
+	// material or "@<path>": JSON {kid: base64 raw key} or PEM list with
+	// optional "# kid=<id>" lines. Env: CL_LICENSE_VERIFY_MODE / _ISSUER /
+	// _AUDIENCE / _KEYS.
+	VerifyMode     string `mapstructure:"verify_mode" yaml:"verify_mode"`
+	VerifyIssuer   string `mapstructure:"verify_issuer" yaml:"verify_issuer"`
+	VerifyAudience string `mapstructure:"verify_audience" yaml:"verify_audience"`
+	VerifyKeys     string `mapstructure:"verify_keys" yaml:"verify_keys"`
 }
 
 type MCPConfig struct {
@@ -591,6 +616,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("usage.queue_size", 1000)
 	v.SetDefault("usage.overflow_cap", 200)
 	v.SetDefault("usage.spool_dir", "data/usage-spool")
+	v.SetDefault("usage.loss_policy", "block")
 	v.SetDefault("usage.spool_max_bytes", 100<<20)
 
 	v.SetDefault("database.driver", "postgres")
@@ -641,6 +667,7 @@ func setDefaults(v *viper.Viper) {
 	// keys it already knows.
 	v.SetDefault("gateway.upstream_max_idle_conns_per_host", 0)
 	v.SetDefault("gateway.upstream_max_idle_conns", 0)
+	v.SetDefault("gateway.budget_marker_ttl", "24h")
 	// F-12: circuit-probe models path is a deployment property of the
 	// upstream, not an adapter constant. Registered with a default so
 	// CL_GATEWAY_CIRCUIT_PROBE_PATH env override is honored; set "" for
@@ -697,6 +724,10 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("license.heartbeat_enabled", false)
 	v.SetDefault("license.heartbeat_interval", "24h")
+	v.SetDefault("license.verify_mode", "off")
+	v.SetDefault("license.verify_issuer", "")
+	v.SetDefault("license.verify_audience", "")
+	v.SetDefault("license.verify_keys", "")
 
 	// U-06: viper's AutomaticEnv only resolves REGISTERED keys — these were
 	// documented as env-overridable (config.example.yaml) but silently

@@ -57,6 +57,12 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			}
 
 			if inTok == nil && outTok == nil && !hasPrecomputedCost {
+				// Debug-only: this early-return skips ALL budget settlement for
+				// the request while the usage ledger row is written by the
+				// separate usage pipeline — a systematic divergence source when
+				// it fires unexpectedly (r18s exit-wave forensics).
+				slog.Debug("budget settle skipped: no token usage on context",
+					"request_id", c.GetString("request_id"), "path", c.FullPath())
 				return
 			}
 
@@ -80,6 +86,8 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			reservations, _ := resVal.(*service.BudgetReservations)
 
 			if cost <= 0 && (reservations == nil || len(reservations.Reserved) == 0) {
+				slog.Debug("budget settle skipped: zero cost and no reservations to refund",
+					"request_id", c.GetString("request_id"))
 				return
 			}
 
@@ -91,7 +99,7 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			// Report key-level budget usage
 			if apiKey.MaxBudget > 0 {
 				applyBudgetDelta(budgetSvc, bgCtx, "key",
-					fmt.Sprintf("%d", apiKey.ID), apiKey.BudgetPeriod, cost, reservations)
+					fmt.Sprintf("%d", apiKey.ID), apiKey.BudgetPeriod, cost, reservations, c.GetString("request_id"))
 
 				// Check key-level alerts (async, own context)
 				spent, limit, _ := budgetSvc.CheckBudget(bgCtx, "key",
@@ -113,7 +121,7 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			if teamPeriod, ok := c.Get("team_budget_period"); ok {
 				if p, _ := teamPeriod.(string); p != "" && apiKey.TeamID != nil {
 					applyBudgetDelta(budgetSvc, bgCtx, "team",
-						fmt.Sprintf("%d", *apiKey.TeamID), p, cost, reservations)
+						fmt.Sprintf("%d", *apiKey.TeamID), p, cost, reservations, c.GetString("request_id"))
 
 					// Check team-level alerts (async, own context)
 					team := teamCache.Get(bgCtx, *apiKey.TeamID)
@@ -142,7 +150,7 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 				if orgID := c.GetInt64("org_id"); orgID != 0 {
 					orgPd, _ := c.Get("org_budget_period")
 					if orgPeriod, ok := orgPd.(string); ok && orgPeriod != "" {
-						applyBudgetDelta(budgetSvc, bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, reservations)
+						applyBudgetDelta(budgetSvc, bgCtx, "org", fmt.Sprintf("%d", orgID), orgPeriod, cost, reservations, c.GetString("request_id"))
 						go func() {
 							defer func() { recover() }()
 							// Bounded ctx (matches the key/team alert branches):
@@ -163,12 +171,25 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 	}
 }
 
-// applyBudgetDelta reconciles one budget counter. If a reservation was made for
-// this scope, adjust by (cost - reserved) against the period key recorded at
-// reserve time (a request crossing a UTC period boundary must refund the
-// counter it reserved, not the freshly-computed one); otherwise report the full
-// cost (the legacy path for requests that did not reserve, e.g. estimate was zero).
-func applyBudgetDelta(budgetSvc service.BudgetServiceInterface, ctx context.Context, scope, targetID, period string, cost float64, reservations *service.BudgetReservations) {
+// applyBudgetDelta reconciles one budget scope for a request. With a request
+// id (F1′) settlement goes through SettleScope: exactly-once per
+// (scope, request), reconciling against the per-request reservation MARK as
+// ground truth — a landed reservation settles (cost-reserved), an un-landed
+// one settles full cost; no reliance on in-memory bookkeeping. The legacy
+// path (no request id, or no reservation recorded) reports the full cost.
+func applyBudgetDelta(budgetSvc service.BudgetServiceInterface, ctx context.Context, scope, targetID, period string, cost float64, reservations *service.BudgetReservations, reqID string) {
+	pk := ""
+	if reservations != nil {
+		pk = reservations.PeriodKeys[scope]
+	}
+	if reqID != "" {
+		if ss, ok := budgetSvc.(interface {
+			SettleScope(ctx context.Context, scope, targetID, period, periodKey, reqID string, cost float64)
+		}); ok {
+			ss.SettleScope(ctx, scope, targetID, period, pk, reqID, cost)
+			return
+		}
+	}
 	if reservations != nil {
 		if reserved, ok := reservations.Reserved[scope]; ok {
 			budgetSvc.AdjustBudgetKeyed(ctx, scope, targetID, period, reservations.PeriodKeys[scope], cost-reserved)

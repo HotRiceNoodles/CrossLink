@@ -41,7 +41,7 @@ func reserveBudgetForRequest(c *gin.Context, budgetSvc *service.BudgetService, i
 		// reservation. Actual cost is still reported by ReportBudgetUsage.
 		return true
 	}
-	res, exceededScope := budgetSvc.ReserveForRequest(c.Request.Context(), scopes, estimate)
+	res, exceededScope := budgetSvc.ReserveForRequest(c.Request.Context(), scopes, estimate, c.GetString("request_id"))
 	if exceededScope != "" {
 		// A higher level rejected: lower levels were already refunded inside
 		// ReserveForRequest. Do NOT stash reservations — the request is aborted

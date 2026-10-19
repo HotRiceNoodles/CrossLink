@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/dialect"
@@ -26,14 +28,19 @@ type Services struct {
 // ProvideServices constructs all service instances from repos + infra dependencies.
 // cacheRdb is the Redis client for the response cache (may be a dedicated
 // instance so its eviction policy can differ from quota/budget keys); nil
-// falls back to the shared rdb.
-func ProvideServices(repos *repository.Repos, rdb *redis.Client, cacheRdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider, dlCfg config.DataLensConfig, d dialect.Dialect) *Services {
+// falls back to the shared rdb. markerTTL configures the F1′ idempotency
+// markers ("" or invalid → 24h default).
+func ProvideServices(repos *repository.Repos, rdb *redis.Client, cacheRdb *redis.Client, db *gorm.DB, cacheCfg *config.CacheConfig, cp crypto.CryptoProvider, dlCfg config.DataLensConfig, d dialect.Dialect, markerTTL string) *Services {
 	if cacheRdb == nil {
 		cacheRdb = rdb
 	}
+	ttl, err := time.ParseDuration(markerTTL)
+	if err != nil || ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
 	return &Services{
 		UsageSvc:       NewUsageService(repos.UsageLogRepo),
-		BudgetSvc:      NewBudgetService(rdb),
+		BudgetSvc:      NewBudgetServiceWithMarkerTTL(rdb, ttl),
 		BudgetAlertSvc: NewBudgetAlertService(repos.BudgetAlertRepo),
 		BudgetCalSvc:   NewBudgetCalibrationService(db, rdb),
 		LatencySvc:     NewLatencyService(rdb),

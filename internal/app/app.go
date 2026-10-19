@@ -132,7 +132,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Services
 	cacheRdb := InitCacheRedis(cfg.Cache.Redis)
-	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia)
+	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia, cfg.Gateway.BudgetMarkerTTL)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
 
 	// Seed the default credential_detection baseline rule (zero-config safety

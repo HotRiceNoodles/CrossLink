@@ -64,7 +64,7 @@ func TestReserveForRequest_MultiLevelRollback(t *testing.T) {
 		{Scope: "team", ID: "5", Period: "monthly", Limit: 1},
 		{Scope: "org", ID: "9", Period: "monthly", Limit: 100},
 	}
-	res, exceeded := s.ReserveForRequest(ctx, scopes, 2.0)
+	res, exceeded := s.ReserveForRequest(ctx, scopes, 2.0, "")
 	if exceeded != "team" {
 		t.Fatalf("expected exceeded at team, got %q", exceeded)
 	}
@@ -89,7 +89,7 @@ func TestReserveForRequest_SuccessThenReconcile(t *testing.T) {
 		{Scope: "key", ID: "1", Period: "monthly", Limit: 10},
 		{Scope: "team", ID: "5", Period: "monthly", Limit: 100},
 	}
-	res, exceeded := s.ReserveForRequest(ctx, scopes, 2.0)
+	res, exceeded := s.ReserveForRequest(ctx, scopes, 2.0, "")
 	if exceeded != "" {
 		t.Fatalf("expected no exceed, got %q", exceeded)
 	}
@@ -118,7 +118,7 @@ func TestReserveForRequest_ZeroEstimateNoop(t *testing.T) {
 	ctx := context.Background()
 
 	scopes := []BudgetScope{{Scope: "key", ID: "1", Period: "monthly", Limit: 10}}
-	res, exceeded := s.ReserveForRequest(ctx, scopes, 0)
+	res, exceeded := s.ReserveForRequest(ctx, scopes, 0, "")
 	if exceeded != "" {
 		t.Fatalf("expected no exceed on zero estimate, got %q", exceeded)
 	}
