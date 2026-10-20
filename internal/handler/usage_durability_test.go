@@ -518,3 +518,38 @@ func TestUsageWAL_ReplayDoesNotBlockAppends(t *testing.T) {
 	}
 	<-done
 }
+
+// r34 e2e finding, regression-locked: the integrity probe's EventID must fit
+// usage_logs.event_id varchar(36) — the first field version prefixed the
+// UUID and the probe failed on real Postgres (which sqlite tests never catch:
+// sqlite does not enforce varchar widths).
+func TestProbeUsageDurability_EventIDFitsColumn(t *testing.T) {
+	var got *service.UsageEntry
+	logger := &captureEntryLogger{save: func(e *service.UsageEntry) error {
+		got = e
+		return nil
+	}}
+	if err := ProbeUsageDurability(logger); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got == nil {
+		t.Fatal("probe did not reach the logger")
+	}
+	if len(got.EventID) != 36 {
+		t.Fatalf("probe EventID length = %d (%q), want 36 (bare UUID, varchar(36) column)", len(got.EventID), got.EventID)
+	}
+	if got.RouteType != "integrity_probe" {
+		t.Fatalf("probe route_type = %q, want integrity_probe", got.RouteType)
+	}
+	if got.PrecomputedCost != 0 || got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Fatalf("probe row carries usage: %+v", got)
+	}
+}
+
+type captureEntryLogger struct {
+	save func(e *service.UsageEntry) error
+}
+
+func (c *captureEntryLogger) LogChecked(ctx context.Context, entry *service.UsageEntry) error {
+	return c.save(entry)
+}

@@ -705,8 +705,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(dm.Middleware())
 	// Ledger-integrity gate (usage.loss_policy=block, decided 2026-10-19):
 	// mounted FIRST so a DB+WAL double failure rejects new billable requests
-	// before any upstream work; in-flight responses are untouched.
+	// before any upstream work; in-flight responses are untouched. r34:
+	// state-file persistence restores an unfixed block across restarts, and
+	// the active prober re-proves durability (WAL accept + DB commit of a
+	// zero-cost probe row) so an idle blocked gateway still recovers.
+	billingintegrity.SetStateFile(cfg.Usage.IntegrityStateFile)
 	billingintegrity.Configure(cfg.Usage.LossPolicy)
+	billingintegrity.SetProber(func() error { return handler.ProbeUsageDurability(svcs.UsageSvc) })
+	billingintegrity.StartProber()
 	gwGroup.Use(middleware.BillingIntegrityGate())
 	concurrencyLimit := cfg.Gateway.ConcurrencyLimit
 	if concurrencyLimit <= 0 {

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/service"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -785,6 +786,12 @@ func (s *UsageSpool) Replay(flushBatch func(entries []*service.UsageEntry) error
 	}
 	usageSpoolReplayedTotal.Add(float64(flushed))
 	if flushed > 0 {
+		// Replay commits prove DB durability end-to-end — count them toward
+		// integrity-block recovery (r34: with the gate rejecting new traffic
+		// and an empty backlog there is no other organic success source).
+		for i := 0; i < flushed; i++ {
+			billingintegrity.ReportDurableSuccess()
+		}
 		// Strip what just committed (plus anything acked meanwhile) — through
 		// the amortized gate: a big backlog must not pay one full-file rewrite
 		// per round (see CompactIfWorthwhile).

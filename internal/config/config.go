@@ -57,6 +57,11 @@ type UsageConfig struct {
 	//     the billing-integrity block, reject NEW billable requests with 503
 	//     until durability recovers. Env: CL_USAGE_LOSS_POLICY.
 	LossPolicy string `mapstructure:"loss_policy"`
+	// IntegrityStateFile persists an engaged integrity block across process
+	// restarts (r34: a restart must not silently clear an unfixed block).
+	// Empty disables persistence (in-process block only). Env:
+	// CL_USAGE_INTEGRITY_STATE_FILE.
+	IntegrityStateFile string `mapstructure:"integrity_state_file"`
 }
 
 type ServerConfig struct {
@@ -617,6 +622,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("usage.overflow_cap", 200)
 	v.SetDefault("usage.spool_dir", "data/usage-spool")
 	v.SetDefault("usage.loss_policy", "block")
+	v.SetDefault("usage.integrity_state_file", "data/billing-integrity.state")
 	v.SetDefault("usage.spool_max_bytes", 100<<20)
 
 	v.SetDefault("database.driver", "postgres")

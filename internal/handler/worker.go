@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -39,6 +41,39 @@ func SetUsageWorkers(p *worker.Pool) {
 // SetUsageSpool arms the disk spill fallback for usage rows.
 func SetUsageSpool(s *UsageSpool) {
 	usageSpool = s
+}
+
+// ProbeUsageDurability exercises the EXACT dual persistence path a billing
+// row depends on: WAL (spool) accept + synchronous DB commit (billingintegrity
+// active probe, r34). The probe row is zero-cost and route-tagged
+// (integrity_probe) — auditable in usage_logs, contributes 0 to every SUM.
+// Returns nil only when both halves held; the caller counts it as a durable
+// success (or resets its consecutive chain on failure).
+func ProbeUsageDurability(log usageEntryLogger) error {
+	entry := &service.UsageEntry{
+		// EventID must stay a bare 36-char UUID: usage_logs.event_id is
+		// varchar(36) (r34 e2e finding — a prefixed id exceeded the column
+		// and the probe itself failed on Postgres). The probe marker is the
+		// route_type below.
+		EventID:    uuid.New().String(),
+		RouteType:  "integrity_probe",
+		StatusCode: 200,
+		Currency:   "USD",
+	}
+	if usageSpool != nil {
+		if !usageSpool.Write(entry) {
+			return errors.New("probe: WAL (spool) rejected the probe row")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), usageWriteTimeout)
+	defer cancel()
+	if err := log.LogChecked(ctx, entry); err != nil {
+		return fmt.Errorf("probe: db write failed: %w", err)
+	}
+	if usageSpool != nil {
+		usageSpool.Ack(entry.EventID)
+	}
+	return nil
 }
 
 // usageEntryLogger is the subset of the usage service the billing path
