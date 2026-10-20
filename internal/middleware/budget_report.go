@@ -32,6 +32,16 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 
 			_, hasPrecomputedCost := c.Get("cost")
 
+			// F1′ reservations outstanding (admission reserved e per scope).
+			// Read BEFORE the early-exits: a request that dies before any
+			// token accounting (upstream error, client abort mid-response)
+			// still holds reservations that MUST be released — the r33c
+			// "never-settled cohort" was exactly this early-return skipping
+			// SettleScope while the usage pipeline wrote the ledger row.
+			resVal, _ := c.Get("budget_reservations")
+			reservations, _ := resVal.(*service.BudgetReservations)
+			hasReservations := reservations != nil && len(reservations.Reserved) > 0
+
 			// Call-count reconciliation. Calls are counted atomically at
 			// admission (ReserveCall in BudgetCheck); here we only refund
 			// paths that must not consume the limit: video status polling,
@@ -56,11 +66,13 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 				callCancel()
 			}
 
-			if inTok == nil && outTok == nil && !hasPrecomputedCost {
+			if inTok == nil && outTok == nil && !hasPrecomputedCost && !hasReservations {
 				// Debug-only: this early-return skips ALL budget settlement for
 				// the request while the usage ledger row is written by the
 				// separate usage pipeline — a systematic divergence source when
-				// it fires unexpectedly (r18s exit-wave forensics).
+				// it fires unexpectedly (r18s exit-wave forensics). With
+				// reservations outstanding it must NOT fire: the reservation
+				// release below settles cost=0 (refund) against the marks.
 				slog.Debug("budget settle skipped: no token usage on context",
 					"request_id", c.GetString("request_id"), "path", c.FullPath())
 				return
@@ -82,10 +94,8 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			// (actual - reserved) instead of adding the full actual cost on top. This
 			// also refunds the reservation when cost == 0 (failed/zero-token request),
 			// so reservations never leak as phantom spend.
-			resVal, _ := c.Get("budget_reservations")
-			reservations, _ := resVal.(*service.BudgetReservations)
 
-			if cost <= 0 && (reservations == nil || len(reservations.Reserved) == 0) {
+			if cost <= 0 && !hasReservations {
 				slog.Debug("budget settle skipped: zero cost and no reservations to refund",
 					"request_id", c.GetString("request_id"))
 				return

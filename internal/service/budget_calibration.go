@@ -414,6 +414,19 @@ func (s *BudgetCalibrationService) migrateOrCheckInvariant(ctx context.Context, 
 			"key", bKey, "settled", spent, "resv", over)
 		return nil
 	}
+	// RAISE-ONLY settled sync (r34): budgetset mirrors SUM(DB usage_logs) —
+	// every settle's cost has exactly one ledger row, so settled can only
+	// LEGITIMATELY LAG (a settle lost by every recovery tier). Raising it
+	// here closes that lag within one round and keeps the invariant check
+	// meaningful (a settled above SUM(DB) would be a double-apply signal —
+	// never lowered by this path). Without this, lost settles left the r33c
+	// drift (settled 19.696 vs DB 20.946) as a standing WARN.
+	stCur, _ := s.rdb.Get(ctx, setKey).Float64()
+	if stCur < spent {
+		s.rdb.Set(ctx, setKey, strconv.FormatFloat(spent, 'f', -1, 64), ttl)
+		slog.Warn("budget calibration: settled RAISED to ledger sum (lost settles healed into the audit counter)",
+			"key", setKey, "settled_was", stCur, "settled_now", spent)
+	}
 	b, _ := s.rdb.Get(ctx, bKey).Float64()
 	st, _ := s.rdb.Get(ctx, setKey).Float64()
 	rv, _ := s.rdb.Get(ctx, rKey).Float64()

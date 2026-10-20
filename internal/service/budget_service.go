@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -33,23 +35,38 @@ import (
 const (
 	budgetResvExpZSet = "resvexp"
 	defaultMarkerTTL  = 24 * time.Hour
+	// settleLedgerZSet is the REDIS-PERSISTENT audit-replay ledger for settles
+	// that exhausted inline retries (r34: the in-process queue alone lost
+	// tasks on crash/full). Members are re-driven idempotently by the ledger
+	// worker; the settledmark guard makes every re-drive a no-op or an exact
+	// settle, never a double apply.
+	settleLedgerZSet = "settleretry"
 )
 
-// budgetReserveMarkScript: KEYS = [resvmark, budget, budgetresv, resvexp];
-// ARGV = [estimate, limit, budgetTTLsec, markTTLsec, expiryEpoch, member,
-// estimateStr]. Returns {spent, limit, exceeded, reserved} where reserved=1
-// means the reservation is held (created now, or already held on replay).
+// budgetReserveMarkScript: KEYS = [resvmark, budget, budgetresv, resvexp,
+// settledmark]; ARGV = [estimate, limit, budgetTTLsec, markTTLsec,
+// expiryEpoch, member, estimateStr]. Returns {spent, limit, exceeded,
+// reserved} where reserved=1 means the reservation is held (created now, or
+// already held on replay). A LIVE settledmark means this request already
+// settled — the reserve returns state WITHOUT re-creating a mark (r33c
+// residual: a loadgen retry after the mark expired but before the settledmark
+// expired re-reserved, double-counting against the same request).
 var budgetReserveMarkScript = redis.NewScript(`
 local mark = KEYS[1]
 local budget = KEYS[2]
 local resv = KEYS[3]
 local zset = KEYS[4]
+local settledmark = KEYS[5]
 local e = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 local ttlBudget = tonumber(ARGV[3])
 local ttlMark = tonumber(ARGV[4])
 local expiry = tonumber(ARGV[5])
 local member = ARGV[6]
+if redis.call('EXISTS', settledmark) == 1 then
+	local cur = tonumber(redis.call('GET', budget)) or 0
+	return {cur, limit, 0, 0}
+end
 if redis.call('SET', mark, ARGV[7], 'NX', 'EX', ttlMark) then
 	redis.call('INCRBYFLOAT', budget, e)
 	redis.call('INCRBYFLOAT', resv, e)
@@ -131,6 +148,17 @@ return 1
 
 func resvMarkKey(scope, targetID, reqID string) string {
 	return fmt.Sprintf("resvmark:%s:%s:%s", scope, targetID, reqID)
+}
+
+// markTTLSeconds converts a marker TTL to a whole-second floor of at least
+// 1s: sub-second test TTLs would otherwise reach the Lua as SET EX 0, which
+// Redis rejects outright.
+func markTTLSeconds(ttl time.Duration) int {
+	secs := int(ttl.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 func settledMarkKey(scope, targetID, reqID string) string {
@@ -227,7 +255,12 @@ func NewBudgetServiceWithMarkerTTL(rdb *redis.Client, ttl time.Duration) *Budget
 	if ttl <= 0 {
 		ttl = defaultMarkerTTL
 	}
-	return &BudgetService{rdb: rdb, markerTTL: ttl}
+	s := &BudgetService{rdb: rdb, markerTTL: ttl}
+	// Re-arm the persistent settle-ledger worker immediately: a restarted
+	// process resumes recovering whatever the Redis ledger still holds
+	// (r34: crash must not orphan audit-replay tasks).
+	s.startSettleLedgerWorker()
+	return s
 }
 
 // ReserveScopeMarked atomically reserves estimate for one scope under a
@@ -251,9 +284,9 @@ func (s *BudgetService) ReserveScopeMarked(ctx context.Context, scope, targetID,
 	now := time.Now()
 	member := resvExpMember(scope, targetID, reqID, period, pk, fmt.Sprintf("%.9f", estimate))
 	res, err := budgetReserveMarkScript.Run(ctx, s.rdb,
-		[]string{mk, bk, rk, budgetResvExpZSet},
+		[]string{mk, bk, rk, budgetResvExpZSet, settledMarkKey(scope, targetID, reqID)},
 		estimate, budgetLimit,
-		int(PeriodTTL(period).Seconds()), int(s.markerTTL.Seconds()),
+		int(PeriodTTL(period).Seconds()), markTTLSeconds(s.markerTTL),
 		now.Add(s.markerTTL).Unix(), member,
 		fmt.Sprintf("%.9f", estimate),
 	).Float64Slice()
@@ -271,13 +304,28 @@ func (s *BudgetService) ReserveScopeMarked(ctx context.Context, scope, targetID,
 	return res[0], res[1], res[3] == 1, res[2] == 1
 }
 
-// Bounded in-process audit-replay queue for settles that exhausted their
-// inline retries (r33/r33b finding: a settlement whose whole 30s caller
-// window falls inside a longer Redis outage is otherwise lost until the
-// hourly DB raise). The 24h mark TTL makes a LATE settle exact and safe,
-// so replaying is pure recovery. Overflow beyond the queue cap gives up
-// (hourly-healable under-count); a process crash loses the queue — the
-// mark+reaper+DB-raise chain covers that path (documented residual).
+// Settle-retry recovery (r33/r33b finding: a settlement whose whole 30s
+// caller window falls inside a longer Redis outage is otherwise lost until
+// the hourly DB raise; r34 finding: an in-process-only queue LOSES those
+// recovery tasks on process crash and caps out under backlog). Two tiers:
+//
+//  1. settleLedger — a REDIS-PERSISTENT ZSET ("settleretry"). Enqueued
+//     BEFORE giving up (best-effort 5s write; if Redis itself is the outage
+//     the write fails and we fall to tier 2). Survives process restarts:
+//     every BudgetService construction re-arms the ledger worker, which
+//     re-drives due members idempotently (settledmark NX). Metrics expose
+//     pending/recovered/expired for operational gating.
+//  2. In-process bounded queue (fast path when the ledger write failed —
+//     typically the tail of a Redis outage; the ledger worker picks the
+//     task up on its next successful ZADD... no: if the ZADD failed, only
+//     this queue holds it). Overflow beyond cap is a counted, logged loss
+//     in the under-count direction the hourly DB raise heals.
+//
+// The marker TTL makes a LATE settle exact and safe, so replaying is pure
+// recovery. Residual (documented, not hidden): if BOTH the ledger write AND
+// the in-process enqueue fail (Redis down + queue full), the settle is lost
+// until the hourly DB-based calibration raise — under-count direction,
+// alertable via cl_budget_settle_lost_total.
 type settleRetryTask struct {
 	scope, targetID, period, pk, reqID string
 	cost                              float64
@@ -288,20 +336,170 @@ const (
 	settleRetryQueueCap   = 65536
 	settleRetryHorizon    = 10 * time.Minute
 	settleRetryMaxBackoff = 15 * time.Second
+	settleLedgerBatch     = 200
+	settleLedgerTick      = 2 * time.Second
 )
 
 var (
 	settleRetryQ    = make(chan settleRetryTask, settleRetryQueueCap)
 	settleRetryOnce sync.Once
+	settleLedgerOnce sync.Once
 )
 
+// Metrics for the settle-recovery tiers (operational gates for r34-class
+// verification: pending must drain to 0 after an outage; lost/expired must
+// be accounted against the hourly DB raise).
+var (
+	settleLedgerPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cl_budget_settle_ledger_pending",
+		Help: "Settles waiting in the Redis-persistent audit-replay ledger (should return to 0 after an outage).",
+	})
+	settleLedgerRecoveredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cl_budget_settle_ledger_recovered_total",
+		Help: "Settles recovered by the Redis-persistent audit-replay ledger.",
+	})
+	settleLedgerExpiredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cl_budget_settle_ledger_expired_total",
+		Help: "Ledger settles past the 10m horizon: under-count direction, healed by the hourly DB-based calibration raise.",
+	})
+	settleLostTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cl_budget_settle_lost_total",
+		Help: "Settles lost entirely (ledger write failed AND in-process queue full): under-count direction, healed by the hourly DB raise.",
+	})
+)
+
+// runSettleScript executes one settle attempt (shared by the inline ladder,
+// the in-process drainer and the ledger worker). The settledmark TTL is
+// deliberately LONGER than the reservation mark TTL: the settle-once guard
+// must outlive the markerTTL + retry horizon so a late replay after the mark
+// expired cannot re-settle the same request (r33c residual class).
+func (s *BudgetService) runSettleScript(ctx context.Context, t settleRetryTask) (int, error) {
+	guardTTL := s.markerTTL + settleRetryHorizon + time.Hour
+	return budgetSettleScript.Run(ctx, s.rdb,
+		[]string{settledMarkKey(t.scope, t.targetID, t.reqID),
+			resvMarkKey(t.scope, t.targetID, t.reqID),
+			fmt.Sprintf("budget:%s:%s:%s", t.scope, t.targetID, t.pk),
+			budgetResvKey(t.scope, t.targetID, t.pk),
+			budgetSettledKey(t.scope, t.targetID, t.pk),
+			budgetResvExpZSet},
+		t.cost, int(guardTTL.Seconds()), t.scope, t.targetID, t.reqID, t.period, t.pk,
+		markTTLSeconds(PeriodTTL(t.period)),
+	).Int()
+}
+
+// ledgerMember encodes a settle task plus its expiry deadline as the ledger
+// ZSET member (score = next-attempt epoch).
+func ledgerMember(t settleRetryTask) string {
+	return t.scope + "\x1f" + t.targetID + "\x1f" + t.period + "\x1f" + t.pk + "\x1f" + t.reqID +
+		"\x1f" + strconv.FormatFloat(t.cost, 'f', 9, 64) +
+		"\x1f" + strconv.FormatInt(t.deadline.Unix(), 10)
+}
+
+func parseLedgerMember(m string) (settleRetryTask, bool) {
+	parts := strings.SplitN(m, "\x1f", 7)
+	if len(parts) != 7 {
+		return settleRetryTask{}, false
+	}
+	cost, err := strconv.ParseFloat(parts[5], 64)
+	if err != nil {
+		return settleRetryTask{}, false
+	}
+	dl, err := strconv.ParseInt(parts[6], 10, 64)
+	if err != nil {
+		return settleRetryTask{}, false
+	}
+	return settleRetryTask{
+		scope: parts[0], targetID: parts[1], period: parts[2], pk: parts[3],
+		reqID: parts[4], cost: cost, deadline: time.Unix(dl, 0),
+	}, true
+}
+
 func (s *BudgetService) enqueueSettleRetry(t settleRetryTask) bool {
+	// Tier 1: Redis-persistent ledger (survives crash/restart). Score = now:
+	// due immediately — the worker's own 2s tick is the pacing.
+	zctx, zcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := s.rdb.ZAdd(zctx, settleLedgerZSet, redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: ledgerMember(t),
+	}).Err()
+	zcancel()
+	if err == nil {
+		s.startSettleLedgerWorker()
+		return true
+	}
+	// Tier 2: in-process queue (Redis down — typically the tail of an outage).
 	select {
 	case settleRetryQ <- t:
 		settleRetryOnce.Do(func() { go s.drainSettleRetries() })
 		return true
 	default:
+		settleLostTotal.Inc()
 		return false
+	}
+}
+
+// startSettleLedgerWorker arms the once-per-process ledger drainer. Called
+// from every BudgetService construction (a restarted process immediately
+// resumes whatever the ledger still holds) and on successful enqueue.
+func (s *BudgetService) startSettleLedgerWorker() {
+	settleLedgerOnce.Do(func() { go s.drainSettleLedger() })
+}
+
+func (s *BudgetService) drainSettleLedger() {
+	ticker := time.NewTicker(settleLedgerTick)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.drainSettleLedgerOnce()
+	}
+}
+
+// drainSettleLedgerOnce drives one due batch. Exported for tests and for an
+// operational "drain now" hook.
+func (s *BudgetService) drainSettleLedgerOnce() {
+	ctx := context.Background()
+	if n, err := s.rdb.ZCard(ctx, settleLedgerZSet).Result(); err == nil {
+		settleLedgerPending.Set(float64(n))
+	}
+	for {
+		members, err := s.rdb.ZRangeByScore(ctx, settleLedgerZSet, &redis.ZRangeBy{
+			Min: "-inf", Max: fmt.Sprintf("%d", time.Now().Unix()), Count: settleLedgerBatch,
+		}).Result()
+		if err != nil || len(members) == 0 {
+			return
+		}
+		for _, m := range members {
+			t, ok := parseLedgerMember(m)
+			if !ok {
+				// Malformed ledger entry: drop so it cannot wedge the zset.
+				s.rdb.ZRem(ctx, settleLedgerZSet, m)
+				continue
+			}
+			sctx, scancel := context.WithTimeout(ctx, 5*time.Second)
+			_, serr := s.runSettleScript(sctx, t)
+			scancel()
+			if serr == nil {
+				s.rdb.ZRem(ctx, settleLedgerZSet, m)
+				settleLedgerRecoveredTotal.Inc()
+				slog.Info("budget settle ledger RECOVERED",
+					"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost)
+				continue
+			}
+			if time.Now().After(t.deadline) {
+				s.rdb.ZRem(ctx, settleLedgerZSet, m)
+				settleLedgerExpiredTotal.Inc()
+				slog.Warn("budget settle ledger EXPIRED past horizon (under-count direction; hourly DB-based calibration raises)",
+					"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost, "error", serr)
+				continue
+			}
+			// Re-schedule with backoff (capped).
+			s.rdb.ZAdd(ctx, settleLedgerZSet, redis.Z{
+				Score:  float64(time.Now().Add(settleRetryMaxBackoff).Unix()),
+				Member: m,
+			})
+		}
+		if len(members) < settleLedgerBatch {
+			return
+		}
 	}
 }
 
@@ -310,16 +508,7 @@ func (s *BudgetService) drainSettleRetries() {
 		backoff := 2 * time.Second
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := budgetSettleScript.Run(ctx, s.rdb,
-				[]string{settledMarkKey(t.scope, t.targetID, t.reqID),
-					resvMarkKey(t.scope, t.targetID, t.reqID),
-					fmt.Sprintf("budget:%s:%s:%s", t.scope, t.targetID, t.pk),
-					budgetResvKey(t.scope, t.targetID, t.pk),
-					budgetSettledKey(t.scope, t.targetID, t.pk),
-					budgetResvExpZSet},
-				t.cost, int(s.markerTTL.Seconds()), t.scope, t.targetID, t.reqID, t.period, t.pk,
-				int(PeriodTTL(t.period).Seconds()),
-			).Int()
+			_, err := s.runSettleScript(ctx, t)
 			cancel()
 			if err == nil {
 				slog.Info("budget settle audit-replay RECOVERED",
@@ -358,17 +547,10 @@ func (s *BudgetService) SettleScope(ctx context.Context, scope, targetID, period
 		s.ReportUsage(ctx, scope, targetID, period, cost)
 		return
 	}
-	mk := resvMarkKey(scope, targetID, reqID)
 	run := func() (int, error) {
-		return budgetSettleScript.Run(ctx, s.rdb,
-			[]string{settledMarkKey(scope, targetID, reqID), mk,
-				fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk),
-				budgetResvKey(scope, targetID, pk),
-				budgetSettledKey(scope, targetID, pk),
-				budgetResvExpZSet},
-			cost, int(s.markerTTL.Seconds()), scope, targetID, reqID, period, pk,
-			int(PeriodTTL(period).Seconds()),
-		).Int()
+		return s.runSettleScript(ctx, settleRetryTask{
+			scope: scope, targetID: targetID, period: period, pk: pk, reqID: reqID, cost: cost,
+		})
 	}
 	backoff := time.Second
 	for attempt := 0; ; attempt++ {
