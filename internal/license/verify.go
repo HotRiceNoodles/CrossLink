@@ -1,7 +1,10 @@
 package license
 
 import (
+	"crypto"
 	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -10,29 +13,37 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	gmSm2 "github.com/tjfoc/gmsm/sm2"
+	smx509 "github.com/tjfoc/gmsm/x509"
 )
 
-// Ed25519 license-token signature verification (U-37; user-authorized
-// 2026-10-19). Production signing keys are held by the USER — this tree
-// ships and generates NONE; tests create ephemeral ISOLATED TEST KEYS only.
-// Modes: off (default — no check, no enforcement), warn (verify + warn on
-// failure, token still accepted), enforce (verify; an invalid token is
-// rejected on EVERY load path: offline file, heartbeat cache, DB). The
-// enforcement date is the user's call; the default is OFF and must not be
-// flipped unilaterally.
+// License-token signature verification (U-37; user-authorized 2026-10-19,
+// reworked the same day per review to REUSE the existing issuance trust
+// chain instead of an incompatible Ed25519-only scheme).
 //
-// Checks performed in warn/enforce:
-//   - alg is EXACTLY EdDSA/Ed25519 — any other algorithm (HS256 with an
-//     attacker-chosen key, "none", RS256) is rejected BEFORE any key
-//     material is consulted: no algorithm-confusion window;
-//   - the token header carries a kid present in the configured whitelist
-//     (rotation = ship multiple kids; revocation = remove from the list);
-//   - the signature verifies under that kid's Ed25519 public key;
-//   - exp present and valid; iss/aud match when configured;
-//   - the pre-existing fingerprint binding and grace/expiry logic stay at
-//     their call sites (verification composes with, not replaces, them).
+// The issuer (License-Server, audited read-only) signs with EITHER
+//   RS256   — RSA-2048, SHA-256, PKCS#1 v1.5 (internal/crypto/standard.go)
+//   SM2SM3  — national-cryptography provider (internal/crypto/gm_jwt.go)
+// and addresses keys by a `kid` header; rotation = new SigningKey rows
+// (RotateKey) with public PEMs exposed by the admin signing-key endpoint.
+// This verifier MIRRORS the server's byte-level verification semantics
+// (same signing-string, same primitives) so a token the server accepts,
+// the client accepts — and nothing else:
+//   - the header alg must be exactly RS256 / SM2SM3 / EdDSA (EdDSA kept as
+//     an OPTIONAL future path — enabling it issuer-side requires the
+//     two-sided migration plan in decision-packages §B; never unilateral);
+//   - kid must resolve in the configured whitelist (JSON {kid: PEM|b64raw}
+//     or PEM list with "# kid=" lines; rotation = add entries, revocation
+//     = remove);
+//   - signature verified under that kid's key; exp required and checked;
+//     iss/aud checked when configured;
+//   - the pre-existing fingerprint binding / grace logic at the client call
+//     sites composes unchanged.
+// Modes: off (default) | warn (log failures, accept) | enforce (reject on
+// every load path — the single ParseToken point covers offline/cache/DB).
+// Production keys are the licensee's; this tree ships and generates NONE.
 
 const (
 	VerifyModeOff     = "off"
@@ -40,11 +51,18 @@ const (
 	VerifyModeEnforce = "enforce"
 )
 
+type licensedKey struct {
+	alg string // RS256 | SM2SM3 | EdDSA
+	rsa *rsa.PublicKey
+	sm2 *gmSm2.PublicKey
+	ed  ed25519.PublicKey
+}
+
 type tokenVerification struct {
 	mode     string
 	issuer   string
 	audience string
-	keys     map[string]ed25519.PublicKey
+	keys     map[string]*licensedKey
 }
 
 var verification tokenVerification
@@ -55,10 +73,8 @@ type ConfigureError struct{ Reason string }
 func (e *ConfigureError) Error() string { return "license verification configure: " + e.Reason }
 
 // ConfigureSignatureVerification installs the global verification state.
-// spec is inline key material or "@<path>". Key material forms:
-//   - JSON object { "<kid>": "<base64 raw 32-byte public key>", ... }
-//   - PEM PUBLIC KEY list; a block may be preceded by a "# kid=<id>" line
-//     (a block without one registers under kid "")
+// spec is inline key material or "@<path>": JSON {kid: <PEM text or base64
+// raw Ed25519 key>} or a PEM list where "# kid=<id>" precedes its block.
 func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
 	switch mode {
 	case "", VerifyModeOff:
@@ -67,7 +83,7 @@ func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
 	default:
 		return &ConfigureError{Reason: fmt.Sprintf("unknown mode %q (off|warn|enforce)", mode)}
 	}
-	keys, err := loadEd25519PublicKeys(spec)
+	keys, err := loadLicenseKeys(spec)
 	if err != nil {
 		return err
 	}
@@ -81,8 +97,8 @@ func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
 // VerificationMode reports the active mode (boot logs and tests).
 func VerificationMode() string { return verification.mode }
 
-func loadEd25519PublicKeys(spec string) (map[string]ed25519.PublicKey, error) {
-	out := map[string]ed25519.PublicKey{}
+func loadLicenseKeys(spec string) (map[string]*licensedKey, error) {
+	out := map[string]*licensedKey{}
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return out, nil
@@ -99,16 +115,16 @@ func loadEd25519PublicKeys(spec string) (map[string]ed25519.PublicKey, error) {
 		if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
 			return nil, &ConfigureError{Reason: "JSON key map: " + err.Error()}
 		}
-		for kid, b64 := range m {
-			raw, err := base64.StdEncoding.DecodeString(b64)
-			if err != nil || len(raw) != ed25519.PublicKeySize {
-				return nil, &ConfigureError{Reason: fmt.Sprintf("kid %q: want base64 %d-byte raw key", kid, ed25519.PublicKeySize)}
+		for kid, material := range m {
+			k, err := parseKeyMaterial(material)
+			if err != nil {
+				return nil, &ConfigureError{Reason: fmt.Sprintf("kid %q: %v", kid, err)}
 			}
-			out[kid] = ed25519.PublicKey(raw)
+			out[kid] = k
 		}
 		return out, nil
 	}
-	// PEM list. A "# kid=<id>" line attaches the NEXT block.
+	// PEM list; "# kid=<id>" attaches the next block.
 	lines := strings.Split(spec, "\n")
 	pendingKid := ""
 	var block strings.Builder
@@ -121,11 +137,11 @@ func loadEd25519PublicKeys(spec string) (map[string]ed25519.PublicKey, error) {
 		if blk == nil {
 			return &ConfigureError{Reason: "unreadable PUBLIC KEY PEM block"}
 		}
-		pub, err := parseEd25519PEM(blk)
+		k, err := parsePEMBlock(blk)
 		if err != nil {
 			return &ConfigureError{Reason: err.Error()}
 		}
-		out[pendingKid] = pub
+		out[pendingKid] = k
 		pendingKid = ""
 		return nil
 	}
@@ -154,29 +170,83 @@ func loadEd25519PublicKeys(spec string) (map[string]ed25519.PublicKey, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, &ConfigureError{Reason: "no usable PUBLIC KEY PEM blocks found"}
+		return nil, &ConfigureError{Reason: "no usable public-key PEM blocks found"}
 	}
 	return out, nil
 }
 
-func parseEd25519PEM(block *pem.Block) (ed25519.PublicKey, error) {
-	if block.Type != "PUBLIC KEY" {
-		return nil, fmt.Errorf("unsupported PEM block %q (want PUBLIC KEY)", block.Type)
+func parseKeyMaterial(material string) (*licensedKey, error) {
+	trimmed := strings.TrimSpace(material)
+	if blk, _ := pem.Decode([]byte(trimmed)); blk != nil {
+		return parsePEMBlock(blk)
 	}
-	if k, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
-		if ed, ok := k.(ed25519.PublicKey); ok {
-			return ed, nil
-		}
-		return nil, errors.New("PKIX key is not Ed25519")
+	raw, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return nil, errors.New("want a PEM public key or base64 raw Ed25519 key")
 	}
-	if len(block.Bytes) == ed25519.PublicKeySize {
-		return ed25519.PublicKey(block.Bytes), nil
-	}
-	return nil, errors.New("not an Ed25519 public key (PKIX or raw 32-byte)")
+	return &licensedKey{alg: "EdDSA", ed: ed25519.PublicKey(raw)}, nil
 }
 
-// VerifyRawToken runs the full signature/claims verification. Returns nil
-// when valid, or when verification is OFF (no checks run in that mode).
+// parseSM2Block mirrors the server's parseSM2PublicKey (internal/crypto/gm.go):
+// pem.Decode then smx509.ParseSm2PublicKey on the DER, regardless of the PEM
+// type label — the server WRITES "SM2 PUBLIC KEY" (gm.go:120) which tjfoc's
+// own ReadPublicKeyFromPem rejects (it demands "PUBLIC KEY"), so the type
+// must not gate the parse.
+func parseSM2Block(blk *pem.Block) (*gmSm2.PublicKey, error) {
+	return smx509.ParseSm2PublicKey(blk.Bytes)
+}
+
+func parsePEMBlock(blk *pem.Block) (*licensedKey, error) {
+	if strings.Contains(blk.Type, "RSA") {
+		if k, err := x509.ParsePKIXPublicKey(blk.Bytes); err == nil {
+			if rk, ok := k.(*rsa.PublicKey); ok {
+				return &licensedKey{alg: "RS256", rsa: rk}, nil
+			}
+		}
+		if rk, err := x509.ParsePKCS1PublicKey(blk.Bytes); err == nil {
+			return &licensedKey{alg: "RS256", rsa: rk}, nil
+		}
+		return nil, errors.New("not an RSA public key")
+	}
+	if strings.Contains(blk.Type, "SM2") {
+		pub, err := parseSM2Block(blk)
+		if err != nil {
+			return nil, errors.New("not an SM2 public key: " + err.Error())
+		}
+		return &licensedKey{alg: "SM2SM3", sm2: pub}, nil
+	}
+	if blk.Type == "PUBLIC KEY" {
+		if k, err := x509.ParsePKIXPublicKey(blk.Bytes); err == nil {
+			switch pk := k.(type) {
+			case *rsa.PublicKey:
+				return &licensedKey{alg: "RS256", rsa: pk}, nil
+			case ed25519.PublicKey:
+				return &licensedKey{alg: "EdDSA", ed: pk}, nil
+			}
+		}
+		if len(blk.Bytes) == ed25519.PublicKeySize {
+			return &licensedKey{alg: "EdDSA", ed: ed25519.PublicKey(blk.Bytes)}, nil
+		}
+		// Generic PKIX block carrying an SM2 key (tjfoc's own writer emits
+		// "PUBLIC KEY"); fall through to the server-mirrored SM2 parse.
+		if pub, err := parseSM2Block(blk); err == nil {
+			return &licensedKey{alg: "SM2SM3", sm2: pub}, nil
+		}
+		return nil, errors.New("unsupported PUBLIC KEY block (want RSA, Ed25519 or SM2)")
+	}
+	if strings.Contains(blk.Type, "EC") {
+		// SM2 keys are EC-shaped; try the server-mirrored SM2 parse.
+		if pub, err := parseSM2Block(blk); err == nil {
+			return &licensedKey{alg: "SM2SM3", sm2: pub}, nil
+		}
+		return nil, errors.New("unsupported EC key (not SM2)")
+	}
+	return nil, fmt.Errorf("unsupported PEM block %q", blk.Type)
+}
+
+// VerifyRawToken verifies a raw license JWT against the whitelist using the
+// ISSUER's exact semantics. Returns nil when valid, or when verification is
+// OFF (no checks run in that mode).
 func VerifyRawToken(rawToken string) error {
 	v := verification
 	if v.mode == VerifyModeOff {
@@ -185,33 +255,76 @@ func VerifyRawToken(rawToken string) error {
 	if len(v.keys) == 0 {
 		return errors.New("verification configured without keys")
 	}
-	opts := []jwt.ParserOption{
-		jwt.WithValidMethods([]string{"EdDSA"}),
-		jwt.WithExpirationRequired(),
+	parts := strings.Split(rawToken, ".")
+	if len(parts) != 3 {
+		return errors.New("malformed JWT")
 	}
-	if v.issuer != "" {
-		opts = append(opts, jwt.WithIssuer(v.issuer))
-	}
-	if v.audience != "" {
-		opts = append(opts, jwt.WithAudience(v.audience))
-	}
-	parsed, err := jwt.Parse(rawToken, func(t *jwt.Token) (interface{}, error) {
-		// Exact algorithm match BEFORE any key material is consulted.
-		if _, ok := t.Method.(*jwt.SigningMethodEd25519); !ok {
-			return nil, fmt.Errorf("algorithm %q not allowed (EdDSA/Ed25519 only)", t.Header["alg"])
-		}
-		kid, _ := t.Header["kid"].(string)
-		key, ok := v.keys[kid]
-		if !ok {
-			return nil, fmt.Errorf("kid %q not in whitelist", kid)
-		}
-		return key, nil
-	}, opts...)
+	headerRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("decode header: %w", err)
 	}
-	if !parsed.Valid {
-		return errors.New("token invalid")
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerRaw, &header); err != nil {
+		return fmt.Errorf("parse header: %w", err)
+	}
+	switch header.Alg {
+	case "RS256", "SM2SM3", "EdDSA":
+	default:
+		return fmt.Errorf("algorithm %q not allowed (RS256/SM2SM3/EdDSA only)", header.Alg)
+	}
+	key, ok := v.keys[header.Kid]
+	if !ok {
+		return fmt.Errorf("kid %q not in whitelist", header.Kid)
+	}
+	if key.alg != header.Alg {
+		return fmt.Errorf("kid %q holds an %s key, token alg is %s", header.Kid, key.alg, header.Alg)
+	}
+	signingString := parts[0] + "." + parts[1]
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+	switch header.Alg {
+	case "RS256":
+		hash := sha256.Sum256([]byte(signingString))
+		if err := rsa.VerifyPKCS1v15(key.rsa, crypto.SHA256, hash[:], sig); err != nil {
+			return fmt.Errorf("RS256 signature invalid: %w", err)
+		}
+	case "SM2SM3":
+		if !key.sm2.Verify([]byte(signingString), sig) {
+			return errors.New("SM2SM3 signature invalid")
+		}
+	case "EdDSA":
+		if !ed25519.Verify(ed25519.PublicKey(key.ed), []byte(signingString), sig) {
+			return errors.New("EdDSA signature invalid")
+		}
+	}
+	claimsRaw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("decode claims: %w", err)
+	}
+	var claims struct {
+		Exp float64 `json:"exp"`
+		Iss string  `json:"iss"`
+		Aud string  `json:"aud"`
+	}
+	if err := json.Unmarshal(claimsRaw, &claims); err != nil {
+		return fmt.Errorf("parse claims: %w", err)
+	}
+	if claims.Exp == 0 {
+		return errors.New("token missing exp")
+	}
+	if time.Now().Unix() > int64(claims.Exp) {
+		return errors.New("token expired")
+	}
+	if v.issuer != "" && claims.Iss != v.issuer {
+		return fmt.Errorf("issuer %q != expected %q", claims.Iss, v.issuer)
+	}
+	if v.audience != "" && claims.Aud != v.audience {
+		return fmt.Errorf("audience %q != expected %q", claims.Aud, v.audience)
 	}
 	return nil
 }

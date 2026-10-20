@@ -1,236 +1,427 @@
 package license
 
 import (
+	"crypto"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	gmSm2 "github.com/tjfoc/gmsm/sm2"
+	smx509 "github.com/tjfoc/gmsm/x509"
 )
 
-// U-37 Ed25519 verification tests. ALL keys here are EPHEMERAL TEST KEYS
-// generated in-process — this suite never ships, writes, or discloses any
-// production key material (production signing keys are held by the user).
+// U-37 multi-algorithm verification tests, mirroring the ISSUER's exact
+// signing semantics (License-Server, audited read-only):
+//   RS256  — RSA-2048, SHA-256, PKCS#1 v1.5 (internal/crypto/standard.go)
+//   SM2SM3 — gm provider priv.Sign(rand, signingString, nil) /
+//            pub.Verify(signingString, sig) (internal/crypto/gm_jwt.go)
+//   EdDSA  — OPTIONAL future path only; kept exercised for the two-sided
+//            migration plan (decision-packages §B), NOT enabled issuer-side.
+// ALL keys here are EPHEMERAL TEST KEYS generated in-process — this suite
+// never ships, writes, or discloses any production key material (production
+// signing keys are held by the user).
 
-type testKeys struct {
+// tokenSigner is one algorithm family's mint capability.
+type tokenSigner interface {
+	alg() string
+	material() string          // whitelist entry (PEM or b64 raw)
+	sign(t *testing.T, ss string) string // signature, base64url
+}
+
+// ---- RS256 (the standard issuer path) ----
+
+type rs256Key struct{ priv *rsa.PrivateKey }
+
+func newRS256(t *testing.T) rs256Key {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("gen rsa: %v", err)
+	}
+	return rs256Key{priv: priv}
+}
+
+func (k rs256Key) alg() string { return "RS256" }
+
+func (k rs256Key) material() string {
+	der, _ := x509.MarshalPKIXPublicKey(&k.priv.PublicKey)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
+
+func (k rs256Key) pkcs1Material() string {
+	der := x509.MarshalPKCS1PublicKey(&k.priv.PublicKey)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: der}))
+}
+
+func (k rs256Key) sign(t *testing.T, ss string) string {
+	t.Helper()
+	h := sha256.Sum256([]byte(ss))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, k.priv, crypto.SHA256, h[:])
+	if err != nil {
+		t.Fatalf("rs256 sign: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// ---- SM2SM3 (the GM issuer path) ----
+
+type sm2Key struct{ priv *gmSm2.PrivateKey }
+
+func newSM2(t *testing.T) sm2Key {
+	t.Helper()
+	priv, err := gmSm2.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen sm2: %v", err)
+	}
+	return sm2Key{priv: priv}
+}
+
+func (k sm2Key) alg() string { return "SM2SM3" }
+
+// material mirrors the server's export (gm.go: MarshalSm2PublicKey under a
+// "SM2 PUBLIC KEY" block) — the form the admin signing-key endpoint serves.
+func (k sm2Key) material() string {
+	der, err := smx509.MarshalSm2PublicKey(&k.priv.PublicKey)
+	if err != nil {
+		panic(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "SM2 PUBLIC KEY", Bytes: der}))
+}
+
+// genericMaterial uses tjfoc's own writer shape ("PUBLIC KEY").
+func (k sm2Key) genericMaterial() string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: k.der()}))
+}
+
+func (k sm2Key) der() []byte {
+	der, err := smx509.MarshalSm2PublicKey(&k.priv.PublicKey)
+	if err != nil {
+		panic(err)
+	}
+	return der
+}
+
+func (k sm2Key) sign(t *testing.T, ss string) string {
+	t.Helper()
+	sig, err := k.priv.Sign(rand.Reader, []byte(ss), nil) // server's exact call
+	if err != nil {
+		t.Fatalf("sm2 sign: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// ---- EdDSA (future path) ----
+
+type edKey struct {
 	priv ed25519.PrivateKey
 	pub  ed25519.PublicKey
 }
 
-func newTestKey(t *testing.T) testKeys {
+func newEd(t *testing.T) edKey {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("gen key: %v", err)
+		t.Fatalf("gen ed: %v", err)
 	}
-	return testKeys{priv: priv, pub: pub}
+	return edKey{priv: priv, pub: pub}
 }
 
-func (k testKeys) sign(t *testing.T, kid string, claims jwt.MapClaims) string {
+func (k edKey) alg() string { return "EdDSA" }
+
+func (k edKey) material() string { return base64.StdEncoding.EncodeToString(k.pub) }
+
+func (k edKey) sign(t *testing.T, ss string) string {
 	t.Helper()
-	tok := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	if kid != "" {
-		tok.Header["kid"] = kid
-	}
-	s, err := tok.SignedString(k.priv)
-	if err != nil {
-		t.Fatalf("sign: %v", err)
-	}
-	return s
+	return base64.RawURLEncoding.EncodeToString(ed25519.Sign(k.priv, []byte(ss)))
 }
 
-func keyJSON(k testKeys) string {
-	return `{"k1":"` + base64.StdEncoding.EncodeToString(k.pub) + `"}`
+// ---- shared mint/config helpers (manual JWT assembly, like the server) ----
+
+func mint(t *testing.T, k tokenSigner, kid string, claims map[string]any) string {
+	t.Helper()
+	hdr, _ := json.Marshal(map[string]string{"alg": k.alg(), "typ": "JWT", "kid": kid})
+	body, _ := json.Marshal(claims)
+	ss := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body)
+	return ss + "." + k.sign(t, ss)
 }
 
-func setMode(t *testing.T, mode, keys string) {
+func whitelist(kids ...string) string {
+	return "{" + strings.Join(kids, ",") + "}"
+}
+
+func kidJSON(kid, material string) string {
+	m, _ := json.Marshal(material)
+	return `"` + kid + `":` + string(m)
+}
+
+func setMode(t *testing.T, mode string, entries ...string) {
+	t.Helper()
+	setModeSpec(t, mode, "{"+strings.Join(entries, ",")+"}")
+}
+
+func setModeSpec(t *testing.T, mode, spec string) {
 	t.Helper()
 	t.Cleanup(func() { _ = ConfigureSignatureVerification(VerifyModeOff, "", "", "") })
-	if err := ConfigureSignatureVerification(mode, "crosslink-license", "crosslink", keys); err != nil {
+	if err := ConfigureSignatureVerification(mode, "crosslink-license-server", "crosslink", spec); err != nil {
 		t.Fatalf("configure %s: %v", mode, err)
 	}
 }
 
-func stdClaims() jwt.MapClaims {
-	return jwt.MapClaims{
-		"lid": 1, "sub": "cust-1", "tier": "enterprise",
-		"exp": time.Now().Add(24 * time.Hour).Unix(),
-		"iss": "crosslink-license", "aud": "crosslink", "fp": "aa:bb",
+// stdClaims mirrors the server's claim shape (license_service.go): iss, sub,
+// lid, tier, max_nodes, grace_days, fp, type, iat, exp.
+func stdClaims() map[string]any {
+	return map[string]any{
+		"iss": "crosslink-license-server", "sub": "cust-1", "lid": 1,
+		"tier": "enterprise", "max_nodes": 10, "grace_days": 7,
+		"fp": "aa:bb", "type": "node", "aud": "crosslink",
+		"iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(),
 	}
 }
 
-// Valid token verifies; tampering the payload (forged) fails.
-func TestVerify_ValidAndForged(t *testing.T) {
-	k := newTestKey(t)
-	setMode(t, VerifyModeEnforce, keyJSON(k))
-	good := k.sign(t, "k1", stdClaims())
+// RS256 — the standard issuer path end-to-end: valid token (server claim
+// shape) verifies under a whitelisted kid; tampering the payload fails.
+func TestVerify_RS256ValidAndForged(t *testing.T) {
+	k := newRS256(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.material()))
+	good := mint(t, k, "k1", stdClaims())
 	if err := VerifyRawToken(good); err != nil {
-		t.Fatalf("valid token rejected: %v", err)
+		t.Fatalf("valid RS256 token rejected: %v", err)
 	}
-	// forge: flip a claim on the signed body
 	parts := strings.Split(good, ".")
-	forgedClaims := stdClaims()
-	forgedClaims["tier"] = "enterprise-forged"
-	hdr, _ := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "k1"})
-	body, _ := json.Marshal(forgedClaims)
-	forged := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body) + "." + parts[2]
-	if err := VerifyRawToken(forged); err == nil {
-		t.Fatal("forged payload accepted")
+	forged := stdClaims()
+	forged["tier"] = "enterprise-forged"
+	hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": "k1"})
+	body, _ := json.Marshal(forged)
+	bad := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body) + "." + parts[2]
+	if err := VerifyRawToken(bad); err == nil {
+		t.Fatal("forged RS256 payload accepted")
 	}
 }
 
-// Wrong key in the whitelist (attacker-signed, unknown kid or known kid with
-// different key) must fail.
-func TestVerify_WrongKey(t *testing.T) {
-	good := newTestKey(t)
-	attacker := newTestKey(t)
-	setMode(t, VerifyModeEnforce, keyJSON(good))
-	// unknown kid
-	if err := VerifyRawToken(attacker.sign(t, "k-evil", stdClaims())); err == nil {
-		t.Fatal("unknown-kid token accepted")
+// RS256 — attacker keys fail under both an unknown kid and a whitelisted kid.
+func TestVerify_RS256WrongKeyAndUnknownKid(t *testing.T) {
+	good := newRS256(t)
+	attacker := newRS256(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", good.material()))
+	if err := VerifyRawToken(mint(t, attacker, "k-evil", stdClaims())); err == nil {
+		t.Fatal("unknown-kid RS256 token accepted")
 	}
-	// whitelisted kid but signed by another key
-	if err := VerifyRawToken(attacker.sign(t, "k1", stdClaims())); err == nil {
-		t.Fatal("wrong-key token accepted under whitelisted kid")
+	if err := VerifyRawToken(mint(t, attacker, "k1", stdClaims())); err == nil {
+		t.Fatal("wrong-key RS256 token accepted under whitelisted kid")
 	}
 }
 
-// Expired tokens fail (exp required and validated).
-func TestVerify_Expired(t *testing.T) {
-	k := newTestKey(t)
-	setMode(t, VerifyModeEnforce, keyJSON(k))
-	claims := stdClaims()
-	claims["exp"] = time.Now().Add(-time.Hour).Unix()
-	if err := VerifyRawToken(k.sign(t, "k1", claims)); err == nil {
-		t.Fatal("expired token accepted")
+// RS256 — exp required and enforced.
+func TestVerify_RS256Expiry(t *testing.T) {
+	k := newRS256(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.material()))
+	expired := stdClaims()
+	expired["exp"] = time.Now().Add(-time.Hour).Unix()
+	if err := VerifyRawToken(mint(t, k, "k1", expired)); err == nil {
+		t.Fatal("expired RS256 token accepted")
 	}
 	noExp := stdClaims()
 	delete(noExp, "exp")
-	if err := VerifyRawToken(k.sign(t, "k1", noExp)); err == nil {
-		t.Fatal("missing-exp token accepted")
+	if err := VerifyRawToken(mint(t, k, "k1", noExp)); err == nil {
+		t.Fatal("missing-exp RS256 token accepted")
 	}
 }
 
-// Algorithm confusion: HS256 (symmetric) with the Ed25519 public bytes as
-// HMAC secret, and alg=none — both rejected before key lookup.
+// Algorithm confusion is rejected before any key use: HS256 with the public
+// key material as HMAC secret, alg=none, and an alg/kid family mismatch
+// (RS256 token under an SM2 kid and vice versa).
 func TestVerify_AlgConfusion(t *testing.T) {
-	k := newTestKey(t)
-	setMode(t, VerifyModeEnforce, keyJSON(k))
-	// HS256 signed with the public key bytes as the HMAC secret
-	hmacTok := jwt.NewWithClaims(jwt.SigningMethodHS256, stdClaims())
-	hmacTok.Header["kid"] = "k1"
-	hs, err := hmacTok.SignedString([]byte(base64.StdEncoding.EncodeToString(k.pub)))
-	if err != nil {
-		t.Fatalf("hs sign: %v", err)
-	}
-	if err := VerifyRawToken(hs); err == nil {
+	rs := newRS256(t)
+	sm := newSM2(t)
+	ed := newEd(t)
+	setMode(t, VerifyModeEnforce,
+		kidJSON("k-rs", rs.material()), kidJSON("k-sm", sm.material()), kidJSON("k-ed", ed.material()))
+
+	// HS256 "signed" with the public key PEM bytes as the HMAC secret
+	hmacSecret := rs.material()
+	hdr, _ := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT", "kid": "k-rs"})
+	body, _ := json.Marshal(stdClaims())
+	ss := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body)
+	sig := base64.RawURLEncoding.EncodeToString(hmacSHA256(hmacSecret, ss))
+	if err := VerifyRawToken(ss + "." + sig); err == nil {
 		t.Fatal("HS256 confusion token accepted")
 	}
 	// alg=none
-	hdr, _ := json.Marshal(map[string]string{"alg": "none", "typ": "JWT", "kid": "k1"})
-	body, _ := json.Marshal(stdClaims())
-	noneTok := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body) + "."
+	hdrNone, _ := json.Marshal(map[string]string{"alg": "none", "typ": "JWT", "kid": "k-rs"})
+	noneTok := base64.RawURLEncoding.EncodeToString(hdrNone) + "." + base64.RawURLEncoding.EncodeToString(body) + "."
 	if err := VerifyRawToken(noneTok); err == nil {
 		t.Fatal("alg=none token accepted")
 	}
+	// RS256 token presented under the SM2 kid (family mismatch)
+	if err := VerifyRawToken(mint(t, rs, "k-sm", stdClaims())); err == nil {
+		t.Fatal("RS256 token accepted under SM2 kid")
+	}
+	// SM2 token presented under the RSA kid
+	if err := VerifyRawToken(mint(t, sm, "k-rs", stdClaims())); err == nil {
+		t.Fatal("SM2 token accepted under RSA kid")
+	}
+	// EdDSA token presented under the RS256 kid
+	if err := VerifyRawToken(mint(t, ed, "k-rs", stdClaims())); err == nil {
+		t.Fatal("EdDSA token accepted under RSA kid")
+	}
 }
 
-// iss/aud mismatch fails when configured; rotation: two kids both verify;
-// removing a kid revokes it.
-func TestVerify_IssuerAudienceAndRotation(t *testing.T) {
-	k1 := newTestKey(t)
-	k2 := newTestKey(t)
-	twoKeys := `{"k1":"` + base64.StdEncoding.EncodeToString(k1.pub) + `","k2":"` + base64.StdEncoding.EncodeToString(k2.pub) + `"}`
-	setMode(t, VerifyModeEnforce, twoKeys)
+// SM2SM3 — the GM issuer path: server-shaped "SM2 PUBLIC KEY" PEM whitelists,
+// valid token verifies (server's exact Sign/Verify calls), forgery fails, and
+// tjfoc's generic "PUBLIC KEY" PEM form of the same key also loads.
+func TestVerify_SM2ValidAndForged(t *testing.T) {
+	k := newSM2(t)
+	attacker := newSM2(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.material()))
+	if err := VerifyRawToken(mint(t, k, "k1", stdClaims())); err != nil {
+		t.Fatalf("valid SM2SM3 token rejected: %v", err)
+	}
+	// forged payload
+	good := mint(t, k, "k1", stdClaims())
+	parts := strings.Split(good, ".")
+	forged := stdClaims()
+	forged["tier"] = "enterprise-forged"
+	hdr, _ := json.Marshal(map[string]string{"alg": "SM2SM3", "typ": "JWT", "kid": "k1"})
+	body, _ := json.Marshal(forged)
+	bad := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(body) + "." + parts[2]
+	if err := VerifyRawToken(bad); err == nil {
+		t.Fatal("forged SM2 payload accepted")
+	}
+	// attacker SM2 key under whitelisted kid
+	if err := VerifyRawToken(mint(t, attacker, "k1", stdClaims())); err == nil {
+		t.Fatal("wrong-key SM2 token accepted")
+	}
+	// generic "PUBLIC KEY" PEM form of the same key
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.genericMaterial()))
+	if err := VerifyRawToken(mint(t, k, "k1", stdClaims())); err != nil {
+		t.Fatalf("SM2 token rejected via generic PUBLIC KEY PEM: %v", err)
+	}
+}
 
-	if err := VerifyRawToken(k1.sign(t, "k1", stdClaims())); err != nil {
+// Rotation mirrors RotateKey: a new kid (possibly a different algorithm
+// family) verifies alongside the old one; removing the old kid revokes it.
+// Mixed-family whitelist also proves the alg/kid binding is per-key.
+func TestVerify_RotationAndRevocation(t *testing.T) {
+	rs1 := newRS256(t)
+	rs2 := newRS256(t)
+	sm := newSM2(t)
+	setMode(t, VerifyModeEnforce,
+		kidJSON("k1", rs1.material()), kidJSON("k2", rs2.material()), kidJSON("k3", sm.material()))
+	if err := VerifyRawToken(mint(t, rs1, "k1", stdClaims())); err != nil {
 		t.Fatalf("kid k1 rejected: %v", err)
 	}
-	if err := VerifyRawToken(k2.sign(t, "k2", stdClaims())); err != nil {
-		t.Fatalf("kid k2 (rotation) rejected: %v", err)
+	if err := VerifyRawToken(mint(t, rs2, "k2", stdClaims())); err != nil {
+		t.Fatalf("kid k2 (rotated-in) rejected: %v", err)
 	}
-	// revoke k1 by shipping only k2
-	setMode(t, VerifyModeEnforce, `{"k2":"`+base64.StdEncoding.EncodeToString(k2.pub)+`"}`)
-	if err := VerifyRawToken(k1.sign(t, "k1", stdClaims())); err == nil {
+	if err := VerifyRawToken(mint(t, sm, "k3", stdClaims())); err != nil {
+		t.Fatalf("kid k3 (rotated-in, GM family) rejected: %v", err)
+	}
+	// revoke k1: only k2+k3 shipped
+	setMode(t, VerifyModeEnforce, kidJSON("k2", rs2.material()), kidJSON("k3", sm.material()))
+	if err := VerifyRawToken(mint(t, rs1, "k1", stdClaims())); err == nil {
 		t.Fatal("revoked kid still accepted")
 	}
-	if err := VerifyRawToken(k2.sign(t, "k2", stdClaims())); err != nil {
+	if err := VerifyRawToken(mint(t, rs2, "k2", stdClaims())); err != nil {
 		t.Fatalf("surviving kid rejected: %v", err)
 	}
+}
 
-	// iss/aud mismatch
-	setMode(t, VerifyModeEnforce, twoKeys)
+// iss/aud are checked when configured.
+func TestVerify_IssuerAudience(t *testing.T) {
+	k := newRS256(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.material()))
 	badIss := stdClaims()
 	badIss["iss"] = "evil"
-	if err := VerifyRawToken(k1.sign(t, "k1", badIss)); err == nil {
+	if err := VerifyRawToken(mint(t, k, "k1", badIss)); err == nil {
 		t.Fatal("wrong issuer accepted")
 	}
 	badAud := stdClaims()
 	badAud["aud"] = "other-product"
-	if err := VerifyRawToken(k1.sign(t, "k1", badAud)); err == nil {
+	if err := VerifyRawToken(mint(t, k, "k1", badAud)); err == nil {
 		t.Fatal("wrong audience accepted")
 	}
 }
 
-// Mode matrix: off accepts everything (no keys needed); warn verifies and
-// still ACCEPTS failures (observable but non-breaking — the migration
-// window); enforce rejects. Misconfiguration (enforce without keys) is a
-// configure error and falls back safe.
-func TestVerify_ModeMatrixAndMisconfig(t *testing.T) {
-	k := newTestKey(t)
-	attacker := newTestKey(t)
+// EdDSA remains loadable and correct as the OPTIONAL future path (two-sided
+// migration plan) — but only under its own kid and family.
+func TestVerify_EdDSAFuturePath(t *testing.T) {
+	k := newEd(t)
+	attacker := newEd(t)
+	setMode(t, VerifyModeEnforce, kidJSON("k1", k.material()))
+	if err := VerifyRawToken(mint(t, k, "k1", stdClaims())); err != nil {
+		t.Fatalf("valid EdDSA token rejected: %v", err)
+	}
+	if err := VerifyRawToken(mint(t, attacker, "k1", stdClaims())); err == nil {
+		t.Fatal("wrong-key EdDSA token accepted")
+	}
+	expired := stdClaims()
+	expired["exp"] = time.Now().Add(-time.Hour).Unix()
+	if err := VerifyRawToken(mint(t, k, "k1", expired)); err == nil {
+		t.Fatal("expired EdDSA token accepted")
+	}
+}
 
-	// off: no checks even for garbage
+// Mode matrix: off accepts everything; warn still DETECTS (caller logs and
+// accepts); enforce without keys is a configure error; unknown modes rejected.
+func TestVerify_ModeMatrixAndMisconfig(t *testing.T) {
+	k := newRS256(t)
+	attacker := newRS256(t)
+
 	if err := ConfigureSignatureVerification(VerifyModeOff, "", "", ""); err != nil {
 		t.Fatalf("off configure: %v", err)
 	}
 	if err := VerifyRawToken("not-a-jwt"); err != nil {
 		t.Fatalf("off mode must skip checks, got %v", err)
 	}
-	// warn: verifies (bad token WOULD fail here) but the mode semantic is
-	// applied by the caller (log+accept); VerifyRawToken itself reports.
-	if err := ConfigureSignatureVerification(VerifyModeWarn, "", "", keyJSON(k)); err != nil {
+	if err := ConfigureSignatureVerification(VerifyModeWarn, "", "", "{"+kidJSON("k1", k.material())+"}"); err != nil {
 		t.Fatalf("warn configure: %v", err)
 	}
-	if err := VerifyRawToken(attacker.sign(t, "k1", stdClaims())); err == nil {
+	if err := VerifyRawToken(mint(t, attacker, "k1", stdClaims())); err == nil {
 		t.Fatal("warn mode must still DETECT failures (caller decides)")
 	}
-	// enforce without keys = configuration error
 	if err := ConfigureSignatureVerification(VerifyModeEnforce, "", "", ""); err == nil {
 		t.Fatal("enforce without keys must be a configure error")
 	}
-	// unknown mode rejected
-	if err := ConfigureSignatureVerification("sometimes", "", "", keyJSON(k)); err == nil {
+	if err := ConfigureSignatureVerification("sometimes", "", "", "{"+kidJSON("k1", k.material())+"}"); err == nil {
 		t.Fatal("unknown mode must be rejected")
 	}
 }
 
-// PEM whitelist form (with kid comments) parses and verifies — the shape an
-// operator would ship on disk behind "@path".
+// PEM whitelist forms an operator would ship on disk behind "@path": a PEM
+// list with "# kid=" comments covering PKIX, PKCS#1 and SM2 blocks.
 func TestVerify_PEMWhitelistForm(t *testing.T) {
-	k := newTestKey(t)
-	pemPub := base64.StdEncoding.EncodeToString([]byte{})
-	_ = pemPub
-	pemText := `# kid=k1
------BEGIN PUBLIC KEY-----
-` + base64.StdEncoding.EncodeToString(rawPKIX(t, k)) + `
------END PUBLIC KEY-----
-`
-	setMode(t, VerifyModeEnforce, pemText)
-	if err := VerifyRawToken(k.sign(t, "k1", stdClaims())); err != nil {
-		t.Fatalf("PEM-whitelisted token rejected: %v", err)
+	rs := newRS256(t)
+	rs2 := newRS256(t)
+	sm := newSM2(t)
+	pemList := "# kid=a\n" + strings.TrimSpace(rs.material()) + "\n# kid=b\n" +
+		strings.TrimSpace(rs2.pkcs1Material()) + "\n# kid=c\n" + strings.TrimSpace(sm.material()) + "\n"
+	setModeSpec(t, VerifyModeEnforce, pemList)
+	if err := VerifyRawToken(mint(t, rs, "a", stdClaims())); err != nil {
+		t.Fatalf("PEM-whitelisted PKIX RSA rejected: %v", err)
 	}
-	if err := VerifyRawToken(newTestKey(t).sign(t, "k1", stdClaims())); err == nil {
+	if err := VerifyRawToken(mint(t, rs2, "b", stdClaims())); err != nil {
+		t.Fatalf("PEM-whitelisted PKCS#1 RSA rejected: %v", err)
+	}
+	if err := VerifyRawToken(mint(t, sm, "c", stdClaims())); err != nil {
+		t.Fatalf("PEM-whitelisted SM2 rejected: %v", err)
+	}
+	if err := VerifyRawToken(mint(t, newRS256(t), "a", stdClaims())); err == nil {
 		t.Fatal("wrong key accepted via PEM whitelist")
 	}
 }
 
-func rawPKIX(t *testing.T, k testKeys) []byte {
-	t.Helper()
-	// raw 32-byte form is also accepted by the loader; use it for the PEM body
-	return []byte(k.pub)
+func hmacSHA256(secret, msg string) []byte {
+	// test-only alg-confusion token (HS256), stdlib HMAC
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(msg))
+	return m.Sum(nil)
 }
