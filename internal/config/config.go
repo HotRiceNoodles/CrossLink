@@ -50,6 +50,14 @@ type UsageConfig struct {
 	SpoolDir string `mapstructure:"spool_dir"`
 	// SpoolMaxBytes caps the spill file; beyond it rows drop (counted).
 	SpoolMaxBytes int64 `mapstructure:"spool_max_bytes"`
+	// SpoolEmergencyMaxBytes caps the second-tier overflow WAL that takes
+	// rows at the DB+WAL double-failure point (main WAL at cap/unavailable
+	// AND the synchronous DB commit failed). While it holds a row the row is
+	// durable-pending and replay drains it after DB recovery; a real loss
+	// then requires the disk itself to fail. 0/negative disables the tier
+	// (legacy r34 behavior: counted loss + integrity block). Env:
+	// CL_USAGE_SPOOL_EMERGENCY_MAX_BYTES.
+	SpoolEmergencyMaxBytes int64 `mapstructure:"spool_emergency_max_bytes"`
 	// LossPolicy decides what happens when a billing row can be persisted
 	// NOWHERE (DB write failed AND the WAL could not take it):
 	//   count (legacy) — increment cl_usage_rows_lost_total, keep serving;
@@ -218,6 +226,24 @@ type GatewayConfig struct {
 	// requests. Must exceed stream_max_duration plus any replay window.
 	// Env override: CL_GATEWAY_BUDGET_MARKER_TTL.
 	BudgetMarkerTTL string `mapstructure:"budget_marker_ttl"`
+	// BudgetReapInterval bounds how long an EXPIRED reservation may hold
+	// admission headroom after its marker TTL passed: the independent reap
+	// loop runs on this cadence (in addition to the hourly calibration
+	// round's embedded reap). Worst-case recovery bound =
+	// markerTTL + reapInterval. The loop only removes ALREADY-EXPIRED
+	// markers (exactly-once across replicas), so shrinking the interval
+	// never releases a live/long-stream/cross-period request — only the
+	// TTL does, and it must stay >= max request lifetime + replay window.
+	// Env override: CL_GATEWAY_BUDGET_REAP_INTERVAL; "0" or negative
+	// disables the independent loop (legacy hourly-only reap).
+	BudgetReapInterval string `mapstructure:"budget_reap_interval"`
+	// BudgetMetadataStaleWindow bounds how long a last-known-good team/org
+	// budget snapshot may enforce after its TTL while the metadata DB is
+	// unreachable (fail-safe enforcement instead of the r61 key-only
+	// bypass). Limit changes propagate within TTL+staleWindow; a COLD cache
+	// during an outage rejects the request (fail-closed). Env:
+	// CL_GATEWAY_BUDGET_METADATA_STALE_WINDOW.
+	BudgetMetadataStaleWindow string `mapstructure:"budget_metadata_stale_window"`
 	// CircuitProbePath is where the circuit prober looks for a models list
 	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
 	// any other outcome falls back to a 1-token real chat probe. Empty string
@@ -624,6 +650,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("usage.loss_policy", "block")
 	v.SetDefault("usage.integrity_state_file", "data/billing-integrity.state")
 	v.SetDefault("usage.spool_max_bytes", 100<<20)
+	// Emergency overflow WAL: 1 GiB default covers a long DB outage at high
+	// in-flight rates (bounded by the admission concurrency); set 0/negative
+	// to disable the tier entirely.
+	v.SetDefault("usage.spool_emergency_max_bytes", 1<<30)
 
 	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.host", "localhost")

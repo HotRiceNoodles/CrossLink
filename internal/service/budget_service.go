@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -151,10 +152,14 @@ return 0
 `)
 
 // budgetReapOrphanScript removes an EXPIRED reservation (crashed request,
-// no settlement will ever arrive): budget/resv -= e, zset cleanup. A mark
-// still present means the zset score ran ahead of the TTL — caller
-// re-schedules it. KEYS = [resvmark, budget, budgetresv, resvexp];
-// ARGV = [e, member]. Returns 1 reaped, 0 still-live.
+// no settlement will ever arrive): budget/resv -= e, zset cleanup. The
+// ZREM-FIRST claim gives exactly-once semantics ACROSS REPLICAS: with the
+// independent reap loop (2026-10-21) two gateways may reap concurrently,
+// and "mark absent" alone cannot distinguish not-yet-reaped from
+// already-reaped — only the ZREM winner decrements. A mark still present
+// means the score ran ahead of the TTL — caller re-schedules.
+// KEYS = [resvmark, budget, budgetresv, resvexp]; ARGV = [e, member].
+// Returns 1 reaped (and claimed), 0 lost-race-or-still-live.
 var budgetReapOrphanScript = redis.NewScript(`
 local mark = KEYS[1]
 local budget = KEYS[2]
@@ -165,9 +170,11 @@ local member = ARGV[2]
 if redis.call('EXISTS', mark) == 1 then
 	return 0
 end
+if redis.call('ZREM', zset, member) == 0 then
+	return 0
+end
 redis.call('INCRBYFLOAT', budget, -e)
 redis.call('INCRBYFLOAT', resv, -e)
-redis.call('ZREM', zset, member)
 return 1
 `)
 
@@ -264,12 +271,13 @@ var callReserveScript = redis.NewScript(`
 `)
 
 type BudgetService struct {
-	rdb       *redis.Client
-	markerTTL time.Duration
+	rdb          *redis.Client
+	markerTTL    time.Duration
+	reapInterval time.Duration
 }
 
 func NewBudgetService(rdb *redis.Client) *BudgetService {
-	return &BudgetService{rdb: rdb, markerTTL: defaultMarkerTTL}
+	return NewBudgetServiceWithTTLs(rdb, defaultMarkerTTL, DefaultReapInterval)
 }
 
 // NewBudgetServiceWithMarkerTTL overrides the reservation/settlement marker
@@ -280,11 +288,69 @@ func NewBudgetServiceWithMarkerTTL(rdb *redis.Client, ttl time.Duration) *Budget
 	if ttl <= 0 {
 		ttl = defaultMarkerTTL
 	}
-	s := &BudgetService{rdb: rdb, markerTTL: ttl}
+	return NewBudgetServiceWithTTLs(rdb, ttl, DefaultReapInterval)
+}
+
+// DefaultReapInterval bounds how long an EXPIRED reservation (crashed or
+// fault-window request whose settle never landed) can hold admission
+// headroom AFTER its mark TTL has passed. The independent reap loop
+// (2026-10-21, user-authorized stability work) decouples this detection
+// from the hourly calibration tick, cutting the worst-case recovery bound
+// from markerTTL+1h to markerTTL+reapInterval. Safety: the loop only ever
+// removes marks whose TTL ALREADY expired (the Lua refuses live marks and
+// claims exactly-once across replicas via ZREM-first), so shortening the
+// INTERVAL never releases a live request, a long stream, or a cross-period
+// reservation — only the TTL does that, and it must stay >= max request
+// lifetime + replay horizon.
+const DefaultReapInterval = 5 * time.Minute
+
+// reapLoopOnce arms the process-wide independent reaper (like the settle
+// ledger worker, BudgetService is constructed per calibration round, so the
+// loop must be a singleton). Interval <= 0 keeps the legacy behavior: reap
+// only inside the hourly calibration round.
+var reapLoopOnce sync.Once
+
+func (s *BudgetService) startReapLoop() {
+	if s.reapInterval <= 0 {
+		return
+	}
+	reapLoopOnce.Do(func() {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("budget reap loop panicked; calibration tick still reaps hourly", "error", r)
+				}
+			}()
+			ticker := time.NewTicker(s.reapInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				n := s.ReapExpiredReservations(context.Background(), time.Now())
+				if n > 0 {
+					slog.Info("budget reap loop removed expired reservations", "count", n)
+				}
+			}
+		}()
+	})
+}
+
+// newBudgetServiceReapOnly is the transient constructor for one-shot reap
+// passes (the calibration round): default markerTTL, NO independent loop —
+// the loop must only ever be armed by the configured singleton so a
+// disabled reap interval cannot be resurrected by a transient caller.
+func newBudgetServiceReapOnly(rdb *redis.Client) *BudgetService {
+	return &BudgetService{rdb: rdb, markerTTL: defaultMarkerTTL}
+}
+
+// NewBudgetServiceWithTTLs is the full constructor (marker TTL + reap
+// interval); wiring comes from config gateway.budget_marker_ttl /
+// gateway.budget_reap_interval.
+func NewBudgetServiceWithTTLs(rdb *redis.Client, markerTTL, reapInterval time.Duration) *BudgetService {
+	s := &BudgetService{rdb: rdb, markerTTL: markerTTL, reapInterval: reapInterval}
 	// Re-arm the persistent settle-ledger worker immediately: a restarted
 	// process resumes recovering whatever the Redis ledger still holds
 	// (r34: crash must not orphan audit-replay tasks).
 	s.startSettleLedgerWorker()
+	s.startReapLoop()
 	return s
 }
 
@@ -391,7 +457,45 @@ var (
 		Name: "cl_budget_settle_lost_total",
 		Help: "Settles lost entirely (ledger write failed AND in-process queue full): under-count direction, healed by the hourly DB raise.",
 	})
+	// r53 forensics (r47 residue, 2026-10-21): 28 deferred settles vanished
+	// with NO terminal log (no RECOVERED/EXPIRED/LOST) at the Redis-unpause
+	// boundary — 700 of 728 memory-queue entries recovered in one burst at
+	// 09:08:10.24 and the rest were never seen again (final ledger=0, marks
+	// remained). The exact trigger is UNIDENTIFIED (the vanish left no
+	// trace; it was NOT a consumer panic — an unrecovered goroutine panic
+	// terminates the whole process and the r47 gateway demonstrably
+	// survived). The changes below make the DEFECT CLASS bounded and
+	// auditable rather than claiming impossibility: (1) a Tier2 task is
+	// upserted to the Redis ledger before its first settle attempt and
+	// re-attempted until accepted, so the un-persisted memory-only window
+	// shrinks to tasks whose upsert never succeeded; (2) every removal path
+	// logs and counts; (3) task conservation — a task the consumer can no
+	// longer process is handed off (ledger, else bounded channel) and only
+	// counted LOST when both refuse; (4) the channel depth is exported so a
+	// stalled consumer is visible. Residual: a memory-only task under a
+	// stalled-but-alive consumer is covered only by (4)'s visibility, not by
+	// construction.
+	settleChannelDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cl_budget_settle_channel_depth",
+		Help: "Settles waiting in the in-process audit-replay queue (Tier 2). Non-draining after an outage = stalled consumer; must return to 0.",
+	})
+	settleConsumerPanicsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cl_budget_settle_consumer_panics_total",
+		Help: "Tier2 settle-consumer panics contained (task handed off via the conservation chain each time).",
+	})
+	settleLedgerMalformedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cl_budget_settle_ledger_malformed_total",
+		Help: "Malformed ledger entries dropped (audited loudly, never silently).",
+	})
 )
+
+// settleChannelDepthN backs cl_budget_settle_channel_depth.
+var settleChannelDepthN atomic.Int64
+
+// settleTaskProbe is a test seam at the top of every Tier2 task (nil in
+// production; same pattern as handler.walRename/walSync) — fault injection
+// for the consumer-panic and mid-task-state regressions (T9/T11).
+var settleTaskProbe func(t settleRetryTask)
 
 // runSettleScript executes one settle attempt (shared by the inline ladder,
 // the in-process drainer and the ledger worker). The settledmark TTL is
@@ -455,6 +559,8 @@ func (s *BudgetService) enqueueSettleRetry(t settleRetryTask) bool {
 	// Tier 2: in-process queue (Redis down — typically the tail of an outage).
 	select {
 	case settleRetryQ <- t:
+		settleChannelDepthN.Add(1)
+		settleChannelDepth.Set(float64(settleChannelDepthN.Load()))
 		settleRetryOnce.Do(func() { go s.drainSettleRetries() })
 		return true
 	default:
@@ -495,7 +601,12 @@ func (s *BudgetService) drainSettleLedgerOnce() {
 		for _, m := range members {
 			t, ok := parseLedgerMember(m)
 			if !ok {
-				// Malformed ledger entry: drop so it cannot wedge the zset.
+				// Malformed ledger entry: drop so it cannot wedge the zset —
+				// LOUDLY (r53 ①: this was the only unlogged removal path; a
+				// drop without a trace is never acceptable for billing).
+				settleLedgerMalformedTotal.Inc()
+				slog.Warn("budget settle ledger: dropping MALFORMED entry (audited, counted)",
+					"member", fmt.Sprintf("%q", m))
 				s.rdb.ZRem(ctx, settleLedgerZSet, m)
 				continue
 			}
@@ -530,27 +641,130 @@ func (s *BudgetService) drainSettleLedgerOnce() {
 
 func (s *BudgetService) drainSettleRetries() {
 	for t := range settleRetryQ {
-		backoff := 2 * time.Second
-		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := s.runSettleScript(ctx, t)
-			cancel()
-			if err == nil {
-				slog.Info("budget settle audit-replay RECOVERED",
-					"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost)
-				break
+		settleChannelDepthN.Add(-1)
+		settleChannelDepth.Set(float64(settleChannelDepthN.Load()))
+		s.consumeSettleTask(t)
+	}
+}
+
+// consumeSettleTask runs one Tier2 task with panic containment and TASK
+// CONSERVATION (r58 review hardening). Note on the r47 narrative: an
+// UNRECOVERED goroutine panic terminates the whole Go process, and the r47
+// gateway process demonstrably survived (same pid start-to-end) — so the
+// original vanish was NOT a consumer panic. The containment below is
+// defense-in-depth, not a claimed root cause; the conservation contract it
+// enforces is: a task this consumer can no longer process is HANDED OFF
+// (ledger upsert, else bounded channel re-enqueue) and only counted LOST
+// (terminal, loud) when both refuse — never silently dropped.
+func (s *BudgetService) consumeSettleTask(t settleRetryTask) {
+	defer func() {
+		if r := recover(); r != nil {
+			settleConsumerPanicsTotal.Inc()
+			slog.Error("budget settle audit-replay consumer PANICKED; task handed off, consumer continues",
+				"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "panic", r)
+			s.handoffTask(t)
+		}
+	}()
+	s.processSettleTask(t)
+}
+
+// handoffTask is the conservation handoff for a task the consumer can no
+// longer process: Redis-persistent ledger first; if Redis refuses, the
+// bounded in-process channel; only when BOTH refuse is the task counted
+// LOST (a terminal, loud state — never a silent drop). This is also the
+// explicit boundary of the persistence guarantee: a Tier2 task is
+// Redis-persistent only from its first SUCCESSFUL ledger upsert (which
+// processSettleTask keeps retrying while it settles); tasks whose upsert
+// never succeeded remain memory-only and are covered solely by this
+// handoff chain and the conservation counters (deferred/terminal counts,
+// channel-depth gauge).
+func (s *BudgetService) handoffTask(t settleRetryTask) {
+	if s.persistLedgerEntry(t) {
+		return
+	}
+	select {
+	case settleRetryQ <- t:
+		settleChannelDepthN.Add(1)
+		settleChannelDepth.Set(float64(settleChannelDepthN.Load()))
+		return
+	default:
+	}
+	settleLostTotal.Inc()
+	slog.Error("budget settle task LOST at handoff: ledger refused AND channel full (under-count direction; hourly DB-based calibration heals)",
+		"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost)
+}
+
+// processSettleTask retries one deferred settle until a terminal state.
+// Persistence boundary (r58 review): before the FIRST settle attempt the
+// task is UPSERTED to the Redis-persistent ledger, and the upsert is
+// re-attempted on every retry while it keeps failing — but a task whose
+// upsert NEVER succeeded remains memory-only (the loop still settles it;
+// conservation of that window is the handoff chain + depth gauge, not a
+// persistence guarantee). Once Redis accepts the upsert, a consumer death
+// leaves the entry in the ledger where the 2s drain worker retries it to
+// the same exactly-once terminal state (the settledmark NX guard makes
+// concurrent/dupe attempts no-ops; at worst a task logs one duplicate
+// RECOVERED, which is auditable, never silent). The upsert is removed on
+// the terminal transition so the ledger does not accumulate settled
+// entries.
+func (s *BudgetService) processSettleTask(t settleRetryTask) {
+	backoff := 2 * time.Second
+	persisted := false
+	first := true
+	for {
+		if !persisted {
+			persisted = s.persistLedgerEntry(t)
+		}
+		if first {
+			// Probe AFTER the persist attempt, BEFORE the first settle:
+			// T11 asserts the task is already Redis-durable here.
+			if settleTaskProbe != nil {
+				settleTaskProbe(t)
 			}
-			if time.Now().After(t.deadline) {
-				slog.Warn("budget settle audit-replay EXPIRED (under-count direction; hourly DB-based calibration heals)",
-					"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost, "error", err)
-				break
+			first = false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := s.runSettleScript(ctx, t)
+		cancel()
+		if err == nil {
+			if persisted {
+				s.removeLedgerEntry(t)
 			}
-			time.Sleep(backoff)
-			if backoff < settleRetryMaxBackoff {
-				backoff *= 2
+			slog.Info("budget settle audit-replay RECOVERED",
+				"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost)
+			return
+		}
+		if time.Now().After(t.deadline) {
+			if persisted {
+				s.removeLedgerEntry(t)
 			}
+			slog.Warn("budget settle audit-replay EXPIRED (under-count direction; hourly DB-based calibration heals)",
+				"scope", t.scope, "target", t.targetID, "request_id", t.reqID, "cost", t.cost, "error", err)
+			return
+		}
+		time.Sleep(backoff)
+		if backoff < settleRetryMaxBackoff {
+			backoff *= 2
 		}
 	}
+}
+
+// persistLedgerEntry upserts a Tier2 (memory-only) task into the Redis
+// ledger. Returns true once Redis accepted it.
+func (s *BudgetService) persistLedgerEntry(t settleRetryTask) bool {
+	zctx, zcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer zcancel()
+	return s.rdb.ZAdd(zctx, settleLedgerZSet, redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: ledgerMember(t),
+	}).Err() == nil
+}
+
+// removeLedgerEntry strips a task's ledger upsert at its terminal state.
+func (s *BudgetService) removeLedgerEntry(t settleRetryTask) {
+	zctx, zcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer zcancel()
+	s.rdb.ZRem(zctx, settleLedgerZSet, ledgerMember(t))
 }
 
 // SettleScope settles one scope for a request EXACTLY ONCE, reconciling

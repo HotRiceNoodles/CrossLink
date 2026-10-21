@@ -2,11 +2,39 @@ package middleware
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// budgetScopeDegradeTotal counts requests whose TEAM/ORG budget scope was
+// silently dropped because the metadata cache lookup failed (the r61
+// finding: during a DB outage teamCache/orgCache miss -> the scope never
+// enters `scopes` -> NO reserve AND NO settle for team/org — the request is
+// enforced and settled at key scope only; 53/75,391 requests in a 120s
+// PG-stop window, team/org counters healed by the hourly DB-based raise but
+// the team/org LIMIT was not enforced for that cohort). Fail-open is the
+// standing availability posture; this counter + sampled WARN make the
+// degradation visible instead of silent.
+var budgetScopeDegradeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "cl_budget_scope_degrade_total",
+	Help: "Requests whose team/org budget scope was dropped (metadata lookup failed, typically a DB outage): key-scope-only enforcement/settle until the hourly calibration raise.",
+}, []string{"scope", "mode"})
+
+var budgetScopeDegradeLogged atomic.Int64
+
+func noteBudgetScopeDegrade(scope string, id int64) {
+	budgetScopeDegradeTotal.WithLabelValues(scope, "rejected_cold").Inc()
+	if budgetScopeDegradeLogged.Add(1)%100 == 1 {
+		slog.Warn("budget scope DEGRADED: team/org metadata lookup failed (db outage window?) — key-scope-only enforcement/settle for this cohort until the next calibration raise",
+			"scope", scope, "id", id)
+	}
+}
 
 func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache, orgCache *OrgCache) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -72,7 +100,23 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 		}
 
 		if apiKey.TeamID != nil && *apiKey.TeamID > 0 {
-			team := teamCache.Get(c.Request.Context(), *apiKey.TeamID)
+			team, mode := teamCache.GetSafe(c.Request.Context(), *apiKey.TeamID)
+			if mode == CacheModeUnavailable {
+				// Review 2026-10-21: key-only admission on a metadata miss was an
+				// ENFORCEMENT bypass (r61: 53 requests in a DB-outage window).
+				// Cold cache + unreachable metadata = fail CLOSED.
+				noteBudgetScopeDegrade("team", *apiKey.TeamID)
+				c.Set("budget_metadata_unavailable", true)
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"type": "error",
+					"error": gin.H{"type": "budget_metadata_unavailable", "message": "team budget metadata is temporarily unavailable (cold cache during a database outage); request rejected rather than admitted without the team limit"},
+				})
+				c.Abort()
+				return
+			}
+			if mode == CacheModeStaleLKG {
+				noteBudgetScopeDegradeStale("team", *apiKey.TeamID)
+			}
 			if team != nil && team.BudgetLimit > 0 {
 				spent, limit, exceeded := budgetSvc.CheckBudget(
 					c.Request.Context(), "team",
@@ -99,7 +143,20 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 		// 3. Org-level check
 		if orgCache != nil {
 			if orgID := c.GetInt64("org_id"); orgID != 0 {
-				org := orgCache.Get(c.Request.Context(), orgID)
+				org, mode := orgCache.GetSafe(c.Request.Context(), orgID)
+				if mode == CacheModeUnavailable {
+					noteBudgetScopeDegrade("org", orgID)
+					c.Set("budget_metadata_unavailable", true)
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"type": "error",
+						"error": gin.H{"type": "budget_metadata_unavailable", "message": "organization budget metadata is temporarily unavailable (cold cache during a database outage); request rejected rather than admitted without the organization limit"},
+					})
+					c.Abort()
+					return
+				}
+				if mode == CacheModeStaleLKG {
+					noteBudgetScopeDegradeStale("org", orgID)
+				}
 				if org != nil && org.BudgetLimit > 0 {
 					_, _, exceeded := budgetSvc.CheckBudget(c.Request.Context(), "org", fmt.Sprintf("%d", org.ID), org.BudgetPeriod, org.BudgetLimit)
 					if exceeded {
@@ -136,7 +193,18 @@ func AdminBudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamC
 		teamIDVal, _ := c.Get("team_id")
 		tid, ok := teamIDVal.(int64)
 		if ok && tid > 0 {
-			team := teamCache.Get(c.Request.Context(), tid)
+			team, mode := teamCache.GetSafe(c.Request.Context(), tid)
+			if mode == CacheModeUnavailable {
+				noteBudgetScopeDegrade("team", tid)
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+					"type": "budget_metadata_unavailable", "message": "team budget metadata is temporarily unavailable; request rejected",
+				}})
+				c.Abort()
+				return
+			}
+			if mode == CacheModeStaleLKG {
+				noteBudgetScopeDegradeStale("team", tid)
+			}
 			if team != nil && team.BudgetLimit > 0 {
 				spent, limit, exceeded := budgetSvc.CheckBudget(
 					c.Request.Context(), "team",
@@ -159,7 +227,18 @@ func AdminBudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamC
 		// Org-level check
 		if orgCache != nil {
 			if orgID := c.GetInt64("org_id"); orgID != 0 {
-				org := orgCache.Get(c.Request.Context(), orgID)
+				org, mode := orgCache.GetSafe(c.Request.Context(), orgID)
+				if mode == CacheModeUnavailable {
+					noteBudgetScopeDegrade("org", orgID)
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+						"type": "budget_metadata_unavailable", "message": "organization budget metadata is temporarily unavailable; request rejected",
+					}})
+					c.Abort()
+					return
+				}
+				if mode == CacheModeStaleLKG {
+					noteBudgetScopeDegradeStale("org", orgID)
+				}
 				if org != nil && org.BudgetLimit > 0 {
 					_, _, exceeded := budgetSvc.CheckBudget(c.Request.Context(), "org", fmt.Sprintf("%d", org.ID), org.BudgetPeriod, org.BudgetLimit)
 					if exceeded {
@@ -176,4 +255,13 @@ func AdminBudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamC
 
 		c.Next()
 	}
+}
+
+// noteBudgetScopeDegradeStale counts enforcement on a last-known-good
+// snapshot (DB unreachable, snapshot age <= ttl+staleWindow): the limit is
+// STILL enforced and the scope IS reserved/settled — this is the
+// availability-preserving branch of the fail-safe, distinct from the
+// cold-cache rejection.
+func noteBudgetScopeDegradeStale(scope string, id int64) {
+	budgetScopeDegradeTotal.WithLabelValues(scope, "stale_lkg").Inc()
 }

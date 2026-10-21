@@ -93,7 +93,7 @@ func (s *BudgetCalibrationService) calibrateOnceLocked(ctx context.Context) erro
 	// F1′ orphan reaper first: reservations whose marks expired without a
 	// settlement (gateway crash mid-request) are removed (budget/resv -= e);
 	// their true cost returns via the DB-based raise below from the WAL row.
-	if n := NewBudgetService(s.rdb).ReapExpiredReservations(runCtx, time.Now()); n > 0 {
+	if n := newBudgetServiceReapOnly(s.rdb).ReapExpiredReservations(runCtx, time.Now()); n > 0 {
 		slog.Warn("budget calibration: reaped expired reservations", "count", n)
 	}
 

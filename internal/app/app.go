@@ -139,7 +139,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Services
 	cacheRdb := InitCacheRedis(cfg.Cache.Redis)
-	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia, cfg.Gateway.BudgetMarkerTTL)
+	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia, cfg.Gateway.BudgetMarkerTTL, cfg.Gateway.BudgetReapInterval)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
 
 	// Seed the default credential_detection baseline rule (zero-config safety
@@ -165,6 +165,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	appCtx, appCancel := context.WithCancel(context.Background())
 	teamCache := middleware.NewTeamCache(repos.TeamRepo, appCtx)
 	orgCache := middleware.NewOrgCache(repos.OrgRepo, appCtx)
+	// Fail-safe budget metadata (r61 53-request class): keep enforcing on a
+	// last-known-good snapshot while the DB is down; cold cache = reject.
+	if d, err := time.ParseDuration(cfg.Gateway.BudgetMetadataStaleWindow); err == nil && d > 0 {
+		teamCache.SetStaleWindow(d)
+		orgCache.SetStaleWindow(d)
+	}
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 

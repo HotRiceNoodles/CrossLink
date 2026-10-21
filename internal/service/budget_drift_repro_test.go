@@ -230,3 +230,135 @@ func TestDriftRepro_T4_DualInstanceSettleVsCalibration(t *testing.T) {
 	logSnaps(t, q)
 	quiescenceChecks(t, q, N, "T4")
 }
+
+// T5 — fault-window queue-drain orders (r47 forensics 2026-10-21): during a
+// Redis pause a request's reserve script and its deferred settle replay can
+// execute in EITHER order once the server drains. Both orders must leave NO
+// hang (mark/member) and exact counters.
+//   Order A: reserve lands first -> replay is mode0 (releases + ZREM).
+//   Order B: replay lands first (mode1, settledmark set) -> the LATE queued
+//            reserve must be REFUSED by the settledmark guard (no mark).
+func TestDriftRepro_T5_FaultWindowQueueDrainOrders(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { rdb.Close() })
+	bs := NewBudgetServiceWithMarkerTTL(rdb, 2*time.Hour)
+	ctx := context.Background()
+	pk := PeriodKey("monthly")
+
+	// Order A: reserve first, then the replay (mode0).
+	_, _, w, _ := bs.ReserveScopeMarked(ctx, "org", "101", "monthly", pk, "req-t5a", 2.0, 1000)
+	require.True(t, w)
+	_, errA := bs.runSettleScript(ctx, settleRetryTask{scope: "org", targetID: "101", period: "monthly", pk: pk, reqID: "req-t5a", cost: 3.0})
+	require.NoError(t, errA)
+	sa := snapDrift(t, rdb, "orderA after replay", "org", "101", pk)
+	logSnaps(t, sa)
+	require.Equal(t, 0, sa.marks, "order A: mark must be released by mode0 replay")
+	require.Equal(t, 0, sa.zset, "order A: zset member must be ZREM'd")
+	require.InDelta(t, 3, sa.b, 1e-9)
+	require.InDelta(t, 3, sa.s, 1e-9)
+	require.InDelta(t, 0, sa.r, 1e-9)
+
+	// Order B: replay first (mode1), then the late queued reserve.
+	_, errB := bs.runSettleScript(ctx, settleRetryTask{scope: "org", targetID: "102", period: "monthly", pk: pk, reqID: "req-t5b", cost: 3.0})
+	require.NoError(t, errB)
+	_, _, w2, _ := bs.ReserveScopeMarked(ctx, "org", "102", "monthly", pk, "req-t5b", 2.0, 1000)
+	require.False(t, w2, "order B: late reserve must be refused by the settledmark guard")
+	sb := snapDrift(t, rdb, "orderB after late reserve", "org", "102", pk)
+	logSnaps(t, sb)
+	require.Equal(t, 0, sb.marks, "order B: no mark may be created after settle")
+	require.Equal(t, 0, sb.zset, "order B: no zset member may appear")
+	require.InDelta(t, 3, sb.b, 1e-9)
+	require.InDelta(t, 3, sb.s, 1e-9)
+	require.InDelta(t, 0, sb.r, 1e-9)
+}
+
+// T6 — independent reap loop safety (2026-10-21 authorized stability work):
+// (a) two replicas racing on the SAME expired member must decrement exactly
+//     once (ZREM-first claim; the old "mark absent" check double-decremented);
+// (b) the loop must never remove a LIVE mark (long streams safe — only the
+//     TTL releases, the interval only bounds detection latency).
+func TestDriftRepro_T6_ConcurrentReapExactlyOnce(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { rdb.Close() })
+	bs := NewBudgetServiceWithMarkerTTL(rdb, 2*time.Hour)
+	ctx := context.Background()
+	pk := PeriodKey("monthly")
+	// One expired-mark reservation: mark key removed (TTL passed), member+zset remain.
+	_, _, w, _ := bs.ReserveScopeMarked(ctx, "team", "901", "monthly", pk, "req-t6", 5.0, 1000)
+	require.True(t, w)
+	mr.Del("resvmark:team:901:req-t6")
+	member := rdb.ZRange(ctx, budgetResvExpZSet, 0, -1).Val()
+	require.Len(t, member, 1)
+	// Two replicas reap the same due member concurrently.
+	s1 := NewBudgetServiceWithMarkerTTL(rdb, 2*time.Hour)
+	s2 := NewBudgetServiceWithMarkerTTL(rdb, 2*time.Hour)
+	var wg sync.WaitGroup
+	reaped := make([]int, 2)
+	for i, s := range []*BudgetService{s1, s2} {
+		wg.Add(1)
+		go func(i int, s *BudgetService) { defer wg.Done(); reaped[i] = s.ReapExpiredReservations(ctx, time.Now().Add(3*time.Hour)) }(i, s)
+	}
+	wg.Wait()
+	total := reaped[0] + reaped[1]
+	require.Equal(t, 1, total, "exactly one replica may reap a member (got %v)", reaped)
+	sn := snapDrift(t, rdb, "after concurrent reap", "team", "901", pk)
+	logSnaps(t, sn)
+	require.InDelta(t, 0, sn.r, 1e-9, "resv released exactly once: %s", sn)
+	require.InDelta(t, 0, sn.b, 1e-9, "budget decremented exactly once: %s", sn)
+}
+
+// T7 — the independent loop fires on its interval and removes only EXPIRED
+// members: a live mark (long stream) survives any number of loop passes.
+func TestDriftRepro_T7_ReapLoopFiresAndSparesLive(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { rdb.Close() })
+	// NOTE: reapLoopOnce is process-global; in a full-package run an earlier
+	// test may have armed it with the default interval — reset so this
+	// test controls the cadence (the displaced 5m loop idles harmlessly).
+	reapLoopOnce = sync.Once{}
+	// FIRST with a short interval so the singleton carries it.
+	looping := NewBudgetServiceWithTTLs(rdb, 2*time.Hour, 50*time.Millisecond)
+	ctx := context.Background()
+	pk := PeriodKey("monthly")
+	_, _, w, _ := looping.ReserveScopeMarked(ctx, "key", "902", "monthly", pk, "req-live", 3.0, 1000)
+	require.True(t, w)
+	// Let several loop passes fire: the LIVE mark must survive.
+	time.Sleep(300 * time.Millisecond)
+	s := snapDrift(t, rdb, "live mark after loop passes", "key", "902", pk)
+	logSnaps(t, s)
+	require.Equal(t, 1, s.marks, "live reservation must never be reaped by the loop")
+	require.Equal(t, 1, s.zset)
+	// Now expire the mark (TTL) and pull its score into the past — the
+	// production loop reaps on REAL time.Now(), so the virtual clock alone
+	// cannot cover the score horizon; emulate the post-TTL state directly.
+	mr.Del("resvmark:key:902:req-live")
+	member := "key\x1f902\x1freq-live\x1fmonthly\x1f" + pk + "\x1f3.000000000"
+	require.NoError(t, rdb.ZAdd(ctx, budgetResvExpZSet, redis.Z{Score: float64(time.Now().Add(-time.Minute).Unix()), Member: member}).Err())
+	require.Eventually(t, func() bool {
+		z := int(rdb.ZCard(ctx, budgetResvExpZSet).Val())
+		return z == 0
+	}, 3*time.Second, 50*time.Millisecond, "loop must reap the expired member")
+	q := snapDrift(t, rdb, "after expiry+loop", "key", "902", pk)
+	logSnaps(t, q)
+	require.InDelta(t, 0, q.r, 1e-9)
+	require.InDelta(t, 0, q.b, 1e-9)
+}
+
+// T8 — auditability (r47 forensics): the usage row's request_id must carry
+// the GIN request id (the id the marks/ledger/log lines use) so per-request
+// miss/double-billing checks are joinable; uuid fallback only when absent.
+func TestDriftRepro_T8_UsageRowCarriesGinRequestID(t *testing.T) {
+	e := &UsageEntry{EventID: "00000000-0000-0000-0000-000000000001", GinRequestID: "abc12345", RouteType: "openai", InputPrice: 1, OutputPrice: 2}
+	row := buildUsageLog(e)
+	if row.RequestID != "abc12345" {
+		t.Fatalf("row.RequestID=%q, want gin id abc12345", row.RequestID)
+	}
+	e2 := &UsageEntry{EventID: "00000000-0000-0000-0000-000000000002", RouteType: "openai"}
+	row2 := buildUsageLog(e2)
+	if row2.RequestID == "" || len(row2.RequestID) > 64 {
+		t.Fatalf("fallback request id invalid: %q", row2.RequestID)
+	}
+}
