@@ -35,7 +35,8 @@ import (
 // Loss semantics: a row leaves the WAL ONLY when its DB commit is confirmed
 // (direct Ack, or replay flush nil). While the DB is down the WAL accumulates
 // up to its byte cap; beyond the cap callers fall back to a bounded
-// synchronous DB write (worker.go) — a loss happens only if BOTH fail and is
+// synchronous DB write (worker.go) and, if THAT fails too, to the emergency
+// overflow WAL — a loss happens only if the disk itself fails and is
 // counted. The reverse crash window (committed, line not yet compacted away)
 // replays as a no-op via the EventID unique index — no double billing. Every
 // append is fsynced; corrupt/torn lines are dropped LOUDLY.
@@ -44,29 +45,33 @@ import (
 // so recovering an instance's WAL on any replica is safe.
 
 var (
-	usageSpoolBytes = promauto.NewGauge(prometheus.GaugeOpts{
+	// Spool gauges are PER-INSTANCE (label "spool"): with the emergency
+	// overflow WAL armed there are two live spools, and a single shared
+	// gauge would flip between their values on every write. The counters
+	// below stay global totals across spools (monotone, still truthful).
+	usageSpoolBytesVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cl_usage_spool_bytes",
-		Help: "Current size of the on-disk usage WAL.",
-	})
-	usageSpoolEvents = promauto.NewGauge(prometheus.GaugeOpts{
+		Help: "Current size of the on-disk usage WAL, per spool (main/emergency).",
+	}, []string{"spool"})
+	usageSpoolEventsVec = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cl_usage_spool_events",
-		Help: "Lines currently in the usage WAL (acked lines are removed by the compactor; must plateau under sustained load).",
-	})
+		Help: "Lines currently in the usage WAL, per spool (acked lines are removed by the compactor; must plateau under sustained load).",
+	}, []string{"spool"})
 	usageSpoolReplayedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cl_usage_spool_replayed_total",
-		Help: "Usage rows recovered from the WAL and acked by the database.",
+		Help: "Usage rows recovered from any usage WAL and acked by the database.",
 	})
 	usageSpoolCompactedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cl_usage_spool_compacted_total",
-		Help: "Lines removed from the usage WAL by ack-driven compaction.",
+		Help: "Lines removed from any usage WAL by ack-driven compaction.",
 	})
 	usageSpoolDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cl_usage_spool_dropped_total",
-		Help: "Usage rows dropped because the WAL hit its size cap (callers then use the synchronous DB fallback).",
+		Help: "Usage rows dropped because a usage WAL hit its size cap (callers then use the synchronous DB fallback, then the emergency WAL).",
 	})
 	usageSpoolCorruptTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cl_usage_spool_corrupt_total",
-		Help: "WAL lines dropped as torn/invalid JSON. Counted, never silent.",
+		Help: "WAL lines dropped as torn/invalid JSON (all spools). Counted, never silent.",
 	})
 )
 
@@ -79,6 +84,11 @@ type UsageSpool struct {
 	mu       sync.Mutex // protects the WAL file (append/rewrite) — held for FILE I/O only, never DB writes
 	path     string
 	maxBytes int64
+
+	// mBytes/mEvents are this instance's handles into the per-spool gauge
+	// vecs (role label "main"/"emergency").
+	mBytes  prometheus.Gauge
+	mEvents prometheus.Gauge
 
 	pending atomic.Int64 // lines currently in the WAL (exact on write/compact)
 
@@ -110,8 +120,27 @@ type UsageSpool struct {
 	closed    bool       // Close() called (syncMu): syncer exits, waiters released
 }
 
-// NewUsageSpool prepares the WAL directory. dir=="" disables spooling.
+// NewUsageSpool prepares the MAIN WAL directory. dir=="" disables spooling.
 func NewUsageSpool(dir string, maxBytes int64) *UsageSpool {
+	return newUsageSpool(dir, maxBytes, "main")
+}
+
+// NewUsageSpoolEmergency prepares the second-tier overflow WAL: rows land
+// here ONLY when the main WAL is unavailable (cap/disk) AND the synchronous
+// DB commit failed — the r53 gap closure for in-flight rows completing
+// during a DB outage after the main WAL filled. Same protocol (fsync before
+// ack, ack-driven compaction, idempotent replay by EventID); its own
+// replay loop drains it once the DB recovers. It converts a counted real
+// loss (DB+WAL both failed) into a durable-pending row unless the DISK
+// itself fails. spoolDir=="" disables it.
+func NewUsageSpoolEmergency(spoolDir string, maxBytes int64) *UsageSpool {
+	if spoolDir == "" {
+		return nil
+	}
+	return newUsageSpool(filepath.Join(spoolDir, "emergency"), maxBytes, "emergency")
+}
+
+func newUsageSpool(dir string, maxBytes int64, role string) *UsageSpool {
 	if dir == "" {
 		return nil
 	}
@@ -128,6 +157,8 @@ func NewUsageSpool(dir string, maxBytes int64) *UsageSpool {
 		acked:       make(map[string]struct{}),
 		compactSoon: make(chan struct{}, 1),
 		syncWake:    make(chan struct{}, 1),
+		mBytes:      usageSpoolBytesVec.WithLabelValues(role),
+		mEvents:     usageSpoolEventsVec.WithLabelValues(role),
 	}
 	if err := s.sanitizeTail(); err != nil {
 		slog.Error("usage spool: tail sanitize failed", "error", err)
@@ -138,7 +169,7 @@ func NewUsageSpool(dir string, maxBytes int64) *UsageSpool {
 	}
 	go s.syncLoop()
 	if st, err := os.Stat(s.path); err == nil {
-		usageSpoolBytes.Set(float64(st.Size()))
+		s.mBytes.Set(float64(st.Size()))
 		s.refreshEventCount()
 		slog.Warn("usage spool: recovering leftover WAL from a previous run",
 			"path", s.path, "bytes", st.Size())
@@ -349,8 +380,8 @@ func (s *UsageSpool) Write(entry *service.UsageEntry) bool {
 			"event_id", entry.EventID)
 		return false
 	}
-	usageSpoolBytes.Set(float64(st.Size() + int64(len(data)) + 1))
-	usageSpoolEvents.Inc()
+	s.mBytes.Set(float64(st.Size() + int64(len(data)) + 1))
+	s.mEvents.Inc()
 	s.pending.Add(1)
 	return true
 }
@@ -565,9 +596,9 @@ func (s *UsageSpool) Compact() int {
 	usageSpoolCompactedTotal.Add(float64(removed))
 	s.confirmSynced(confirmTarget)
 	if st, err := os.Stat(s.path); err == nil {
-		usageSpoolBytes.Set(float64(st.Size()))
+		s.mBytes.Set(float64(st.Size()))
 	}
-	usageSpoolEvents.Set(float64(kept))
+	s.mEvents.Set(float64(kept))
 	s.pending.Store(int64(kept))
 	slog.Debug("usage spool: compacted", "removed", removed, "kept", kept)
 	return removed
@@ -635,7 +666,7 @@ func (s *UsageSpool) refreshEventCount() {
 			n++
 		}
 	}
-	usageSpoolEvents.Set(float64(n))
+	s.mEvents.Set(float64(n))
 	s.pending.Store(int64(n))
 }
 
@@ -657,6 +688,14 @@ func (s *UsageSpool) Size() int64 {
 		return st.Size()
 	}
 	return 0
+}
+
+// Cap returns the WAL's byte cap (the high-water model's base).
+func (s *UsageSpool) Cap() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.maxBytes
 }
 
 // Replay flushes one WAL round through flushBatch (nil = every row durably

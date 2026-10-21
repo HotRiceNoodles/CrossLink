@@ -142,12 +142,29 @@ func ReportLoss(reason, eventID string) {
 		return
 	}
 	consec.Store(0)
+	engage(reason, "a ledger row was lost (DB and WAL both failed); new billable requests are rejected until durability recovers", eventID)
+}
+
+// Engage blocks NEW billable requests BEFORE any row is lost — the
+// capacity-model hook (r58 review): when the persistence tiers are about
+// to exhaust (emergency WAL at its high-water mark while DB writes still
+// fail), blocking admission early bounds in-flight rows to what the
+// remaining capacity provably covers, instead of discovering the boundary
+// by dropping a row. Same release conditions as a loss-engaged block.
+func Engage(reason string) {
+	if currentMode() != PolicyBlock {
+		return
+	}
+	engage(reason, "persistence capacity near exhaustion (pre-loss); new billable requests are rejected until durability recovers", "")
+}
+
+func engage(reason, msg, eventID string) {
 	if blocked.CompareAndSwap(false, true) {
 		blockedSince.Store(time.Now().Unix())
 		blockedReason.Store(reason)
 		blockedGauge.Set(1)
 		persistState(reason)
-		slog.Error("BILLING INTEGRITY BLOCK ENGAGED: a ledger row was lost (DB and WAL both failed); new billable requests are rejected until durability recovers",
+		slog.Error("BILLING INTEGRITY BLOCK ENGAGED: "+msg,
 			"reason", reason, "event_id", eventID, "policy", PolicyBlock)
 	}
 }

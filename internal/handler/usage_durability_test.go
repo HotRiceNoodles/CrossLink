@@ -15,9 +15,11 @@ import (
 	"github.com/google/uuid"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
@@ -552,4 +554,165 @@ type captureEntryLogger struct {
 
 func (c *captureEntryLogger) LogChecked(ctx context.Context, entry *service.UsageEntry) error {
 	return c.save(entry)
+}
+
+// ③ (r53) The in-flight gap at the DB+WAL double-failure point: main WAL at
+// cap AND the synchronous DB commit failing used to be a COUNTED REAL LOSS
+// for rows of requests that were already in flight. The emergency overflow
+// WAL must hold the row (fsync-durable) instead — no loss counter, no block
+// engagement — and replay must drain it into the DB once the DB recovers.
+func TestUsageWAL_DoubleFailure_EmergencyHoldsInFlightRow(t *testing.T) {
+	db := newUsageDB(t)
+	dir := t.TempDir()
+	spool := NewUsageSpool(dir, 2048) // ~2KB: fills after a couple of lines
+	t.Cleanup(spool.Close)
+	emergency := NewUsageSpoolEmergency(dir, 1<<20)
+	t.Cleanup(emergency.Close)
+	SetUsageSpool(spool)
+	SetUsageSpoolEmergency(emergency)
+	t.Cleanup(func() { SetUsageSpool(nil); SetUsageSpoolEmergency(nil) })
+	oldWorkers := UsageWorkers
+	UsageWorkers = nil // force the deterministic sync path
+	t.Cleanup(func() { UsageWorkers = oldWorkers })
+
+	// Fill the main WAL past its cap so Write refuses (cap, not disk).
+	for i := 0; i < 20; i++ {
+		if !spool.Write(&service.UsageEntry{EventID: fmt.Sprint("fill-", i), ModelResponse: strings.Repeat("x", 200)}) {
+			break
+		}
+	}
+	if spool.Write(&service.UsageEntry{EventID: "must-refuse", ModelResponse: strings.Repeat("x", 200)}) {
+		t.Fatal("main WAL unexpectedly accepted past its cap — test setup broken")
+	}
+
+	lostBefore := testutil.ToFloat64(usageRowsLostTotal)
+	heldBefore := testutil.ToFloat64(usageEmergencyHeldTotal)
+	submitUsageEntryFunc(&failingLogger{}, &service.UsageEntry{EventID: "inflight-gap-row", RouteType: "openai"}, nil)
+
+	if got := testutil.ToFloat64(usageRowsLostTotal) - lostBefore; got != 0 {
+		t.Fatalf("double failure counted a REAL loss despite the emergency WAL: %v", got)
+	}
+	if got := testutil.ToFloat64(usageEmergencyHeldTotal) - heldBefore; got != 1 {
+		t.Fatalf("emergency-held counter delta = %v, want 1", got)
+	}
+	if rows := countRows(t, db); rows != 0 {
+		t.Fatalf("db rows = %d before recovery, want 0", rows)
+	}
+
+	// DB recovers: the emergency replay loop must flush the held row into
+	// usage_logs exactly once (EventID idempotent).
+	flushed := emergency.Replay(perRow(func(e *service.UsageEntry) error {
+		return db.svc.LogChecked(context.Background(), e)
+	}), 10)
+	if flushed != 1 {
+		t.Fatalf("emergency replay flushed %d rows, want 1", flushed)
+	}
+	if rows := countRows(t, db); rows != 1 {
+		t.Fatalf("db rows after recovery = %d, want 1 (the in-flight gap row)", rows)
+	}
+	// A second replay round must be a no-op (row committed + acked).
+	if flushed := emergency.Replay(perRow(func(e *service.UsageEntry) error {
+		return db.svc.LogChecked(context.Background(), e)
+	}), 10); flushed != 0 {
+		t.Fatalf("second emergency replay flushed %d, want 0 (idempotent)", flushed)
+	}
+}
+
+// ③ (r58 review) Capacity-exhaustion model: when the emergency WAL crosses
+// its high-water mark while DB writes fail, the billing-integrity block
+// engages BEFORE any row is lost (pre-loss, in-flight bounded by admission
+// rejection), and the recovery path (replay drains the emergency WAL into
+// the DB + durable successes) releases it. Both WALs genuinely full while
+// the DB still fails remains a counted real loss (the stated residual
+// boundary — narrowed, not claimed away).
+func TestUsageWAL_EmergencyHighWater_BlocksBeforeLossAndRecovers(t *testing.T) {
+	billingintegrity.ResetForTest()
+	t.Cleanup(billingintegrity.ResetForTest)
+	billingintegrity.Configure(billingintegrity.PolicyBlock)
+
+	db := newUsageDB(t)
+	dir := t.TempDir()
+	// Main WAL cap 1 byte: every Write refuses (cap, not disk). Emergency
+	// cap sized so ONE typical row crosses the high-water (reserve = cap/2).
+	main := NewUsageSpool(dir, 1)
+	t.Cleanup(main.Close)
+	emergency := NewUsageSpoolEmergency(dir, 4096)
+	t.Cleanup(emergency.Close)
+	SetUsageSpool(main)
+	SetUsageSpoolEmergency(emergency)
+	t.Cleanup(func() { SetUsageSpool(nil); SetUsageSpoolEmergency(nil) })
+	oldWorkers := UsageWorkers
+	UsageWorkers = nil
+	t.Cleanup(func() { UsageWorkers = oldWorkers })
+
+	if main.Write(&service.UsageEntry{EventID: "never"}) {
+		t.Fatal("1-byte main WAL must refuse every write")
+	}
+
+	lostBefore := testutil.ToFloat64(usageRowsLostTotal)
+	heldBefore := testutil.ToFloat64(usageEmergencyHeldTotal)
+	// First double-failure row: emergency holds it; a ~2.6KB row against a
+	// 4096B cap with reserve 2048 crosses the high-water (2048B) on write.
+	submitUsageEntryFunc(&failingLogger{}, &service.UsageEntry{
+		EventID: "hw-1", RouteType: "openai", UserMessage: strings.Repeat("x", 2600),
+	}, nil)
+	if got := testutil.ToFloat64(usageEmergencyHeldTotal) - heldBefore; got != 1 {
+		t.Fatalf("emergency-held delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(usageRowsLostTotal) - lostBefore; got != 0 {
+		t.Fatalf("PRE-LOSS invariant broken: %v real loss(es) before capacity exhaustion", got)
+	}
+	if !billingintegrity.Blocked() {
+		t.Fatal("high-water must engage the billing-integrity block BEFORE any loss")
+	}
+
+	// Recovery: replay drains the emergency WAL into the DB; durable
+	// successes + the compressed hold release the block.
+	flushed := emergency.Replay(perRow(func(e *service.UsageEntry) error {
+		return db.svc.LogChecked(context.Background(), e)
+	}), 10)
+	if flushed != 1 {
+		t.Fatalf("emergency replay flushed %d, want 1", flushed)
+	}
+	billingintegrity.FastForwardHoldForTest()
+	for i := 0; i < 6 && billingintegrity.Blocked(); i++ {
+		billingintegrity.ReportDurableSuccess()
+	}
+	if billingintegrity.Blocked() {
+		t.Fatal("block must release after recovery (emergency drained + durable successes)")
+	}
+	if rows := countRows(t, db); rows != 1 {
+		t.Fatalf("db rows = %d, want 1 (the emergency-held row drained)", rows)
+	}
+}
+// ③ Triple failure — DB down, main WAL at cap, emergency tier NOT armed
+// (or its own cap/disk also failed): the row IS a real loss, counted and
+// block-engaging. The emergency tier narrows the loss window; it does not
+// erase the accounting when every durable path is gone.
+func TestUsageWAL_TripleFailure_RealLossStillCounted(t *testing.T) {
+	dir := t.TempDir()
+	spool := NewUsageSpool(dir, 2048)
+	t.Cleanup(spool.Close)
+	SetUsageSpool(spool)
+	SetUsageSpoolEmergency(nil) // tier off = legacy r34 behavior
+	t.Cleanup(func() { SetUsageSpool(nil) })
+	oldWorkers := UsageWorkers
+	UsageWorkers = nil
+	t.Cleanup(func() { UsageWorkers = oldWorkers })
+
+	for i := 0; i < 20; i++ {
+		if !spool.Write(&service.UsageEntry{EventID: fmt.Sprint("fill-", i), ModelResponse: strings.Repeat("x", 200)}) {
+			break
+		}
+	}
+
+	lostBefore := testutil.ToFloat64(usageRowsLostTotal)
+	heldBefore := testutil.ToFloat64(usageEmergencyHeldTotal)
+	submitUsageEntryFunc(&failingLogger{}, &service.UsageEntry{EventID: "true-loss-row", RouteType: "openai"}, nil)
+	if got := testutil.ToFloat64(usageRowsLostTotal) - lostBefore; got != 1 {
+		t.Fatalf("real loss counter delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(usageEmergencyHeldTotal) - heldBefore; got != 0 {
+		t.Fatalf("emergency-held delta = %v, want 0 (tier disabled)", got)
+	}
 }

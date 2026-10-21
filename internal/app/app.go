@@ -337,9 +337,23 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// at ~10 rows/s under live load) with ack semantics: a row leaves the
 	// spool only after the batch returns nil. Bypassing the pool here is
 	// deliberate — enqueue-success is not a DB ack.
-	go handler.RunUsageSpoolReplay(appCtx, usageSpool, 30*time.Second, func(ctx context.Context, entries []*service.UsageEntry) error {
+	flushBatch := func(ctx context.Context, entries []*service.UsageEntry) error {
 		return svcs.UsageSvc.LogBatchChecked(ctx, entries)
-	})
+	}
+	go handler.RunUsageSpoolReplay(appCtx, usageSpool, 30*time.Second, flushBatch)
+	// ③ (r53) emergency overflow WAL: at the DB+WAL double-failure point the
+	// in-flight row used to be a counted real loss. It now lands here
+	// (fsync-durable, EventID-idempotent) and a second replay loop drains it
+	// once the DB recovers. A real loss shrinks to disk failure; the
+	// integrity block still engages on an actual loss. Armed only when the
+	// main spool is on and the cap is positive.
+	if cfg.Usage.SpoolDir != "" && cfg.Usage.SpoolEmergencyMaxBytes > 0 {
+		emergencySpool := handler.NewUsageSpoolEmergency(cfg.Usage.SpoolDir, cfg.Usage.SpoolEmergencyMaxBytes)
+		handler.SetUsageSpoolEmergency(emergencySpool)
+		if emergencySpool != nil {
+			go handler.RunUsageSpoolReplay(appCtx, emergencySpool, 30*time.Second, flushBatch)
+		}
+	}
 	modelsHandler := handler.NewModelsHandler(db)
 
 	// Whole-stream duration cap for SSE (0 = uncapped; see server.stream_max_duration)
