@@ -108,6 +108,7 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 	}
 	c.Set("usage_logged", true)
 	submitUsageEntry(h.usageSvc, &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:          "anthropic",
 		ModelRequested:     model,
 		ProviderID:         providerID,
@@ -394,6 +395,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("output_tokens", result.OutputTokens)
 	c.Set("input_price", result.InputPrice)
 	c.Set("output_price", result.OutputPrice)
+	c.Set("currency", result.Currency)
 	c.Set("usage_logged", true)
 
 	// Cache-aware cost so the usage row and ReportBudgetUsage agree (the budget
@@ -403,6 +405,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:       "anthropic",
 		ModelRequested:  req.Model,
 		ModelUsed:       result.ModelUsed,
@@ -854,6 +857,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:       "anthropic",
 		ModelRequested:  req.Model,
 		ModelUsed:       result.ModelUsed,

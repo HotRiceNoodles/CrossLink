@@ -26,7 +26,22 @@ type CacheEntry struct {
 	Body         json.RawMessage `json:"body"`
 	InputTokens  int             `json:"input_tokens,omitempty"`
 	OutputTokens int             `json:"output_tokens,omitempty"`
-	Compressed   bool            `json:"compressed,omitempty"`
+	// Billing snapshot for cache HIT accounting (r63 probe defect): the
+	// serving prices of the request that POPULATED the entry. A HIT re-bills
+	// the cached token counts at these prices so every served request lands
+	// exactly one ledger row and one budget settlement.
+	InputPrice  float64 `json:"input_price,omitempty"`
+	OutputPrice float64 `json:"output_price,omitempty"`
+	Currency    string  `json:"currency,omitempty"`
+	// Priced distinguishes "no price snapshot stored" (legacy entries cached
+	// before this field existed — unbillable, must not be served) from a
+	// genuine zero-price model (priced at 0 — billable, serve normally).
+	// Set() always writes true; the HIT path bypasses unpriced entries to
+	// the upstream pipeline, which re-bills at today's prices and
+	// overwrites the entry (compatibility-invalidation, not a declared
+	// zero-cost grace period).
+	Priced     bool `json:"priced,omitempty"`
+	Compressed bool `json:"compressed,omitempty"`
 }
 
 type CacheStats struct {
@@ -177,12 +192,16 @@ func (s *CacheService) Get(ctx context.Context, key string) (*CacheEntry, bool) 
 	return &entry, true
 }
 
-func (s *CacheService) Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration) error {
+func (s *CacheService) Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration, inputPrice, outputPrice float64, currency string) error {
 	entry := CacheEntry{
-		Model:    model,
-		Endpoint: endpoint,
-		CachedAt: time.Now().Unix(),
-		Body:     json.RawMessage(body),
+		Model:       model,
+		Endpoint:    endpoint,
+		CachedAt:    time.Now().Unix(),
+		Body:        json.RawMessage(body),
+		InputPrice:  inputPrice,
+		OutputPrice: outputPrice,
+		Currency:    currency,
+		Priced:      true,
 	}
 	// Extract token usage from response body for cache hit accounting
 	var usageProbe struct {

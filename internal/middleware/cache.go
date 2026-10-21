@@ -39,20 +39,31 @@ func (w *responseCapture) WriteString(s string) (int, error) {
 	return w.ResponseWriter.WriteString(s)
 }
 
+// CacheHitBiller bills one semantic-cache HIT: it must produce exactly one
+// durable usage row (cache_hit=true) through the same submit pipeline the
+// handlers use. Wired in app.go to handler.NewCacheHitBiller.
+type CacheHitBiller func(c *gin.Context, cached *service.CacheEntry)
+
 // Cache returns a middleware that caches non-streaming responses in Redis via CacheService.
-// Cache hits skip rate limiting and return immediately with X-Cache: HIT header.
-// Pass nil to disable caching (Community mode).
+// It must be mounted INNERMOST (after BudgetCheck/TPM/ReportBudgetUsage, just
+// before the handlers): a cache HIT still passes admission control and is
+// billed and budget-settled like any served request (r63 probe defect: 40
+// identical 200s, only the populating MISS was billed — HITs aborted the
+// chain above BudgetCheck and served free of charge, invisible to
+// usage_logs and to budget enforcement).
+// Pass nil cacheSvc to disable caching (Community mode).
 // guardrailSvc may be nil (guardrails disabled); when present, every cache HIT
 // is re-checked against the CURRENT response-direction guardrail policy — a
 // block (or a mask that would rewrite the body) bypasses the cache and falls
 // through to the upstream pipeline, so a stale cached response can never leak
 // content that today's policy forbids.
-func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, guardrailSvc *guardrail.GuardrailService) gin.HandlerFunc {
+func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, guardrailSvc *guardrail.GuardrailService, billHit CacheHitBiller) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if cacheSvc == nil {
 			c.Next()
 			return
 		}
+		hitStart := time.Now()
 
 		if !cacheSvc.IsEnabled() {
 			c.Next()
@@ -100,6 +111,16 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 			return
 		}
 
+		// An explicit X-Idempotency-Key hands replay semantics to the
+		// handler's idempotency layer (bill exactly once per event). The
+		// semantic cache must not intercept it: an identical body under the
+		// same idem key is a REPLAY, not a new serving — a HIT here would
+		// re-bill what the idem layer guarantees to bill once.
+		if c.GetHeader("X-Idempotency-Key") != "" {
+			c.Next()
+			return
+		}
+
 		ctx := c.Request.Context()
 
 		modelTTL, disabled := cacheSvc.GetModelCacheConfig(ctx, probe.Model)
@@ -117,7 +138,19 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 		key := buildCacheKey(c.Request.URL.Path, bodyBytes, c, cp)
 
 		cached, ok := cacheSvc.Get(ctx, key)
-		if ok && cached != nil {
+		bypassUnpriced := ok && cached != nil && !cached.Priced
+		if bypassUnpriced {
+			// Legacy entry cached before price snapshots existed: a serving
+			// from it cannot be billed (no prices to settle against) — a
+			// declared zero-cost grace period is NOT acceptable (r65
+			// review). Fall through to the upstream pipeline instead: the
+			// request re-executes and re-bills at today's prices, and the
+			// capture below overwrites the entry with a priced snapshot. A
+			// genuine zero-price model is Priced=true and serves normally.
+			c.Header("X-Cache", "BYPASS-UNPRICED")
+			RecordCacheBypassUnpriced(probe.Model)
+		}
+		if ok && cached != nil && !bypassUnpriced {
 			if !cacheHitPassesGuardrail(c, guardrailSvc, cached.Body, path, probe.Model) {
 				// Today's response policy rejects (or wants to mask) the
 				// cached body: fall through to the upstream pipeline so the
@@ -138,13 +171,33 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 				c.Set("input_tokens", cached.InputTokens)
 				c.Set("output_tokens", cached.OutputTokens)
 			}
+			// Restore the billing snapshot so the unwinding settle middleware
+			// (ReportBudgetUsage) prices the HIT exactly like the request that
+			// populated the entry. Without prices the settle would compute
+			// cost 0 and skip — the HIT would again be unbilled.
+			if cached.InputPrice > 0 || cached.OutputPrice > 0 {
+				c.Set("input_price", cached.InputPrice)
+				c.Set("output_price", cached.OutputPrice)
+			}
+			if cached.Currency != "" {
+				c.Set("currency", cached.Currency)
+			}
+			// One durable ledger row per served HIT, before the abort cuts
+			// the chain down to the handlers (the row submit itself is
+			// WAL-first and never blocks on this response path).
+			if billHit != nil {
+				c.Set("cache_hit_latency_ms", time.Since(hitStart).Milliseconds())
+				billHit(c, cached)
+			}
 			RecordCacheHit(probe.Model)
 			c.Abort()
 			return
 		}
 
-		c.Header("X-Cache", "MISS")
-		RecordCacheMiss(probe.Model)
+		if !bypassUnpriced {
+			c.Header("X-Cache", "MISS")
+			RecordCacheMiss(probe.Model)
+		}
 
 		// NOTE: Thundering herd risk on cache miss — concurrent identical requests
 		// will all hit the upstream provider. For this use case (LLM API proxy),
@@ -157,7 +210,17 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 		c.Next()
 
 		if capture.Status() == http.StatusOK && capture.body.Len() > 0 {
-			if err := cacheSvc.Set(ctx, key, probe.Model, c.Request.URL.Path, capture.body.Bytes(), ttl); err != nil {
+			// Snapshot the serving prices the handler just published on the
+			// context, so future HITs of this entry re-bill at the same
+			// prices (entries from price-less responses keep zeros: their
+			// HITs settle cost 0 until TTL ages them out).
+			inPrice, _ := c.Get("input_price")
+			outPrice, _ := c.Get("output_price")
+			currency, _ := c.Get("currency")
+			ip, _ := inPrice.(float64)
+			op, _ := outPrice.(float64)
+			cur, _ := currency.(string)
+			if err := cacheSvc.Set(ctx, key, probe.Model, c.Request.URL.Path, capture.body.Bytes(), ttl, ip, op, cur); err != nil {
 				slog.Warn("cache set failed", "error", err)
 			}
 		}

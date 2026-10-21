@@ -95,6 +95,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	attempts := attemptsJSON(result.Attempts)
 	c.Set("usage_logged", true)
 	submitUsageEntry(h.usageSvc, &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:          "openai",
 		ModelRequested:     reqModel,
 		ProviderID:         providerID,
@@ -529,12 +530,14 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	c.Set("output_tokens", outputTokens)
 	c.Set("input_price", route.InputPrice)
 	c.Set("output_price", route.OutputPrice)
+	c.Set("currency", route.Currency)
 
 	latency := time.Since(start).Milliseconds()
 	pn := route.Provider.Name()
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:       "openai",
 		ModelRequested:  req.Model,
 		ModelUsed:       route.ProviderModel,
@@ -956,6 +959,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:       "openai",
 		ModelRequested:  req.Model,
 		ModelUsed:       route.ProviderModel,

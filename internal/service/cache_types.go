@@ -14,5 +14,5 @@ type CacheServiceInterface interface {
 	GetModelCacheConfig(ctx context.Context, model string) (ttl time.Duration, disabled bool)
 	GetTTLForEndpoint(path string) time.Duration
 	Get(ctx context.Context, key string) (*CacheEntry, bool)
-	Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration) error
+	Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration, inputPrice, outputPrice float64, currency string) error
 }

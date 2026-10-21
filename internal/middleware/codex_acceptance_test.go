@@ -70,9 +70,11 @@ func (f codexAcceptanceCache) GetModelCacheConfig(context.Context, string) (time
 }
 func (f codexAcceptanceCache) GetTTLForEndpoint(string) time.Duration { return time.Minute }
 func (f codexAcceptanceCache) Get(context.Context, string) (*service.CacheEntry, bool) {
-	return &service.CacheEntry{Body: f.body}, true
+	// Priced: this test targets the guardrail re-check, not the unpriced
+	// legacy-entry bypass; a priced entry reaches the guardrail branch.
+	return &service.CacheEntry{Body: f.body, Priced: true}, true
 }
-func (f codexAcceptanceCache) Set(context.Context, string, string, string, []byte, time.Duration) error {
+func (f codexAcceptanceCache) Set(context.Context, string, string, string, []byte, time.Duration, float64, float64, string) error {
 	return nil
 }
 
@@ -98,7 +100,7 @@ func TestCodexAcceptanceCacheHitIsRechecked(t *testing.T) {
 	svc.RefreshSettings(t.Context())
 	fake := codexAcceptanceCache{body: []byte(`{"choices":[{"message":{"content":"SECRET"}}]}`)}
 	r := gin.New()
-	r.Use(Cache(fake, testCP(), svc))
+	r.Use(Cache(fake, testCP(), svc, nil))
 	calls := 0
 	r.POST("/v1/chat/completions", func(c *gin.Context) { calls++; c.String(200, "safe regenerated response") })
 	w := httptest.NewRecorder()

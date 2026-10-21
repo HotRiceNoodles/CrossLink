@@ -81,7 +81,7 @@ func TestM2PerfRealCacheHitAndPolicyRecheck(t *testing.T) {
 
 	downstreamCalls := 0
 	r := gin.New()
-	r.POST("/v1/chat/completions", Cache(cacheSvc, cp, gs), func(c *gin.Context) {
+	r.POST("/v1/chat/completions", Cache(cacheSvc, cp, gs, nil), func(c *gin.Context) {
 		downstreamCalls++
 		c.Data(http.StatusOK, "application/json", cachedBody) // fresh generation (mock upstream ≈0ms)
 	})

@@ -90,6 +90,14 @@ type UsageEntry struct {
 	// Empty for legacy direct-Log callers (admin playground), which have no
 	// replay path and fall back to a one-shot UUID inside buildUsageLog.
 	EventID        string
+	// GinRequestID carries the gateway request id (the SAME id the budget
+	// reserve/settle markers and the request log line use). Persisted into
+	// usage_logs.request_id so a row is AUDITABLY joinable to its marks,
+	// ledger tasks and log lifecycle (r47 forensics 2026-10-21: the old
+	// per-row uuid[:8] lived in a different id space, making per-request
+	// miss/double-billing checks impossible). Empty for callers without a
+	// request context (probes) — buildUsageLog falls back to the uuid.
+	GinRequestID   string
 	RouteType      string
 	ModelRequested string
 	ModelUsed      string
@@ -172,7 +180,7 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		eventID = uuid.New().String()
 	}
 	log := &model.UsageLog{
-		RequestID:          uuid.New().String()[:8],
+		RequestID: firstNonEmpty(entry.GinRequestID, uuid.New().String()),
 		EventID:            &eventID,
 		RouteType:          entry.RouteType,
 		ModelRequested:     entry.ModelRequested,
@@ -303,4 +311,14 @@ func (s *UsageService) LogBatchChecked(ctx context.Context, entries []*UsageEntr
 		return err
 	}
 	return nil
+}
+
+// firstNonEmpty returns the first argument that is non-empty.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

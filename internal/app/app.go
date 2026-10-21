@@ -763,7 +763,6 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
-	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider, guardrailSvc))
 	gwGroup.Use(middleware.RateLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	// BudgetCheck before TPMLimit: a budget-rejected request must not make a
 	// TPM reservation (the aborting chain never reaches ReportTokens).
@@ -771,6 +770,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.TPMLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	gwGroup.Use(middleware.ReportTokens(rdb, orgCache))
 	gwGroup.Use(middleware.ReportBudgetUsage(svcs.BudgetSvc, svcs.BudgetAlertSvc, teamCache, orgCache))
+	// Cache INNERMOST, above the handlers (r63 probe defect): a HIT aborts
+	// the rest of the chain, so it may only cut off handler execution.
+	// Mounted here every HIT still passes auth → rate limit → BudgetCheck
+	// admission (an over-budget key is rejected even for a cached body), its
+	// reservation settles via the unwinding ReportBudgetUsage from the
+	// tokens+prices restored by the HIT path, and the biller writes exactly
+	// one durable cache_hit ledger row per served request.
+	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider, guardrailSvc, handler.NewCacheHitBiller(svcs.UsageSvc)))
 	// RoutingStats (per-minute Redis hashes) removed: it was write-only —
 	// /admin/routing/stats reads usage_logs directly. Reintroduce with a reader
 	// if minute-level routing telemetry is needed.

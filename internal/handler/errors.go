@@ -228,6 +228,7 @@ func logRequestStageError(usageSvc *service.UsageService, c *gin.Context, routeT
 	}
 	c.Set("usage_logged", true)
 	submitUsageEntry(usageSvc, &service.UsageEntry{
+		GinRequestID:   c.GetString("request_id"),
 		RouteType:      routeType,
 		ModelRequested: model,
 		APIKeyID:       keyID,

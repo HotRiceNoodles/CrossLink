@@ -31,6 +31,11 @@ var (
 		Name: "cl_cache_misses_total",
 	}, []string{"model"})
 
+	cacheBypassUnpricedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cl_cache_bypass_unpriced_total",
+		Help:           "Cache entries served BYPASS because they carry no price snapshot (legacy pre-pricing entries); the request re-executes upstream and re-bills at current prices.",
+	}, []string{"model"})
+
 	providerFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cl_provider_failures_total",
 	}, []string{"provider", "error_type"})
@@ -76,6 +81,13 @@ func RecordCacheHit(model string) {
 // RecordCacheMiss increments cache miss counter.
 func RecordCacheMiss(model string) {
 	cacheMissesTotal.WithLabelValues(model).Inc()
+}
+
+// RecordCacheBypassUnpriced counts an unpriced legacy entry bypassed to the
+// upstream pipeline (compatibility-invalidation of pre-price-snapshot
+// entries; see CacheEntry.Priced).
+func RecordCacheBypassUnpriced(model string) {
+	cacheBypassUnpricedTotal.WithLabelValues(model).Inc()
 }
 
 // RecordCacheSize updates the cache size gauge.
