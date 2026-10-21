@@ -192,6 +192,17 @@ func applyBudgetDelta(budgetSvc service.BudgetServiceInterface, ctx context.Cont
 	if reservations != nil {
 		pk = reservations.PeriodKeys[scope]
 	}
+	if pk == "" {
+		// FINDING-B root cause (r36 MONITOR proof): a scope whose RESERVE
+		// failed (outage window) has no PeriodKeys entry, and the settle
+		// then wrote full cost to keys with an EMPTY period suffix —
+		// orphan keys nobody reads, under-counting the real counter by the
+		// whole reserve-failed cohort until the hourly DB raise. Derive the
+		// current period key instead: for the reserve-failed cohort the
+		// reserve never landed in any period, so the CURRENT period is the
+		// exact settle target.
+		pk = service.PeriodKey(period)
+	}
 	if reqID != "" {
 		if ss, ok := budgetSvc.(interface {
 			SettleScope(ctx context.Context, scope, targetID, period, periodKey, reqID string, cost float64)

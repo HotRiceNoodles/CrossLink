@@ -457,3 +457,35 @@ func TestCrashAfterMemoryFallback_RecoversViaReaperAndRaise(t *testing.T) {
 	}
 	_ = sk
 }
+
+// FINDING-B regression (r36 MONITOR root cause): a settle whose scope has NO
+// recorded period key (reserve failed in an outage window) must fall back to
+// the CURRENT period key — never write to keys with an empty period suffix
+// (orphan keys read by no one; under-counted the real counter by the whole
+// reserve-failed cohort: 49x0.002992 = 0.146608 stranded on
+// budgetset:key:<id>: in runs/r36-20261021-002521-fbrepro).
+func TestSettle_EmptyPeriodKey_FallsBackToCurrentPeriod(t *testing.T) {
+	s, rdb, _ := newMarkedRedis(t)
+	ctx := context.Background()
+	pk := PeriodKey("monthly")
+	req := "req-fb-empty-pk-1"
+
+	// Reserve FAILED shape: no mark, no PeriodKeys entry — settle with pk=""
+	// (exactly what applyBudgetDelta passed before the fix).
+	s.SettleScope(ctx, "key", "11", "monthly", "", req, 0.002992)
+
+	bk, rk, sk := markedKeys("key", "11", pk)
+	if got := getF(t, rdb, sk); got < 0.002991 || got > 0.002993 {
+		t.Fatalf("settled on current-period key = %v, want the settle cost", got)
+	}
+	if got := getF(t, rdb, bk); got < 0.002991 || got > 0.002993 {
+		t.Fatalf("budget on current-period key = %v, want the settle cost", got)
+	}
+	// No orphan empty-suffix keys may exist:
+	for _, orphan := range []string{"budgetset:key:11:", "budget:key:11:", "budgetresv:key:11:"} {
+		if rdb.Exists(ctx, orphan).Val() != 0 {
+			t.Fatalf("orphan empty-period key created: %s", orphan)
+		}
+	}
+	_ = rk
+}

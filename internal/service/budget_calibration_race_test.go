@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,8 +21,11 @@ import (
 
 func runCalibratedWrite(t *testing.T, rdb *redis.Client, token, key string, spent float64, ttlSec int) int {
 	t.Helper()
+	// The r-aware raise reads the reservation counter inside the script;
+	// derive its key from the budget key (budget:scope:id:pk).
+	resvKey := strings.Replace(key, "budget:", "budgetresv:", 1)
 	res, err := calibratedWriteScript.Run(context.Background(), rdb,
-		[]string{calibrationLockKey, key}, token, spent, ttlSec).Int()
+		[]string{calibrationLockKey, key, resvKey}, token, spent, ttlSec).Int()
 	if err != nil {
 		t.Fatalf("calibratedWriteScript: %v", err)
 	}

@@ -90,8 +90,15 @@ return {cur, limit, 0, 1}
 
 // budgetSettleScript: KEYS = [settledmark, resvmark, budget, budgetresv,
 // budgetset, resvexp]; ARGV = [cost, markTTLsec, scope, targetID, reqID,
-// period, pk]. The reaper-zset member is rebuilt INSIDE the script from the
-// mark value (no GET→script race). Returns 2 for a duplicate settle (no-op),
+// period, pk, budgetTTLsec]. The reaper-zset member is rebuilt INSIDE the
+// script from the mark value (no GET→script race). The mark value carries
+// the reservation's period ("e|pk"; legacy plain-float marks fall back to
+// the settle's pk): a request that crossed a period boundary between
+// admission and settlement must release the reservation under the period
+// it was HELD in and charge the ledger row's period — releasing and
+// charging one period (old behavior) stranded the new period's resv
+// negative forever and froze the old period's headroom until the reaper
+// (drift repro T3, 2026-10-21). Returns 2 for a duplicate settle (no-op),
 // 1 settled-against-landed-reservation, 0 reservation-never-landed (full
 // cost).
 var budgetSettleScript = redis.NewScript(`
@@ -111,12 +118,30 @@ redis.call('EXPIRE', settled, ttlBudget)
 redis.call('EXPIRE', resv, ttlBudget)
 local m = redis.call('GET', mark)
 if m then
-	local e = tonumber(m)
-	redis.call('INCRBYFLOAT', budget, c - e)
-	redis.call('INCRBYFLOAT', resv, -e)
+	local bar = string.find(m, '|', 1, true)
+	local e, mpk, mstr
+	if bar then
+		e = tonumber(string.sub(m, 1, bar - 1))
+		mpk = string.sub(m, bar + 1)
+		mstr = string.sub(m, 1, bar - 1)
+	else
+		e = tonumber(m)
+		mpk = ARGV[7]
+		mstr = m
+	end
 	redis.call('DEL', mark)
-	local member = ARGV[3] .. '\31' .. ARGV[4] .. '\31' .. ARGV[5] .. '\31' .. ARGV[6] .. '\31' .. ARGV[7] .. '\31' .. m
+	local member = ARGV[3] .. '\31' .. ARGV[4] .. '\31' .. ARGV[5] .. '\31' .. ARGV[6] .. '\31' .. mpk .. '\31' .. mstr
 	redis.call('ZREM', zset, member)
+	if mpk == ARGV[7] then
+		redis.call('INCRBYFLOAT', budget, c - e)
+		redis.call('INCRBYFLOAT', resv, -e)
+	else
+		local bOld = 'budget:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		local rOld = 'budgetresv:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		redis.call('INCRBYFLOAT', bOld, -e)
+		redis.call('INCRBYFLOAT', rOld, -e)
+		redis.call('INCRBYFLOAT', budget, c)
+	end
 	redis.call('INCRBYFLOAT', settled, c)
 	return 1
 end
@@ -288,7 +313,7 @@ func (s *BudgetService) ReserveScopeMarked(ctx context.Context, scope, targetID,
 		estimate, budgetLimit,
 		int(PeriodTTL(period).Seconds()), markTTLSeconds(s.markerTTL),
 		now.Add(s.markerTTL).Unix(), member,
-		fmt.Sprintf("%.9f", estimate),
+		fmt.Sprintf("%.9f", estimate)+"|"+pk,
 	).Float64Slice()
 	if err != nil {
 		if redisWriteDefinitelyNotSent(err) {
@@ -546,6 +571,14 @@ func (s *BudgetService) SettleScope(ctx context.Context, scope, targetID, period
 		// Legacy path (no request identity): full-cost report.
 		s.ReportUsage(ctx, scope, targetID, period, cost)
 		return
+	}
+	if pk == "" {
+		// Defensive (FINDING-B): a settle without a recorded period key
+		// (reserve failed in an outage window) must NEVER write to keys
+		// with an empty period suffix — those orphan keys are read by no
+		// one. Fall back to the current period: the reserve never landed
+		// anywhere, so the current period is the exact target.
+		pk = PeriodKey(period)
 	}
 	run := func() (int, error) {
 		return s.runSettleScript(ctx, settleRetryTask{

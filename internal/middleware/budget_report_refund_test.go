@@ -100,3 +100,33 @@ func TestReportBudgetUsage_TokenlessNoReservationsSkips(t *testing.T) {
 		t.Fatalf("unexpected settles: %+v", svc.settles)
 	}
 }
+
+// FINDING-B regression at the middleware layer: a scope whose reserve failed
+// (no PeriodKeys entry — the outage-window shape) must settle into the
+// CURRENT period key, not an empty one.
+func TestReportBudgetUsage_ReserveFailedScopeSettlesCurrentPeriod(t *testing.T) {
+	svc := &fakeBudgetSvc{}
+	c, _ := newReportTestCtx(t, true)
+	c.Keys["api_key"] = &model.APIKey{MaxBudget: 10, BudgetPeriod: "monthly"}
+	c.Set("request_id", "req-fb-mw-1")
+	c.Set("input_tokens", 10)
+	c.Set("input_price", 0.001)
+	// Reserve failed: reservations struct exists but PeriodKeys empty.
+	c.Set("budget_reservations", &service.BudgetReservations{
+		Reserved: map[string]float64{"key": 0.5},
+	})
+	mw := ReportBudgetUsage(svc, nil, nil, nil)
+	mw(c)
+	if len(svc.settles) == 0 {
+		t.Fatal("no settle for a scope with failed reserve")
+	}
+	cur := service.PeriodKey("monthly")
+	for _, s := range svc.settles {
+		if s.pk == "" {
+			t.Fatalf("settle carried empty period key for scope %s — orphan-key bug", s.scope)
+		}
+		if s.pk != cur {
+			t.Fatalf("settle pk=%q, want current period %q", s.pk, cur)
+		}
+	}
+}

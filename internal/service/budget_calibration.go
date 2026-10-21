@@ -331,27 +331,37 @@ func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context, token stri
 // residue is bounded by the in-flight reserves at write time and is closed
 // by the NEXT hourly round (the request has settled; the fresh SUM covers
 // it). The counter is derived data; the ledger (usage_logs) is untouched.
+//
+// Drift fix (r35/r44, 2026-10-21, repro T1/T2): the raise target must
+// include LIVE reservations — raising budget to bare SUM(ledger) while
+// in-flight reservations exist understates the enforcement counter; with
+// the settled raise to the same snapshot it strands budget==settled==DB
+// with resv orphaned (the r44 shape). resv is read INSIDE the script so
+// the raise is atomic with respect to concurrent reserve/settle writers.
 var calibratedWriteScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
 	return -1
 end
 local cur = redis.call('GET', KEYS[2])
 local spent = tonumber(ARGV[2])
+local rv = tonumber(redis.call('GET', KEYS[3])) or 0
+local target = spent + rv
 if not cur or not tonumber(cur) then
-	redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+	redis.call('SET', KEYS[2], tostring(target), 'EX', ARGV[3])
 	return 1
 end
 local curVal = tonumber(cur)
-if curVal < spent then
-	redis.call('INCRBYFLOAT', KEYS[2], spent - curVal)
+if curVal < target then
+	redis.call('INCRBYFLOAT', KEYS[2], target - curVal)
 end
 redis.call('EXPIRE', KEYS[2], ARGV[3])
 return 0`)
 
 func (s *BudgetCalibrationService) syncRedisAndSnapshot(ctx context.Context, token, scope string, targetID int64, pk, period string, spent, budget float64) error {
 	key := fmt.Sprintf("budget:%s:%d:%s", scope, targetID, pk)
+	resvKey := budgetResvKey(scope, fmt.Sprintf("%d", targetID), pk)
 	res, err := calibratedWriteScript.Run(ctx, s.rdb,
-		[]string{calibrationLockKey, key}, token, spent, int(PeriodTTL(period).Seconds())).Int()
+		[]string{calibrationLockKey, key, resvKey}, token, spent, int(PeriodTTL(period).Seconds())).Int()
 	if err != nil {
 		slog.Warn("budget calibration: calibrated write failed", "key", key, "error", err)
 		return nil // store error (not ownership loss): skip this row, keep going
@@ -403,16 +413,29 @@ func (s *BudgetCalibrationService) migrateOrCheckInvariant(ctx context.Context, 
 		return err
 	}
 	if ok {
-		cur, _ := s.rdb.Get(ctx, bKey).Float64()
-		over := cur - spent
-		if over < 0 {
-			over = 0
+		// Drift fix (r35 negative-resv root cause, repro T1 2026-10-21):
+		// first-sight must only seed counters for a namespace that PREDATES
+		// the F1' split. When reserve/settle writers are already active
+		// (budgetset/budgetresv keys exist), re-deriving resv from the
+		// overhang clobbers LIVE reservations — their settles then drive
+		// resv negative while the raise path pushes budget/settled to the
+		// ledger sum (budget==settled==DB, resv<0). Skip the seed entirely;
+		// the r-aware raise above keeps the counters consistent from here.
+		if s.rdb.Exists(ctx, rKey).Val() != 0 || s.rdb.Exists(ctx, setKey).Val() != 0 {
+			slog.Info("budget calibration: migration flag first-seen but F1' counters already active — leaving resv untouched; settled raise below owns the audit counter",
+				"key", bKey)
+		} else {
+			cur, _ := s.rdb.Get(ctx, bKey).Float64()
+			over := cur - spent
+			if over < 0 {
+				over = 0
+			}
+			s.rdb.Set(ctx, setKey, strconv.FormatFloat(spent, 'f', -1, 64), ttl)
+			s.rdb.Set(ctx, rKey, strconv.FormatFloat(over, 'f', -1, 64), ttl)
+			slog.Info("budget calibration: F1' counters migrated (settled=SUM(DB), resv=overhang)",
+				"key", bKey, "settled", spent, "resv", over)
+			return nil
 		}
-		s.rdb.Set(ctx, setKey, strconv.FormatFloat(spent, 'f', -1, 64), ttl)
-		s.rdb.Set(ctx, rKey, strconv.FormatFloat(over, 'f', -1, 64), ttl)
-		slog.Info("budget calibration: F1' counters migrated (settled=SUM(DB), resv=overhang)",
-			"key", bKey, "settled", spent, "resv", over)
-		return nil
 	}
 	// RAISE-ONLY settled sync (r34): budgetset mirrors SUM(DB usage_logs) —
 	// every settle's cost has exactly one ledger row, so settled can only
