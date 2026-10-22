@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/license"
@@ -45,6 +46,11 @@ type Resolver struct {
 	// binary IsHealthyModel filter only. Set via SetHealthScoreFn (Setter, NOT
 	// NewResolver — overlay capability_test.go calls NewResolver positionally).
 	healthFn HealthScoreFn
+	// resolveLookupTimeout: r78 availability bound on the resolveUncached DB
+	// round trip (nanoseconds; atomic so SetResolveTimeout needs no lock on
+	// the read path). Set via SetResolveTimeout — NewResolver keeps its
+	// positional signature (overlay capability_test.go calls it positionally).
+	resolveTimeout atomic.Int64
 	// healthScoreCache: per-(provider,model) short TTL (2s) cache of health scores
 	// so the cache-hit hot path doesn't do N Redis reads per request. Bounded
 	// staleness (≤2s) is far better than the 30s resolver cache alone.
@@ -141,7 +147,7 @@ func NewResolver(
 	secretResolver *secret.SecretResolver,
 	aliasResolver AliasResolver,
 ) *Resolver {
-	return &Resolver{
+	r := &Resolver{
 		registry:       registry,
 		repo:           repo,
 		aliasResolver:  aliasResolver,
@@ -153,6 +159,18 @@ func NewResolver(
 		secretResolver: secretResolver,
 		degraded:       make(map[string]time.Time),
 		probes:         make(map[string]*resolveProbe),
+	}
+	r.resolveTimeout.Store(int64(2 * time.Second))
+	return r
+}
+
+// SetResolveTimeout bounds the resolveUncached DB round trip (r78
+// availability fix: reach the degraded negative-cache / typed-503 path fast
+// instead of holding the single-flight probe for the driver dial timeout).
+// Wiring: gateway.resolve_lookup_timeout.
+func (r *Resolver) SetResolveTimeout(d time.Duration) {
+	if d > 0 {
+		r.resolveTimeout.Store(int64(d))
 	}
 }
 
@@ -399,16 +417,28 @@ func (r *Resolver) degradedError(cacheKey, modelName string) error {
 // and returns the ordered routes. It does NOT touch the cache — the caller owns
 // caching (Resolve stores; the alias resolver bypasses).
 func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
-	models, err := r.repo.FindByModelName(ctx, modelName, orgID)
+	// r78 availability bound: an unreachable DB previously held this probe
+	// (and every request waiting on the single-flight) for the full driver
+	// dial timeout before the degraded negative-cache kicked in. Bounding the
+	// lookup reaches the SAME degraded/typed-503 path fast. Caller
+	// cancellation is still distinguished from OUR deadline below.
+	lt := r.resolveTimeout.Load()
+	if lt <= 0 {
+		lt = int64(2 * time.Second)
+	}
+	lctx, cancel := context.WithTimeout(ctx, time.Duration(lt))
+	models, err := r.repo.FindByModelName(lctx, modelName, orgID)
+	cancel()
 	if err != nil {
 		// A cancelled caller says NOTHING about DB health — return the raw
 		// cancellation so callers neither negative-cache nor report this as
 		// a degradation (a healthy DB must not be suppressed because one
-		// request went away mid-query).
+		// request went away mid-query). Our OWN lookup deadline, however, is
+		// DB-health evidence exactly like a query error.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("%w: query model mappings for model %s: %v", ErrResolveDegraded, modelName, err)
+		return nil, fmt.Errorf("%w: query model mappings for model %s (bounded %s): %v", ErrResolveDegraded, modelName, time.Duration(lt), err)
 	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("no provider found for model: %s", modelName)

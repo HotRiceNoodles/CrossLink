@@ -6,15 +6,22 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/model"
-	"github.com/crosslink/internal/repository"
 )
 
+// teamMetaRepo narrows what TeamCache needs from the repository so tests can
+// inject deterministic hanging lookups (r78 bound verification). The concrete
+// *repository.TeamRepo satisfies it unchanged.
+type teamMetaRepo interface {
+	GetByID(ctx context.Context, id int64) (*model.Team, error)
+}
+
 type TeamCache struct {
-	mu          sync.RWMutex
-	items       map[int64]*teamCacheEntry
-	repo        *repository.TeamRepo
-	ttl         time.Duration
-	staleWindow time.Duration
+	mu            sync.RWMutex
+	items         map[int64]*teamCacheEntry
+	repo          teamMetaRepo
+	ttl           time.Duration
+	staleWindow   time.Duration
+	lookupTimeout time.Duration
 }
 
 type teamCacheEntry struct {
@@ -22,12 +29,13 @@ type teamCacheEntry struct {
 	expiresAt time.Time
 }
 
-func NewTeamCache(repo *repository.TeamRepo, ctx context.Context) *TeamCache {
+func NewTeamCache(repo teamMetaRepo, ctx context.Context) *TeamCache {
 	tc := &TeamCache{
-		items:       make(map[int64]*teamCacheEntry),
-		repo:        repo,
-		ttl:         30 * time.Second,
-		staleWindow: 10 * time.Minute,
+		items:         make(map[int64]*teamCacheEntry),
+		repo:          repo,
+		ttl:           30 * time.Second,
+		staleWindow:   10 * time.Minute,
+		lookupTimeout: 2 * time.Second,
 	}
 	go tc.evictLoop(ctx)
 	return tc
@@ -112,16 +120,35 @@ func (tc *TeamCache) SetStaleWindow(d time.Duration) {
 	tc.mu.Unlock()
 }
 
+// SetLookupTimeout bounds the per-miss DB lookup inside GetSafe (r78).
+// Wiring: gateway.budget_metadata_lookup_timeout (default 2s).
+func (tc *TeamCache) SetLookupTimeout(d time.Duration) {
+	tc.mu.Lock()
+	tc.lookupTimeout = d
+	tc.mu.Unlock()
+}
+
 func (tc *TeamCache) GetSafe(ctx context.Context, teamID int64) (team *model.Team, mode string) {
 	now := time.Now()
 	tc.mu.RLock()
 	entry, ok := tc.items[teamID]
 	sw := tc.staleWindow
+	lt := tc.lookupTimeout
 	tc.mu.RUnlock()
 	if ok && entry.expiresAt.After(now) {
 		return entry.team, CacheModeFresh
 	}
-	if t, err := tc.repo.GetByID(ctx, teamID); err == nil {
+	// r78 availability bound: a cache miss against an unreachable DB
+	// previously held this request (and its admission slot) for the full
+	// driver dial timeout. The bound only shortens the WAIT to reach the
+	// exact same fallback chain below — it never widens admission.
+	if lt <= 0 {
+		lt = 2 * time.Second
+	}
+	lctx, cancel := context.WithTimeout(ctx, lt)
+	t, err := tc.repo.GetByID(lctx, teamID)
+	cancel()
+	if err == nil {
 		tc.mu.Lock()
 		tc.items[teamID] = &teamCacheEntry{team: t, expiresAt: now.Add(tc.ttl)}
 		tc.mu.Unlock()
@@ -134,4 +161,15 @@ func (tc *TeamCache) GetSafe(ctx context.Context, teamID int64) (team *model.Tea
 		return entry.team, CacheModeStaleLKG
 	}
 	return nil, CacheModeUnavailable
+}
+
+// SetTTL overrides the fresh-entry TTL (default 30s). Wiring:
+// gateway.budget_metadata_ttl. Shortening it in a TEST round moves the
+// fail-safe horizon (write+2*ttl+staleWindow) BEFORE other outage timers
+// (e.g. the 60s Redis auth-cache TTL), isolating the budget branch live;
+// production keeps the default — a shorter TTL only adds DB read load.
+func (tc *TeamCache) SetTTL(d time.Duration) {
+	tc.mu.Lock()
+	tc.ttl = d
+	tc.mu.Unlock()
 }

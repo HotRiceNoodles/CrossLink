@@ -77,6 +77,12 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 		strategies, deps.Svcs.LatencySvc, deps.Svcs.ActiveTracker, deps.SecretResolver,
 		deps.Extensions.AliasResolver,
 	)
+	// r78 availability bound (config gateway.resolve_lookup_timeout): a
+	// bounded miss reaches the existing degraded negative-cache / typed-503
+	// path instead of holding the single-flight probe for the dial timeout.
+	if d, err := time.ParseDuration(deps.Config.Gateway.ResolveLookupTimeout); err == nil && d > 0 {
+		resolver.SetResolveTimeout(d)
+	}
 
 	gatewaySvc := service.NewGatewayService(
 		resolver, registry, deps.Svcs.LatencySvc, deps.Svcs.ActiveTracker, retryBudget,

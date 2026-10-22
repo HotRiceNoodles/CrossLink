@@ -9,12 +9,18 @@ package middleware
 // Redis counters under LKG on both sides.
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/gin-gonic/gin"
+
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
-	"github.com/alicebob/miniredis/v2"
+	"github.com/crosslink/internal/service"
 	"github.com/glebarez/sqlite"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -118,3 +124,58 @@ func TestBudgetFailSafe_TwoInstances_SharedLiveCountersUnderLKG(t *testing.T) {
 }
 
 func ptrI64(v int64) *int64 { return &v }
+
+// Chain-level beyond-window contract (r65 review follow-up): with the entry
+// aged past ttl+staleWindow (measured from the write via the GetSafe
+// predicate expiresAt+sw+ttl) and the DB unreachable, BudgetCheck must
+// answer the FULL typed 503 response contract (type=budget_metadata_
+// unavailable) through a real gin chain — not just return the cache mode.
+// This pins the budget branch itself, independent of which outer layer
+// (auth/routing) binds first in a live outage.
+func TestBudgetFailSafe_BeyondWindow_Typed503ThroughChain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tc, oc, gdb := newFailSafeCaches(t)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	budgetSvc := service.NewBudgetService(rdb)
+	key := &model.APIKey{ID: 701, TeamID: ptrI64(701), BudgetPeriod: "monthly", MaxBudget: 100}
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("api_key", key)
+		c.Set("api_key_id", key.ID)
+		c.Set("request_id", "11111111-2222-3333-4444-555555555555")
+		c.Next()
+	})
+	r.Use(BudgetCheck(budgetSvc, tc, oc))
+	r.POST("/v1/chat/completions", func(c *gin.Context) { t.Fatal("handler must not run on a beyond-window rejection") })
+
+	// Warm the entry, age it past the horizon (GetSafe predicate:
+	// unavailable when now > expiresAt + staleWindow + ttl), then kill the DB.
+	tc.GetSafe(context.Background(), 701)
+	tc.mu.Lock()
+	if e, ok := tc.items[701]; ok {
+		e.expiresAt = time.Now().Add(-time.Duration(2*tc.ttl+tc.staleWindow) - time.Second)
+	}
+	tc.mu.Unlock()
+	sqlDB, _ := gdb.DB()
+	sqlDB.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 typed rejection", w.Code)
+	}
+	var body struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body not json: %v (%s)", err, w.Body.String())
+	}
+	if body.Error.Type != "budget_metadata_unavailable" {
+		t.Fatalf("error.type = %q, want budget_metadata_unavailable", body.Error.Type)
+	}
+}

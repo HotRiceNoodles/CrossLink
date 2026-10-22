@@ -244,6 +244,27 @@ type GatewayConfig struct {
 	// during an outage rejects the request (fail-closed). Env:
 	// CL_GATEWAY_BUDGET_METADATA_STALE_WINDOW.
 	BudgetMetadataStaleWindow string `mapstructure:"budget_metadata_stale_window"`
+	// BudgetMetadataTTL overrides the team/org metadata fresh-entry TTL
+	// (default 30s, cache-side). Test rounds shorten it to move the
+	// fail-safe horizon (write+2*ttl+staleWindow) ahead of other outage
+	// timers (auth Redis cache = 60s) and observe the budget branch live;
+	// production keeps the default. Env: CL_GATEWAY_BUDGET_METADATA_TTL.
+	BudgetMetadataTTL string `mapstructure:"budget_metadata_ttl"`
+	// BudgetMetadataLookupTimeout bounds the per-lookup DB round trip inside
+	// team/org GetSafe (r61/r78 availability fix). On a cache miss against a
+	// down/unreachable DB the request previously held its admission slot for
+	// the full driver dial timeout; with this bound the SAME fallback chain
+	// (fresh / stale-LKG enforcement / typed fail-closed 503) is reached in
+	// bounded time. This is a latency bound only — it never widens admission
+	// or bypasses budget/billing. Default 2s. Env:
+	// CL_GATEWAY_BUDGET_METADATA_LOOKUP_TIMEOUT.
+	BudgetMetadataLookupTimeout string `mapstructure:"budget_metadata_lookup_timeout"`
+	// ResolveLookupTimeout bounds the per-lookup DB round trip inside the
+	// router's resolveUncached (model-mapping query). Same rationale as the
+	// budget knob: a bounded miss reaches the existing degraded negative
+	// cache / typed 503 path fast instead of holding a slot for the dial
+	// timeout. Default 2s. Env: CL_GATEWAY_RESOLVE_LOOKUP_TIMEOUT.
+	ResolveLookupTimeout string `mapstructure:"resolve_lookup_timeout"`
 	// CircuitProbePath is where the circuit prober looks for a models list
 	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
 	// any other outcome falls back to a 1-token real chat probe. Empty string
@@ -704,6 +725,20 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.upstream_max_idle_conns_per_host", 0)
 	v.SetDefault("gateway.upstream_max_idle_conns", 0)
 	v.SetDefault("gateway.budget_marker_ttl", "24h")
+	// Registered so CL_GATEWAY_BUDGET_METADATA_STALE_WINDOW / _TTL env
+	// overrides are honored env-only (viper AutomaticEnv only resolves keys
+	// it knows — r70 finding: without this the env is silently inert and the
+	// cache-side defaults 10m/30s run instead).
+	v.SetDefault("gateway.budget_metadata_stale_window", "10m")
+	v.SetDefault("gateway.budget_metadata_ttl", "30s")
+	// r78 availability bounds: registered env-only keys, same rationale as
+	// the two above (unregistered env is silently inert under AutomaticEnv).
+	v.SetDefault("gateway.budget_metadata_lookup_timeout", "2s")
+	v.SetDefault("gateway.resolve_lookup_timeout", "2s")
+	// Registered so CL_GATEWAY_BUDGET_REAP_INTERVAL env-only overrides are honored
+	// (template gap found by the 2026-10-22 param audit: past rounds set it via
+	// yaml only; the env path was silently inert without registration).
+	v.SetDefault("gateway.budget_reap_interval", "5m")
 	// F-12: circuit-probe models path is a deployment property of the
 	// upstream, not an adapter constant. Registered with a default so
 	// CL_GATEWAY_CIRCUIT_PROBE_PATH env override is honored; set "" for

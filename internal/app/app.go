@@ -171,6 +171,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		teamCache.SetStaleWindow(d)
 		orgCache.SetStaleWindow(d)
 	}
+	if d, err := time.ParseDuration(cfg.Gateway.BudgetMetadataTTL); err == nil && d > 0 {
+		teamCache.SetTTL(d)
+		orgCache.SetTTL(d)
+	}
+	// r78 availability bound: cache-miss lookups against an unreachable DB
+	// release the admission slot in bounded time and fall through to the
+	// SAME LKG/fail-closed chain (no admission or billing change).
+	if d, err := time.ParseDuration(cfg.Gateway.BudgetMetadataLookupTimeout); err == nil && d > 0 {
+		teamCache.SetLookupTimeout(d)
+		orgCache.SetLookupTimeout(d)
+	}
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 
