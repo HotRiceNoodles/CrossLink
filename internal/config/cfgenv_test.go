@@ -65,6 +65,8 @@ func TestDefaults_BudgetMetadataTiming(t *testing.T) {
 func TestEnvOnly_LookupTimeouts(t *testing.T) {
 	t.Setenv("CL_GATEWAY_BUDGET_METADATA_LOOKUP_TIMEOUT", "500ms")
 	t.Setenv("CL_GATEWAY_RESOLVE_LOOKUP_TIMEOUT", "750ms")
+	t.Setenv("CL_GATEWAY_AUTH_LOOKUP_TIMEOUT", "300ms")
+	t.Setenv("CL_GATEWAY_MODEL_CONFIG_LOOKUP_TIMEOUT", "400ms")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -74,6 +76,12 @@ func TestEnvOnly_LookupTimeouts(t *testing.T) {
 	}
 	if cfg.Gateway.ResolveLookupTimeout != "750ms" {
 		t.Fatalf("resolve lookup timeout env-only not honored: got %q", cfg.Gateway.ResolveLookupTimeout)
+	}
+	if cfg.Gateway.AuthLookupTimeout != "300ms" {
+		t.Fatalf("auth lookup timeout env-only not honored: got %q", cfg.Gateway.AuthLookupTimeout)
+	}
+	if cfg.Gateway.ModelConfigLookupTimeout != "400ms" {
+		t.Fatalf("model-config lookup timeout env-only not honored: got %q", cfg.Gateway.ModelConfigLookupTimeout)
 	}
 }
 
@@ -87,5 +95,11 @@ func TestDefaults_LookupTimeouts(t *testing.T) {
 	}
 	if cfg.Gateway.ResolveLookupTimeout != "2s" {
 		t.Fatalf("default resolve lookup timeout = %q, want 2s", cfg.Gateway.ResolveLookupTimeout)
+	}
+	if cfg.Gateway.AuthLookupTimeout != "2s" {
+		t.Fatalf("default auth lookup timeout = %q, want 2s", cfg.Gateway.AuthLookupTimeout)
+	}
+	if cfg.Gateway.ModelConfigLookupTimeout != "2s" {
+		t.Fatalf("default model-config lookup timeout = %q, want 2s", cfg.Gateway.ModelConfigLookupTimeout)
 	}
 }

@@ -76,12 +76,12 @@ func TestPostgresDialect_DSNFormats(t *testing.T) {
 
 	// application_name tags gateway connections in pg_stat_activity /
 	// connection logs (F-3 forensics); the migrate URL carries its own tag.
-	wantDSN := "host=localhost port=5432 user=testuser password=testpass dbname=testdb sslmode=disable application_name=crosslink_gateway"
+	wantDSN := "host=localhost port=5432 user=testuser password=testpass dbname=testdb sslmode=disable application_name=crosslink_gateway connect_timeout=5"
 	if got := p.dsn(); got != wantDSN {
 		t.Errorf("dsn() = %q, want %q", got, wantDSN)
 	}
 
-	wantURL := "postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable&application_name=crosslink_gateway_migrate"
+	wantURL := "postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable&application_name=crosslink_gateway_migrate&connect_timeout=5"
 	if got := p.dsnURL(); got != wantURL {
 		t.Errorf("dsnURL() = %q, want %q", got, wantURL)
 	}

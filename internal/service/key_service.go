@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/crosslink/internal/crypto"
@@ -30,16 +31,48 @@ var ErrAuthUnavailable = errors.New("auth backend unavailable")
 const authCachePrefix = "auth:key:"
 const authCacheTTL = 60 * time.Second
 
+// keyHashRepo narrows the hash-repository surface KeyService touches so the
+// cold-key lookup bound is unit-testable with a hanging fake (r78e follow-up,
+// same widening pattern as the r78 team/org repo interfaces).
+type keyHashRepo interface {
+	GetKeyByHash(ctx context.Context, hash string) (*model.APIKey, error)
+	FindAnyByHash(ctx context.Context, hash string) (*model.APIKeyHash, error)
+	ListByAPIKeyID(ctx context.Context, apiKeyID int64) ([]model.APIKeyHash, error)
+}
+
 type KeyService struct {
 	repo     *repository.APIKeyRepo
-	hashRepo *repository.APIKeyHashRepo
+	hashRepo keyHashRepo
 	db       *gorm.DB
 	crypto   crypto.CryptoProvider
 	rdb      redis.Cmdable
+	// authLookupTimeout bounds the cold-key DB round trips (hash lookup and
+	// the once-daily last_used_at write). Without it a blackhole DB (accept,
+	// never answer) holds the admission slot until the CLIENT hangs up —
+	// measured 15s at the curl cap in r78e. 0 = default 2s. Latency bound
+	// only: the timeout surfaces as ErrAuthUnavailable -> typed 503,
+	// admission stays fail-closed.
+	authLookupTimeout atomic.Int64
 }
 
 func NewKeyService(repo *repository.APIKeyRepo, hashRepo *repository.APIKeyHashRepo, db *gorm.DB, cp crypto.CryptoProvider, rdb redis.Cmdable) *KeyService {
 	return &KeyService{repo: repo, hashRepo: hashRepo, db: db, crypto: cp, rdb: rdb}
+}
+
+// SetAuthLookupTimeout installs the per-lookup bound (positive values only;
+// wired from gateway.auth_lookup_timeout in app assembly).
+func (s *KeyService) SetAuthLookupTimeout(d time.Duration) {
+	if d > 0 {
+		s.authLookupTimeout.Store(int64(d))
+	}
+}
+
+func (s *KeyService) lookupCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	lt := time.Duration(s.authLookupTimeout.Load())
+	if lt <= 0 {
+		lt = 2 * time.Second
+	}
+	return context.WithTimeout(ctx, lt)
 }
 
 type CreateKeyInput struct {
@@ -179,8 +212,20 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 		}
 	}
 
-	key, err := s.hashRepo.GetKeyByHash(ctx, keyHash)
+	lctx, cancel := s.lookupCtx(ctx)
+	key, err := s.hashRepo.GetKeyByHash(lctx, keyHash)
+	// ctxErr is sampled BEFORE cancel(): cancel() itself plants Canceled,
+	// which would misclassify a genuine in-bound miss as an outage (503)
+	// and make the legacy SM3->SHA256 fallback unreachable.
+	ctxErr := lctx.Err()
+	cancel()
 	if err != nil {
+		if ctxErr != nil {
+			// Lookup bound hit (blackhole DB) or parent canceled: same typed
+			// 503 class as any other backend failure — fail-closed, no
+			// credential verdict.
+			return nil, fmt.Errorf("%w: lookup key by hash: %v", ErrAuthUnavailable, ctxErr)
+		}
 		if !errors.Is(err, repository.ErrHashNotFound) {
 			// Infrastructure failure (repo/connection error), NOT a bad key.
 			return nil, fmt.Errorf("%w: lookup key by hash: %v", ErrAuthUnavailable, err)
@@ -189,9 +234,12 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 		if s.crypto.Algorithms().Hash == crypto.AlgoSM3 {
 			legacyHash := sha256.Sum256([]byte(rawKey))
 			sha256Hex := hex.EncodeToString(legacyHash[:])
-			key, err = s.hashRepo.GetKeyByHash(ctx, sha256Hex)
+			lctx2, cancel2 := s.lookupCtx(ctx)
+			key, err = s.hashRepo.GetKeyByHash(lctx2, sha256Hex)
+			ctxErr2 := lctx2.Err()
+			cancel2()
 			if err != nil {
-				if errors.Is(err, repository.ErrHashNotFound) {
+				if ctxErr2 == nil && errors.Is(err, repository.ErrHashNotFound) {
 					return nil, repository.ErrKeyNotFound
 				}
 				return nil, fmt.Errorf("%w: lookup key by hash (legacy): %v", ErrAuthUnavailable, err)
@@ -206,12 +254,20 @@ func (s *KeyService) Validate(ctx context.Context, rawKey string) (*model.APIKey
 		return nil, ErrKeyExpired
 	}
 
-	// Update last_used_at once per day (date-level granularity)
+	// Update last_used_at once per day (date-level granularity). Bounded by
+	// the same lookup timeout: a hung DB must not stretch the cold-key path
+	// past the bound (worst case the write is skipped until tomorrow's first
+	// request — a stats nicety, never an admission/billing input).
 	now := time.Now()
 	if key.LastUsedAt == nil || key.LastUsedAt.UTC().Format("2006-01-02") != now.UTC().Format("2006-01-02") {
 		today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-		s.db.WithContext(ctx).Model(key).Update("last_used_at", today)
-		key.LastUsedAt = &today
+		lctx, cancel := s.lookupCtx(ctx)
+		if err := s.db.WithContext(lctx).Model(key).Update("last_used_at", today).Error; err != nil {
+			slog.Warn("last_used_at update skipped: db lookup bound or failure", "error", err)
+		} else {
+			key.LastUsedAt = &today
+		}
+		cancel()
 	}
 
 	// Cache the result

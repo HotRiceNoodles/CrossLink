@@ -265,6 +265,21 @@ type GatewayConfig struct {
 	// cache / typed 503 path fast instead of holding a slot for the dial
 	// timeout. Default 2s. Env: CL_GATEWAY_RESOLVE_LOOKUP_TIMEOUT.
 	ResolveLookupTimeout string `mapstructure:"resolve_lookup_timeout"`
+	// AuthLookupTimeout bounds the cold-key DB round trips in
+	// KeyService.Validate (hash lookup + once-daily last_used_at write).
+	// r78e measured the unbounded form: a blackhole DB (accepts, never
+	// answers) held the request until the client hung up (15s curl cap).
+	// The bound surfaces as ErrAuthUnavailable -> typed 503 fail-closed;
+	// latency only, never widens admission. Default 2s. Env:
+	// CL_GATEWAY_AUTH_LOOKUP_TIMEOUT.
+	AuthLookupTimeout string `mapstructure:"auth_lookup_timeout"`
+	// ModelConfigLookupTimeout bounds the semantic-cache middleware's
+	// provider_models config lookup (per-model cache TTL/disabled flags),
+	// which runs BEFORE the router's bounded resolver on the non-stream
+	// path. On bound the middleware keeps the default cache policy and the
+	// bounded resolver still fail-closes admission. Default 2s. Env:
+	// CL_GATEWAY_MODEL_CONFIG_LOOKUP_TIMEOUT.
+	ModelConfigLookupTimeout string `mapstructure:"model_config_lookup_timeout"`
 	// CircuitProbePath is where the circuit prober looks for a models list
 	// ("/models" OpenAI-style). A 2xx there closes an open circuit directly;
 	// any other outcome falls back to a 1-token real chat probe. Empty string
@@ -735,6 +750,11 @@ func setDefaults(v *viper.Viper) {
 	// the two above (unregistered env is silently inert under AutomaticEnv).
 	v.SetDefault("gateway.budget_metadata_lookup_timeout", "2s")
 	v.SetDefault("gateway.resolve_lookup_timeout", "2s")
+	// r78e follow-up bounds: the two remaining unbounded request-path DB
+	// lookups (auth cold-key hash lookup; semantic-cache provider_models
+	// config lookup), registered env-only keys like the two above.
+	v.SetDefault("gateway.auth_lookup_timeout", "2s")
+	v.SetDefault("gateway.model_config_lookup_timeout", "2s")
 	// Registered so CL_GATEWAY_BUDGET_REAP_INTERVAL env-only overrides are honored
 	// (template gap found by the 2026-10-22 param audit: past rounds set it via
 	// yaml only; the env path was silently inert without registration).

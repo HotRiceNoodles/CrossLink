@@ -71,6 +71,16 @@ type CacheService struct {
 	modelCache    sync.Map
 
 	statsScript *redis.Script
+
+	// modelConfigReader isolates the single provider_models lookup so its
+	// bound is unit-testable without a live DB (r78e: fourth unbounded
+	// request-path DB call — the semantic-cache middleware queries model
+	// cache TTL/disabled flags BEFORE the router's bounded resolver).
+	// modelCfgTimeout bounds it; 0 = default 2s. On bound/error the method
+	// returns (0,false) = default cache policy — admission is still enforced
+	// downstream by the bounded resolver, so this is a latency bound only.
+	modelConfigReader func(ctx context.Context, modelName string) (*model.ProviderModel, error)
+	modelCfgTimeout   atomic.Int64
 }
 
 func NewCacheService(rdb *redis.Client, db *gorm.DB, cfg config.CacheConfig) *CacheService {
@@ -102,7 +112,25 @@ func NewCacheService(rdb *redis.Client, db *gorm.DB, cfg config.CacheConfig) *Ca
 		return {tostring(liveCount), tostring(totalSize), unpack(models)}
 	`)
 
+	s.modelConfigReader = func(ctx context.Context, modelName string) (*model.ProviderModel, error) {
+		var pm model.ProviderModel
+		if err := s.db.WithContext(ctx).
+			Where("model_name = ? AND status = 1", modelName).
+			First(&pm).Error; err != nil {
+			return nil, err
+		}
+		return &pm, nil
+	}
+
 	return s
+}
+
+// SetModelConfigLookupTimeout installs the provider_models lookup bound
+// (positive values only; wired from gateway.model_config_lookup_timeout).
+func (s *CacheService) SetModelConfigLookupTimeout(d time.Duration) {
+	if d > 0 {
+		s.modelCfgTimeout.Store(int64(d))
+	}
 }
 
 func (s *CacheService) IsEnabled() bool                  { return s.enabled.Load() }
@@ -129,10 +157,18 @@ func (s *CacheService) GetModelCacheConfig(ctx context.Context, modelName string
 		s.modelCache.Delete(modelName)
 	}
 
-	var pm model.ProviderModel
-	if err := s.db.WithContext(ctx).
-		Where("model_name = ? AND status = 1", modelName).
-		First(&pm).Error; err != nil {
+	// Bounded lookup (r78e: previously this dial had no own deadline and a
+	// blackhole DB held the request until the client hung up). Any error —
+	// including the bound — keeps the previous (0,false) semantics: default
+	// cache policy, admission still fail-closed at the bounded resolver.
+	lt := time.Duration(s.modelCfgTimeout.Load())
+	if lt <= 0 {
+		lt = 2 * time.Second
+	}
+	lctx, cancel := context.WithTimeout(ctx, lt)
+	pm, err := s.modelConfigReader(lctx, modelName)
+	cancel()
+	if err != nil {
 		return 0, false
 	}
 

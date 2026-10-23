@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -224,9 +225,25 @@ var pgApplicationName = func() string {
 	return "crosslink_gateway"
 }()
 
+// pgConnectTimeout bounds EVERY postgres dial (boot open, pool refill,
+// migration, advisory lock). F-bb (r78/r78e): without it lib/pq waits
+// indefinitely for the startup message of a silent accept-hold listener, so
+// a blackhole DB at BOOT hung the gateway before it could report anything.
+// With it the boot dial fails in bounded time and the process exits with a
+// clear "open database" error (fail-fast restart loop) instead of hanging.
+// Default 5s; override via CL_DB_CONNECT_TIMEOUT (seconds, integers only).
+var pgConnectTimeout = func() string {
+	if v := os.Getenv("CL_DB_CONNECT_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 300 {
+			return v
+		}
+	}
+	return "5"
+}()
+
 func (p *PostgresDialect) dsn() string {
-	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s application_name=%s",
-		p.cfg.Host, p.cfg.Port, p.cfg.User, p.cfg.Password, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName)
+	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s application_name=%s connect_timeout=%s",
+		p.cfg.Host, p.cfg.Port, p.cfg.User, p.cfg.Password, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName, pgConnectTimeout)
 	if p.cfg.Timezone != "" {
 		s += fmt.Sprintf(" timezone=%s", p.cfg.Timezone)
 	}
@@ -235,8 +252,8 @@ func (p *PostgresDialect) dsn() string {
 
 // dsnURL returns the postgres:// URL format for golang-migrate.
 func (p *PostgresDialect) dsnURL() string {
-	s := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s&application_name=%s",
-		p.cfg.User, p.cfg.Password, p.cfg.Host, p.cfg.Port, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName+"_migrate")
+	s := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s&application_name=%s&connect_timeout=%s",
+		p.cfg.User, p.cfg.Password, p.cfg.Host, p.cfg.Port, p.cfg.DBName, p.cfg.SSLMode, pgApplicationName+"_migrate", pgConnectTimeout)
 	if p.cfg.Timezone != "" {
 		s += fmt.Sprintf("&timezone=%s", p.cfg.Timezone)
 	}

@@ -182,6 +182,18 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		teamCache.SetLookupTimeout(d)
 		orgCache.SetLookupTimeout(d)
 	}
+	// r78e follow-up: the two remaining UNBOUNDED request-path DB lookups —
+	// auth cold-key hash lookup (+ last_used_at write) in KeyService, and the
+	// semantic-cache middleware's provider_models config lookup, which runs
+	// before the bounded resolver. Same bound pattern as above: latency-only,
+	// typed fail-closed unchanged (ErrAuthUnavailable 503 / default cache
+	// policy + resolver rejection), no admission or billing widening.
+	if d, err := time.ParseDuration(cfg.Gateway.AuthLookupTimeout); err == nil && d > 0 {
+		svcs.KeySvc.SetAuthLookupTimeout(d)
+	}
+	if d, err := time.ParseDuration(cfg.Gateway.ModelConfigLookupTimeout); err == nil && d > 0 {
+		svcs.CacheSvc.SetModelConfigLookupTimeout(d)
+	}
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 
