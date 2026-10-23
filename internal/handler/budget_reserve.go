@@ -41,7 +41,26 @@ func reserveBudgetForRequest(c *gin.Context, budgetSvc *service.BudgetService, i
 		// reservation. Actual cost is still reported by ReportBudgetUsage.
 		return true
 	}
-	res, exceededScope := budgetSvc.ReserveForRequest(c.Request.Context(), scopes, estimate, c.GetString("request_id"))
+	res, exceededScope, enforcErr := budgetSvc.ReserveForRequestE(c.Request.Context(), scopes, estimate, c.GetString("request_id"))
+	if enforcErr != nil {
+		// Dependency outage, NOT a quota verdict: a 429 here would
+		// misreport enforcement downtime as client-side quota exhaustion
+		// (r78u review). Typed 503, same family as
+		// budget_metadata_unavailable. Levels reserved before the failure
+		// were already refunded inside ReserveForRequestE.
+		c.Set("budget_enforcement_unavailable", true)
+		c.Set("skip_call_count", true)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "budget_enforcement_unavailable",
+				"message": "budget counters are temporarily unavailable; request rejected rather than admitted without an atomic reservation (fail-closed)",
+				"scope":   exceededScope,
+			},
+		})
+		c.Abort()
+		return false
+	}
 	if exceededScope != "" {
 		// A higher level rejected: lower levels were already refunded inside
 		// ReserveForRequest. Do NOT stash reservations — the request is aborted

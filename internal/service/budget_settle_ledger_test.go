@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/crosslink/internal/model"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
 )
 
 // r34 suite: the Redis-PERSISTENT settle ledger (crash/restart-safe
@@ -239,6 +240,19 @@ func TestExpiredMark_InterleaveStaysExact(t *testing.T) {
 	}
 
 	bk, rk, sk := markedKeys("key", "5", pk)
+	shk := budgetShadowKey("key", "5", pk)
+	// r78v: the stale hold is QUARANTINED (not refunded — the reaper cannot
+	// attribute the strand), so budget = c + e with shadow = e.
+	if got := getF(t, rdb, bk); got != c+e {
+		t.Fatalf("budget = %v, want %v (cost + quarantined hold)", got, c+e)
+	}
+	if got := getF(t, rdb, shk); got != e {
+		t.Fatalf("shadow = %v, want %v (quarantined estimate)", got, e)
+	}
+	// 7. Convergence: the row-aware near pass replays the row's settle —
+	// duplicate mode → release() refunds the quarantine from the shadow
+	// side — and the bill lands EXACTLY on the single ledger row.
+	s.SettleScope(ctx, "key", "5", "monthly", pk, req, c)
 	if got := getF(t, rdb, bk); got != c {
 		t.Fatalf("budget = %v, want %v (exact, single bill)", got, c)
 	}
@@ -247,6 +261,9 @@ func TestExpiredMark_InterleaveStaysExact(t *testing.T) {
 	}
 	if got := getF(t, rdb, rk); got != 0 {
 		t.Fatalf("resv = %v, want 0", got)
+	}
+	if got := getF(t, rdb, shk); got != 0 {
+		t.Fatalf("shadow = %v, want 0 (quarantine netted by the replay)", got)
 	}
 	if rdb.Exists(ctx, resvMarkKey("key", "5", req)).Val() != 0 {
 		t.Fatal("reservation mark still live")
@@ -270,7 +287,7 @@ func TestCalibration_SettledRaiseHealsLostSettles(t *testing.T) {
 	bk, rk, sk := markedKeys("team", fmt.Sprintf("%d", tm.ID), pk)
 
 	// Round 1 with DB sum 10 → migration seeds settled=10.
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
 		t.Fatalf("round 1: %v", err)
 	}
 	// Simulate a lost settle cohort: settled lags to 8.75 while DB says 10.
@@ -279,7 +296,7 @@ func TestCalibration_SettledRaiseHealsLostSettles(t *testing.T) {
 	rdb.Set(ctx, rk, 0.0, time.Hour)
 
 	// Round 2 with the same DB sum: settled raised back to the ledger sum.
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
 	if got := getF(t, rdb, sk); got != 10 {
@@ -288,7 +305,7 @@ func TestCalibration_SettledRaiseHealsLostSettles(t *testing.T) {
 
 	// Round 3 with a SMALLER snapshot (cannot legitimately happen — SUM is
 	// monotone — but the raise-only rule must hold anyway: never lowered).
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 9.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 9.0, 100); err != nil {
 		t.Fatalf("round 3: %v", err)
 	}
 	if got := getF(t, rdb, sk); got != 10 {
@@ -384,15 +401,22 @@ func TestDBAuditReplay_ConvergesArbitraryUndercount(t *testing.T) {
 		t.Fatalf("reap = %d, want 1", n)
 	}
 	// Recovery pass 2: calibration round forces budget AND settled to SUM(DB).
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
 		t.Fatalf("calibration round: %v", err)
 	}
 
-	if got := getF(t, rdb, bk); got != 10 {
-		t.Fatalf("budget after audit replay = %v, want 10 (DB sum)", got)
+	// r78v: the phantom hold is UNPROVABLE (its recovery tasks were lost),
+	// so the round raises settled/budget to the DB sum but the quarantine
+	// rides along — budget = 10 + shadow(2). It is NOT converted into free
+	// headroom; a late settle or certifying row round would net it.
+	if got := getF(t, rdb, bk); got != 12 {
+		t.Fatalf("budget after audit replay = %v, want 12 (DB sum 10 + quarantined 2)", got)
 	}
 	if got := getF(t, rdb, sk); got != 10 {
 		t.Fatalf("settled after audit replay = %v, want 10 (DB sum)", got)
+	}
+	if got := getF(t, rdb, budgetShadowKey("team", tk, pk)); got != 2 {
+		t.Fatalf("shadow after audit replay = %v, want 2 (unprovable hold kept)", got)
 	}
 	if got := getF(t, rdb, rk); got != 0 {
 		t.Fatalf("resv after reaper = %v, want 0", got)
@@ -438,24 +462,32 @@ func TestCrashAfterMemoryFallback_RecoversViaReaperAndRaise(t *testing.T) {
 	mr.SetError("")
 	mr.FastForward(3 * time.Second)
 
-	// Post-crash recovery on a fresh instance: reaper removes the expired
-	// reservation; the calibration DB-raise then carries the true cost from
-	// the usage_logs row (modeled here by the calibration fixture).
+	// Post-crash recovery on a fresh instance: the reaper QUARANTINES the
+	// expired hold (r78v). The in-memory task may be re-driven by the
+	// re-armed tier worker (a fresh BudgetService construction re-arms it)
+	// at any moment after Redis returns — whichever of the tier worker or
+	// the explicit settle below lands first, the end state is the SAME
+	// exact single bill (settledmark + shadowmark are idempotency guards).
 	bs := NewBudgetServiceWithMarkerTTL(rdb, time.Hour)
 	if reaped := bs.ReapExpiredReservations(ctx, time.Now().Add(5*time.Second)); reaped != 1 {
 		t.Fatalf("reap = %d, want 1", reaped)
 	}
 	bk, rk, sk := markedKeys("key", "8", pk)
-	if got := getF(t, rdb, bk); got != 0 {
-		t.Fatalf("budget after reap = %v, want 0 (reservation fully released; ledger row restores true cost via DB raise)", got)
-	}
-	if got := getF(t, rdb, rk); got != 0 {
-		t.Fatalf("resv after reap = %v, want 0", got)
+	// Modeled recovery: the settle task re-driven (tier-1 ledger replay /
+	// WAL replay). Idempotent with any tier-worker racing us.
+	bs.SettleScope(ctx, "key", "8", "monthly", pk, req, e)
+	require.Eventually(t, func() bool {
+		b, berr := rdb.Get(ctx, bk).Float64()
+		r, _ := rdb.Get(ctx, rk).Float64()
+		sh, _ := rdb.Get(ctx, budgetShadowKey("key", "8", pk)).Float64()
+		return berr == nil && b == e && r == 0 && sh == 0
+	}, 3*time.Second, 20*time.Millisecond, "quarantine must net to the exact single bill")
+	if got := getF(t, rdb, sk); got != e {
+		t.Fatalf("settled after recovery = %v, want %v (single bill)", got, e)
 	}
 	if rdb.Exists(ctx, resvMarkKey("key", "8", req)).Val() != 0 {
 		t.Fatal("mark survived expiry")
 	}
-	_ = sk
 }
 
 // FINDING-B regression (r36 MONITOR root cause): a settle whose scope has NO

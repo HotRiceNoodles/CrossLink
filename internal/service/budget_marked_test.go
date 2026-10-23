@@ -162,16 +162,19 @@ func TestMarkedReserve_ExceededRollsBackMark(t *testing.T) {
 	}
 }
 
-// Orphan reaper: an expired unsettled reservation (crashed request) is
-// removed from budget/resv — no permanent over-count; the crashed request's
-// ledger cost is restored by the DB-based calibration raise.
-func TestReapExpiredReservations_OrphanRemoved(t *testing.T) {
+// Orphan reaper (r78v contract): an expired unsettled reservation (crashed
+// request) is QUARANTINED — resv moves into budgetshadow, budget KEEPS
+// counting it (an expired hold is a legal TTL refund but not free headroom:
+// the crashed owner may already have consumed upstream). A late settle nets
+// against the quarantine exactly once (see budget_reap_shadow_test.go).
+func TestReapExpiredReservations_OrphanQuarantined(t *testing.T) {
 	s, rdb, mr := newMarkedRedis(t)
 	ctx := context.Background()
 	pk := PeriodKey("monthly")
 
 	s.ReserveScopeMarked(ctx, "key", "1", "monthly", pk, "req-crash", 5, 1000)
 	bk, rk, _ := markedKeys("key", "1", pk)
+	shk := budgetShadowKey("key", "1", pk)
 
 	// Simulate marker expiry (TTL lapsed) with the zset entry due.
 	mr.Del(resvMarkKey("key", "1", "req-crash"))
@@ -181,11 +184,17 @@ func TestReapExpiredReservations_OrphanRemoved(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("reaped = %d, want 1", n)
 	}
-	if got := getF(t, rdb, bk); got != 0 {
-		t.Fatalf("budget after reap = %v, want 0 (orphan removed)", got)
+	if got := getF(t, rdb, bk); got != 5 {
+		t.Fatalf("budget after reap = %v, want 5 (quarantined, NOT refunded)", got)
 	}
 	if got := getF(t, rdb, rk); got != 0 {
 		t.Fatalf("resv after reap = %v, want 0", got)
+	}
+	if got := getF(t, rdb, shk); got != 5 {
+		t.Fatalf("shadow after reap = %v, want 5", got)
+	}
+	if rdb.Exists(ctx, shadowMarkKey("key", "1", "req-crash")).Val() != 1 {
+		t.Fatal("shadowmark token must exist for exactly-once clearing")
 	}
 	if c, _ := rdb.ZCard(ctx, budgetResvExpZSet).Result(); c != 0 {
 		t.Fatalf("zset not cleaned: %d", c)
@@ -197,8 +206,8 @@ func TestReapExpiredReservations_OrphanRemoved(t *testing.T) {
 	if n2 != 0 {
 		t.Fatalf("live reservation reaped: %d", n2)
 	}
-	if got := getF(t, rdb, bk); got != 2 {
-		t.Fatalf("live reservation disturbed: budget = %v, want 2", got)
+	if got := getF(t, rdb, bk); got != 7 {
+		t.Fatalf("live reservation disturbed: budget = %v, want 7 (5 shadow + 2 live)", got)
 	}
 }
 
@@ -256,7 +265,7 @@ func TestCalibration_MigratesThenChecksInvariant(t *testing.T) {
 	bk, rk, sk := markedKeys("team", fmt.Sprintf("%d", tm.ID), pk)
 	rdb.Set(ctx, bk, 12.5, time.Hour)
 
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
 	// raise-only write: budget 12.5 stays (above snapshot 10).
@@ -273,7 +282,7 @@ func TestCalibration_MigratesThenChecksInvariant(t *testing.T) {
 
 	// Second round (same owner): invariant holds (12.5 == 10 + 2.5) — values
 	// untouched, migration not repeated (SetNX already consumed).
-	if err := a.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
+	if err := a.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 100); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if got := getF(t, rdb, sk); got != 10 {

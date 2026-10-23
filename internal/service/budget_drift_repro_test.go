@@ -25,7 +25,7 @@ import (
 
 type driftSnap struct {
 	step        string
-	b, s, r     float64
+	b, s, r, sh float64
 	marks, zset int
 	drift       float64
 }
@@ -36,17 +36,18 @@ func snapDrift(t *testing.T, rdb *redis.Client, step, scope, id, pk string) drif
 	b, _ := rdb.Get(context.Background(), bk).Float64()
 	s, _ := rdb.Get(context.Background(), sk).Float64()
 	r, _ := rdb.Get(context.Background(), rk).Float64()
+	sh, _ := rdb.Get(context.Background(), budgetShadowKey(scope, id, pk)).Float64()
 	marks := 0
 	iter := rdb.Scan(context.Background(), 0, "resvmark:*", 100).Iterator()
 	for iter.Next(context.Background()) {
 		marks++
 	}
 	z := int(rdb.ZCard(context.Background(), budgetResvExpZSet).Val())
-	return driftSnap{step: step, b: b, s: s, r: r, marks: marks, zset: z, drift: b - s - r}
+	return driftSnap{step: step, b: b, s: s, r: r, sh: sh, marks: marks, zset: z, drift: b - s - r - sh}
 }
 
 func (d driftSnap) String() string {
-	return fmt.Sprintf("%-30s b=%.6f s=%.6f r=%.6f drift=%+.6f marks=%d zset=%d", d.step, d.b, d.s, d.r, d.drift, d.marks, d.zset)
+	return fmt.Sprintf("%-30s b=%.6f s=%.6f r=%.6f sh=%.6f drift=%+.6f marks=%d zset=%d", d.step, d.b, d.s, d.r, d.sh, d.drift, d.marks, d.zset)
 }
 
 func logSnaps(t *testing.T, snaps ...driftSnap) {
@@ -55,12 +56,17 @@ func logSnaps(t *testing.T, snaps ...driftSnap) {
 	}
 }
 
+// quiescenceChecks asserts the r78v contract: settled==ledger exactly and
+// budget==ledger+shadow — quarantined expired holds (r78v: unprovable
+// consumption) stay counted in budget until a late settle or a certifying
+// calibration round nets them; only then does shadow fall to 0 and budget
+// converge to the ledger.
 func quiescenceChecks(t *testing.T, s driftSnap, wantSpent float64, label string) {
 	t.Helper()
 	require.Equal(t, 0, s.marks, "%s: no pending orders expected: %s", label, s)
 	require.InDelta(t, 0, s.r, 1e-9, "%s: resv must be 0 at quiescence: %s", label, s)
 	require.InDelta(t, wantSpent, s.s, 1e-9, "%s: settled==ledger: %s", label, s)
-	require.InDelta(t, wantSpent, s.b, 1e-9, "%s: budget==ledger: %s", label, s)
+	require.InDelta(t, wantSpent+s.sh, s.b, 1e-9, "%s: budget==ledger+shadow: %s", label, s)
 }
 
 // T1 — r35-negative shape: first-sight calibration runs while a crash
@@ -91,7 +97,7 @@ func TestDriftRepro_T1_MigrationDuringFaultLag(t *testing.T) {
 	require.InDelta(t, 0, s0.drift, 1e-9, "reserve must preserve invariant")
 
 	// 3. first-sight calibration round sees ledger spent=10 (crash row).
-	require.NoError(t, cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 1000))
+	require.NoError(t, cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 1000))
 	s1 := snapDrift(t, rdb, "after round spent=10", "team", id, pk)
 	logSnaps(t, s1)
 
@@ -101,7 +107,7 @@ func TestDriftRepro_T1_MigrationDuringFaultLag(t *testing.T) {
 	logSnaps(t, s2)
 
 	// Round 2 with the full ledger truth 13 (settles+reconcile converged).
-	require.NoError(t, cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 13.0, 1000))
+	require.NoError(t, cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 13.0, 1000))
 	s3 := snapDrift(t, rdb, "after round spent=13", "team", id, pk)
 	logSnaps(t, s3)
 
@@ -124,7 +130,7 @@ func TestDriftRepro_T2_LostSettleRaiseThenReap(t *testing.T) {
 	pk := PeriodKey("monthly")
 
 	// Round 1: quiet first-sight at spent=10 (all settles applied).
-	require.NoError(t, cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 1000))
+	require.NoError(t, cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 10.0, 1000))
 	s0 := snapDrift(t, rdb, "round1 spent=10", "team", id, pk)
 	logSnaps(t, s0)
 
@@ -136,14 +142,15 @@ func TestDriftRepro_T2_LostSettleRaiseThenReap(t *testing.T) {
 
 	// Round 2 with spent=12: budget-raise and settled-raise run against a
 	// namespace that still holds a live reservation.
-	require.NoError(t, cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", 12.0, 1000))
+	require.NoError(t, cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", 12.0, 1000))
 	s2 := snapDrift(t, rdb, "round2 spent=12", "team", id, pk)
 	logSnaps(t, s2)
 
 	// Mark TTL expires (the marker outlives any legitimate request); the
-	// reaper then reclaims the orphan reservation. FastForward expires the
-	// mark key on the virtual clock; the passed `now` must also cover the
-	// zset score horizon (reserve-time + markerTTL).
+	// reaper then QUARANTINES the orphan (r78v): resv -> shadow, budget
+	// keeps counting it (unprovable consumption is not free headroom).
+	// This test uses the row-less sync calibration, so nothing certifies
+	// the row and the quarantine legitimately persists (conservative).
 	mr.FastForward(2*time.Hour + time.Minute)
 	reaped := bs.ReapExpiredReservations(ctx, time.Now().Add(3*time.Hour))
 	require.Equal(t, 1, reaped)
@@ -219,13 +226,13 @@ func TestDriftRepro_T4_DualInstanceSettleVsCalibration(t *testing.T) {
 			defer wg.Done()
 			// Concurrent calibration round with the ledger truth so far
 			// (deterministic injection; values only grow).
-			_ = cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", float64(i), 1000)
+			_ = cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", float64(i), 1000)
 		}()
 	}
 	wg.Wait()
 	rdb.Set(ctx, calibrationLockKey, "tok", time.Minute)
 	// Final round with the full ledger truth (N rows of cost 1).
-	require.NoError(t, cs.syncRedisAndSnapshot(ctx, "tok", "team", tm.ID, pk, "monthly", float64(N), 1000))
+	require.NoError(t, cs.calibrateTargetSync(ctx, "tok", "team", tm.ID, pk, "monthly", float64(N), 1000))
 	q := snapDrift(t, rdb, "quiescent", "team", id, pk)
 	logSnaps(t, q)
 	quiescenceChecks(t, q, N, "T4")
@@ -306,7 +313,8 @@ func TestDriftRepro_T6_ConcurrentReapExactlyOnce(t *testing.T) {
 	sn := snapDrift(t, rdb, "after concurrent reap", "team", "901", pk)
 	logSnaps(t, sn)
 	require.InDelta(t, 0, sn.r, 1e-9, "resv released exactly once: %s", sn)
-	require.InDelta(t, 0, sn.b, 1e-9, "budget decremented exactly once: %s", sn)
+	require.InDelta(t, 5, sn.b, 1e-9, "budget KEEPS the quarantined estimate (no free headroom, r78v): %s", sn)
+	require.InDelta(t, 5, sn.sh, 1e-9, "shadow quarantined exactly once across the replica race: %s", sn)
 }
 
 // T7 — the independent loop fires on its interval and removes only EXPIRED
@@ -344,7 +352,8 @@ func TestDriftRepro_T7_ReapLoopFiresAndSparesLive(t *testing.T) {
 	q := snapDrift(t, rdb, "after expiry+loop", "key", "902", pk)
 	logSnaps(t, q)
 	require.InDelta(t, 0, q.r, 1e-9)
-	require.InDelta(t, 0, q.b, 1e-9)
+	require.InDelta(t, 3, q.b, 1e-9, "budget keeps the quarantined hold (r78v)")
+	require.InDelta(t, 3, q.sh, 1e-9, "hold moved into shadow")
 }
 
 // T8 — auditability (r47 forensics): the usage row's request_id must carry

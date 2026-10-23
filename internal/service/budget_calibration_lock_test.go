@@ -119,24 +119,29 @@ func TestCalibrationLock_LeaseExpiryAndStaleHolderWriteRejected(t *testing.T) {
 	require.NotNil(t, newRelease)
 	require.NotEqual(t, staleToken, newToken)
 
-	// …and the stale holder's calibrated write is REJECTED (res == -1 path).
-	lerr := a.syncRedisAndSnapshot(ctx, staleToken, "team", 1, PeriodKey("monthly"), "monthly", 42.0, 100)
+	// …and the stale holder's calibrated page apply is REJECTED (res==-1
+	// path) — atomic raise+certify means the rejection leaves BOTH the
+	// counter and the row's settledmark untouched.
+	tm := int64(1)
+	require.NoError(t, db.Create(&model.UsageLog{RequestID: "stale-1", TeamID: &tm, Cost: 42.0, Currency: "CNY",
+		RouteType: "openai", StatusCode: 200, CreatedAt: time.Now().UTC().Add(-time.Minute)}).Error)
+	start, end := periodBoundaries("monthly")
+	_, lerr := a.calibrateTarget(ctx, staleToken, "team", 1, PeriodKey("monthly"), "monthly", start, end)
 	require.True(t, errors.Is(lerr, ErrCalibrationLockLost), "stale holder write must be rejected, got %v", lerr)
 
-	// The budget counter must be untouched by the rejected write.
+	// The budget counter AND the mark must be untouched by the rejected apply.
 	val, err := a.rdb.Get(ctx, "budget:team:1:"+PeriodKey("monthly")).Result()
 	require.True(t, errors.Is(err, redis.Nil), "rejected write must not create the counter, got %q", val)
+	require.False(t, mr.Exists(settledMarkKey("team", "1", "stale-1")), "rejected apply must not certify the row")
 
-	// The new holder's write goes through.
-	require.NoError(t, b.syncRedisAndSnapshot(ctx, newToken, "team", 1, PeriodKey("monthly"), "monthly", 42.0, 100))
+	// The new holder's page goes through — raise AND mark in one invocation.
+	spent, cerr := b.calibrateTarget(ctx, newToken, "team", 1, PeriodKey("monthly"), "monthly", start, end)
+	require.NoError(t, cerr)
+	require.Equal(t, 42.0, spent)
 	got, err := a.rdb.Get(ctx, "budget:team:1:"+PeriodKey("monthly")).Float64()
 	require.NoError(t, err)
 	require.Equal(t, 42.0, got)
-
-	// Snapshot rows only from the accepted write.
-	var snaps []model.BudgetSnapshot
-	require.NoError(t, db.Find(&snaps).Error)
-	require.Len(t, snaps, 1)
+	require.True(t, mr.Exists(settledMarkKey("team", "1", "stale-1")), "accepted apply must certify the row atomically")
 
 	newRelease()
 	release() // stale token: unlock script is a no-op (ownership mismatch)

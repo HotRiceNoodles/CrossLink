@@ -90,18 +90,29 @@ return {cur, limit, 0, 1}
 `)
 
 // budgetSettleScript: KEYS = [settledmark, resvmark, budget, budgetresv,
-// budgetset, resvexp]; ARGV = [cost, markTTLsec, scope, targetID, reqID,
-// period, pk, budgetTTLsec]. The reaper-zset member is rebuilt INSIDE the
-// script from the mark value (no GET→script race). The mark value carries
-// the reservation's period ("e|pk"; legacy plain-float marks fall back to
-// the settle's pk): a request that crossed a period boundary between
-// admission and settlement must release the reservation under the period
-// it was HELD in and charge the ledger row's period — releasing and
-// charging one period (old behavior) stranded the new period's resv
-// negative forever and froze the old period's headroom until the reaper
-// (drift repro T3, 2026-10-21). Returns 2 for a duplicate settle (no-op),
-// 1 settled-against-landed-reservation, 0 reservation-never-landed (full
-// cost).
+// budgetset, resvexp, budgetshadow, shadowmark]; ARGV = [cost, markTTLsec,
+// scope, targetID, reqID, period, pk, budgetTTLsec]. The reaper-zset member
+// is rebuilt INSIDE the script from the mark value (no GET→script race). The
+// mark value carries the reservation's period ("e|pk"; legacy plain-float
+// marks fall back to the settle's pk): a request that crossed a period
+// boundary between admission and settlement must release the reservation
+// under the period it was HELD in and charge the ledger row's period —
+// releasing and charging one period (old behavior) stranded the new period's
+// resv negative forever and froze the old period's headroom until the reaper
+// (drift repro T3, 2026-10-21).
+//
+// Shadow quarantines (r78v, ruling 2026-10-22: a TTL-expired reservation is
+// a LEGAL refund but NOT free headroom — the crashed owner may already have
+// consumed upstream). The reaper moves an expired hold e from resv into
+// budgetshadow WITHOUT touching budget, so admission keeps counting it; the
+// shadowmark token ("e|pk", TTL = the settle guard window) makes the later
+// clearing exactly-once. A settle that arrives after its hold was reaped
+// nets the actual cost against the quarantine (budget += c-e, shadow -= e)
+// — the mirror of the live-mark path — and a duplicate settle's release()
+// refunds from whichever side still holds e (live resv or shadow).
+// Invariant: budget == settled + resv + shadow.
+// Returns 2 for a duplicate settle (no-op), 1 settled-against-landed-
+// reservation-or-quarantine, 0 reservation-never-landed (full cost).
 var budgetSettleScript = redis.NewScript(`
 local settledmark = KEYS[1]
 local mark = KEYS[2]
@@ -109,27 +120,69 @@ local budget = KEYS[3]
 local resv = KEYS[4]
 local settled = KEYS[5]
 local zset = KEYS[6]
+local shadow = KEYS[7]
+local shadowmark = KEYS[8]
 local c = tonumber(ARGV[1])
 local ttlMark = tonumber(ARGV[2])
 local ttlBudget = tonumber(ARGV[8])
+local function parseMark(m)
+	local bar = string.find(m, '|', 1, true)
+	if bar then
+		return tonumber(string.sub(m, 1, bar - 1)), string.sub(m, bar + 1), string.sub(m, 1, bar - 1)
+	end
+	return tonumber(m), ARGV[7], m
+end
+-- release() refunds a lingering reservation for this request WITHOUT
+-- charging any cost — used on the duplicate path: the cost was already
+-- counted by whoever set settledmark (a normal settle, or a far-page
+-- certificate), but THIS owner's estimate must not strand (X6: resv has
+-- to reconcile with live per-request reserves). With shadow, "lingering"
+-- means EITHER a live mark (classic resv refund) OR a reaper quarantine
+-- (shadowmark): budget counted the hold all along, so both sides refund
+-- budget -= e; exactly-once via the per-token DEL.
+local function release()
+	local m = redis.call('GET', mark)
+	if m then
+		local e, mpk, mstr = parseMark(m)
+		redis.call('DEL', mark)
+		local member = ARGV[3] .. '\31' .. ARGV[4] .. '\31' .. ARGV[5] .. '\31' .. ARGV[6] .. '\31' .. mpk .. '\31' .. mstr
+		redis.call('ZREM', zset, member)
+		if mpk == ARGV[7] then
+			redis.call('INCRBYFLOAT', budget, -e)
+			redis.call('INCRBYFLOAT', resv, -e)
+		else
+			local bOld = 'budget:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+			local rOld = 'budgetresv:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+			redis.call('INCRBYFLOAT', bOld, -e)
+			redis.call('INCRBYFLOAT', rOld, -e)
+		end
+		return
+	end
+	local sm = redis.call('GET', shadowmark)
+	if not sm then
+		return
+	end
+	local e, mpk = parseMark(sm)
+	redis.call('DEL', shadowmark)
+	if mpk == ARGV[7] then
+		redis.call('INCRBYFLOAT', budget, -e)
+		redis.call('INCRBYFLOAT', shadow, -e)
+	else
+		local bOld = 'budget:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		local shOld = 'budgetshadow:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		redis.call('INCRBYFLOAT', bOld, -e)
+		redis.call('INCRBYFLOAT', shOld, -e)
+	end
+end
 if not redis.call('SET', settledmark, '1', 'NX', 'EX', ttlMark) then
+	release()
 	return 2
 end
 redis.call('EXPIRE', settled, ttlBudget)
 redis.call('EXPIRE', resv, ttlBudget)
 local m = redis.call('GET', mark)
 if m then
-	local bar = string.find(m, '|', 1, true)
-	local e, mpk, mstr
-	if bar then
-		e = tonumber(string.sub(m, 1, bar - 1))
-		mpk = string.sub(m, bar + 1)
-		mstr = string.sub(m, 1, bar - 1)
-	else
-		e = tonumber(m)
-		mpk = ARGV[7]
-		mstr = m
-	end
+	local e, mpk, mstr = parseMark(m)
 	redis.call('DEL', mark)
 	local member = ARGV[3] .. '\31' .. ARGV[4] .. '\31' .. ARGV[5] .. '\31' .. ARGV[6] .. '\31' .. mpk .. '\31' .. mstr
 	redis.call('ZREM', zset, member)
@@ -146,25 +199,56 @@ if m then
 	redis.call('INCRBYFLOAT', settled, c)
 	return 1
 end
+local sm = redis.call('GET', shadowmark)
+if sm then
+	-- Late settle after the reaper quarantined the expired hold: net the
+	-- actual cost against the quarantine (mirror of the live-mark path);
+	-- the shadowmark DEL makes the clearing exactly-once even if this
+	-- settle replays after a crash mid-window.
+	local e, mpk = parseMark(sm)
+	redis.call('DEL', shadowmark)
+	if mpk == ARGV[7] then
+		redis.call('INCRBYFLOAT', budget, c - e)
+		redis.call('INCRBYFLOAT', shadow, -e)
+	else
+		local bOld = 'budget:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		local shOld = 'budgetshadow:' .. ARGV[3] .. ':' .. ARGV[4] .. ':' .. mpk
+		redis.call('INCRBYFLOAT', bOld, -e)
+		redis.call('INCRBYFLOAT', shOld, -e)
+		redis.call('INCRBYFLOAT', budget, c)
+	end
+	redis.call('INCRBYFLOAT', settled, c)
+	return 1
+end
 redis.call('INCRBYFLOAT', budget, c)
 redis.call('INCRBYFLOAT', settled, c)
 return 0
 `)
 
-// budgetReapOrphanScript removes an EXPIRED reservation (crashed request,
-// no settlement will ever arrive): budget/resv -= e, zset cleanup. The
+// budgetReapOrphanScript quarantines an EXPIRED reservation (crashed
+// request) instead of refunding it (r78v, ruling 2026-10-22): an expired
+// hold is a legal TTL refund but NOT free headroom — the crashed owner may
+// already have consumed upstream, and nothing can prove it did not. So the
+// estimate moves resv -> budgetshadow while budget KEEPS counting it
+// (admission unchanged); a shadowmark token ("e|pk", TTL = settle guard
+// window) lets a late settle net its actual cost against the quarantine
+// exactly once (budgetSettleScript). If no settle ever arrives the amount
+// stays counted — the conservative bound for unprovable consumption. The
 // ZREM-FIRST claim gives exactly-once semantics ACROSS REPLICAS: with the
 // independent reap loop (2026-10-21) two gateways may reap concurrently,
 // and "mark absent" alone cannot distinguish not-yet-reaped from
-// already-reaped — only the ZREM winner decrements. A mark still present
+// already-reaped — only the ZREM winner quarantines. A mark still present
 // means the score ran ahead of the TTL — caller re-schedules.
-// KEYS = [resvmark, budget, budgetresv, resvexp]; ARGV = [e, member].
-// Returns 1 reaped (and claimed), 0 lost-race-or-still-live.
+// KEYS = [resvmark, budget, budgetresv, resvexp, budgetshadow, shadowmark];
+// ARGV = [e, member, shadowAggTTLsec, pk, shadowmarkTTLsec].
+// Returns 1 quarantined (and claimed), 0 lost-race-or-still-live.
 var budgetReapOrphanScript = redis.NewScript(`
 local mark = KEYS[1]
 local budget = KEYS[2]
 local resv = KEYS[3]
 local zset = KEYS[4]
+local shadow = KEYS[5]
+local shadowmark = KEYS[6]
 local e = tonumber(ARGV[1])
 local member = ARGV[2]
 if redis.call('EXISTS', mark) == 1 then
@@ -173,13 +257,29 @@ end
 if redis.call('ZREM', zset, member) == 0 then
 	return 0
 end
-redis.call('INCRBYFLOAT', budget, -e)
+redis.call('SET', shadowmark, ARGV[1] .. '|' .. ARGV[4], 'NX', 'EX', tonumber(ARGV[5]))
 redis.call('INCRBYFLOAT', resv, -e)
+redis.call('INCRBYFLOAT', shadow, e)
+redis.call('EXPIRE', shadow, tonumber(ARGV[3]))
 return 1
 `)
 
 func resvMarkKey(scope, targetID, reqID string) string {
 	return fmt.Sprintf("resvmark:%s:%s:%s", scope, targetID, reqID)
+}
+
+// budgetShadowKey aggregates quarantined expired holds per (scope, target,
+// period): admission still counts them inside budget, and the calibration
+// raise targets settled + resv + shadow so convergence never converts a
+// quarantine back into headroom.
+func budgetShadowKey(scope, targetID, pk string) string {
+	return fmt.Sprintf("budgetshadow:%s:%s:%s", scope, targetID, pk)
+}
+
+// shadowMarkKey is the exactly-once token for clearing one request's
+// quarantine (set by the reaper, DEL-ed by the settling owner).
+func shadowMarkKey(scope, targetID, reqID string) string {
+	return fmt.Sprintf("shadowmark:%s:%s:%s", scope, targetID, reqID)
 }
 
 // markTTLSeconds converts a marker TTL to a whole-second floor of at least
@@ -271,6 +371,7 @@ var callReserveScript = redis.NewScript(`
 `)
 
 type BudgetService struct {
+	journal *settleJournal
 	rdb          *redis.Client
 	markerTTL    time.Duration
 	reapInterval time.Duration
@@ -361,13 +462,37 @@ func NewBudgetServiceWithTTLs(rdb *redis.Client, markerTTL, reapInterval time.Du
 // the same definitely-not-sent vs indeterminate classification as v2
 // applies, but settlement no longer depends on that bookkeeping: it reads
 // the mark as ground truth.
+// ErrBudgetEnforcementUnavailable is returned by ReserveForRequestE when
+// the ATOMIC reserve could not be executed against the budget store. The
+// fail-closed boundary (r78q/r78u reviews): a reserve-script failure means
+// admission CANNOT hold an estimate — a plain GET re-check is not atomic
+// (concurrent requests all pass it, and nothing deducts the estimate), so
+// it is never used as an admission fallback. The request is rejected with
+// a TYPED 503 (a dependency outage, NOT a quota verdict — a 429 here
+// would misreport enforcement downtime as client-side quota exhaustion).
+// A missing counter (redis.Nil at the store level) is NOT an error: the
+// reserve script creates the counter, so fresh scopes admit normally.
+var ErrBudgetEnforcementUnavailable = errors.New("budget enforcement store unavailable: admission rejected (fail-closed)")
+
+// ReserveScopeMarked is the legacy 4-tuple form (existing callers/tests):
+// an enforcement outage reports the scope as exceeded. Production
+// admission paths use ReserveForRequestE, which surfaces the typed error.
 func (s *BudgetService) ReserveScopeMarked(ctx context.Context, scope, targetID, period, pk, reqID string, estimate, budgetLimit float64) (spent, limit float64, written, exceeded bool) {
+	sp, lim, w, x, down := s.reserveScopeMarkedE(ctx, scope, targetID, period, pk, reqID, estimate, budgetLimit)
+	if down {
+		return sp, lim, false, true
+	}
+	return sp, lim, w, x
+}
+
+func (s *BudgetService) reserveScopeMarkedE(ctx context.Context, scope, targetID, period, pk, reqID string, estimate, budgetLimit float64) (spent, limit float64, written, exceeded, enforcementDown bool) {
 	if budgetLimit <= 0 || estimate <= 0 {
-		return 0, budgetLimit, false, false
+		return 0, budgetLimit, false, false, false
 	}
 	if reqID == "" {
 		// No request identity (legacy callers): fall back to the v2 path.
-		return s.reserveBudgetKeyed(ctx, scope, targetID, period, pk, estimate, budgetLimit)
+		sp, lim, w, x := s.reserveBudgetKeyed(ctx, scope, targetID, period, pk, estimate, budgetLimit)
+		return sp, lim, w, x, false
 	}
 	bk := fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk)
 	rk := budgetResvKey(scope, targetID, pk)
@@ -382,17 +507,22 @@ func (s *BudgetService) ReserveScopeMarked(ctx context.Context, scope, targetID,
 		fmt.Sprintf("%.9f", estimate)+"|"+pk,
 	).Float64Slice()
 	if err != nil {
+		// Fail-closed on ANY atomic-reserve failure: no estimate is held,
+		// so admitting (even against a readable GET) is a check-then-act
+		// race with no deduction — concurrent over-admission (r78u).
+		// Indeterminate errors may have landed the write; the aborted
+		// request never settles, so a stray hold expires and the reaper
+		// refunds it (bounded by markerTTL).
 		if redisWriteDefinitelyNotSent(err) {
-			slog.Warn("budget reserve(idempotent) definitely NOT sent; admission falls back to non-atomic check",
+			slog.Warn("budget reserve(idempotent) definitely NOT sent; admission fails closed",
 				"key", bk, "request_id", reqID, "error", err)
 		} else {
-			slog.Warn("budget reserve(idempotent) result INDETERMINATE; settlement will reconcile via the request mark",
+			slog.Warn("budget reserve(idempotent) result INDETERMINATE; admission fails closed (stray hold self-heals via marker TTL + reaper)",
 				"key", bk, "request_id", reqID, "error", err)
 		}
-		sp, lim, exc := s.CheckBudget(ctx, scope, targetID, period, budgetLimit)
-		return sp, lim, false, exc
+		return 0, budgetLimit, false, false, true
 	}
-	return res[0], res[1], res[3] == 1, res[2] == 1
+	return res[0], res[1], res[3] == 1, res[2] == 1, false
 }
 
 // Settle-retry recovery (r33/r33b finding: a settlement whose whole 30s
@@ -510,7 +640,9 @@ func (s *BudgetService) runSettleScript(ctx context.Context, t settleRetryTask) 
 			fmt.Sprintf("budget:%s:%s:%s", t.scope, t.targetID, t.pk),
 			budgetResvKey(t.scope, t.targetID, t.pk),
 			budgetSettledKey(t.scope, t.targetID, t.pk),
-			budgetResvExpZSet},
+			budgetResvExpZSet,
+			budgetShadowKey(t.scope, t.targetID, t.pk),
+			shadowMarkKey(t.scope, t.targetID, t.reqID)},
 		t.cost, int(guardTTL.Seconds()), t.scope, t.targetID, t.reqID, t.period, t.pk,
 		markTTLSeconds(PeriodTTL(t.period)),
 	).Int()
@@ -794,10 +926,22 @@ func (s *BudgetService) SettleScope(ctx context.Context, scope, targetID, period
 		// anywhere, so the current period is the exact target.
 		pk = PeriodKey(period)
 	}
+	task := settleRetryTask{
+		scope: scope, targetID: targetID, period: period, pk: pk, reqID: reqID, cost: cost,
+	}
+	// D-R1 crash floor: journal the intent BEFORE the first attempt so a
+	// hard kill anywhere in the ladder (or mid attempt-0) leaves a durable
+	// record the boot replay settles exactly once. Process-kill durable
+	// (append write); power loss remains the calibration layer's residual.
+	if s.journal != nil {
+		if jerr := s.journal.append(task); jerr != nil {
+			settleJournalWriteFailTotal.Inc()
+			slog.Warn("settle journal append failed (crash floor degraded for this task)",
+				"request_id", reqID, "error", jerr)
+		}
+	}
 	run := func() (int, error) {
-		return s.runSettleScript(ctx, settleRetryTask{
-			scope: scope, targetID: targetID, period: period, pk: pk, reqID: reqID, cost: cost,
-		})
+		return s.runSettleScript(ctx, task)
 	}
 	backoff := time.Second
 	for attempt := 0; ; attempt++ {
@@ -836,11 +980,14 @@ func (s *BudgetService) SettleScope(ctx context.Context, scope, targetID, period
 	}
 }
 
-// ReapExpiredReservations removes reservations whose marks expired without a
-// settlement (gateway crash mid-request): budget/resv -= e. The crashed
-// request's true cost is restored by the next DB-based raise from its
-// WAL→usage_logs row. Live marks found by score are re-scheduled. Returns
-// the number of orphans reaped.
+// ReapExpiredReservations quarantines reservations whose marks expired
+// without a settlement (gateway crash mid-request): resv -= e moves into
+// budgetshadow and budget KEEPS counting it — an expired hold is a legal
+// TTL refund but not free headroom (r78v ruling 2026-10-22: the crashed
+// owner may already have consumed upstream). A late settle (WAL replay,
+// retry ledger) nets its actual cost against the quarantine exactly once.
+// Live marks found by score are re-scheduled. Returns the number of orphans
+// quarantined.
 func (s *BudgetService) ReapExpiredReservations(ctx context.Context, now time.Time) int {
 	reaped := 0
 	for {
@@ -861,14 +1008,20 @@ func (s *BudgetService) ReapExpiredReservations(ctx context.Context, now time.Ti
 				s.rdb.ZRem(ctx, budgetResvExpZSet, m)
 				continue
 			}
-			scope, targetID, reqID, _, pk, eStr := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+			scope, targetID, reqID, period, pk, eStr := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
 			e, _ := strconv.ParseFloat(eStr, 64)
+			guardTTL := s.markerTTL + settleRetryHorizon + time.Hour
 			res, err := budgetReapOrphanScript.Run(ctx, s.rdb,
 				[]string{resvMarkKey(scope, targetID, reqID),
 					fmt.Sprintf("budget:%s:%s:%s", scope, targetID, pk),
 					budgetResvKey(scope, targetID, pk),
-					budgetResvExpZSet},
+					budgetResvExpZSet,
+					budgetShadowKey(scope, targetID, pk),
+					shadowMarkKey(scope, targetID, reqID)},
 				e, m,
+				markTTLSeconds(PeriodTTL(period)),
+				pk,
+				int(guardTTL.Seconds()),
 			).Int()
 			if err != nil {
 				slog.Warn("budget reaper: reap failed", "member", m, "error", err)
@@ -876,7 +1029,7 @@ func (s *BudgetService) ReapExpiredReservations(ctx context.Context, now time.Ti
 			}
 			if res == 1 {
 				reaped++
-				slog.Warn("budget reaper: removed EXPIRED reservation (crashed/unsettled request); its ledger row, if any, is restored by the next DB-based calibration raise",
+				slog.Warn("budget reaper: QUARANTINED expired reservation into shadow (no free headroom; budget still counts it; a late settle nets against the quarantine exactly once)",
 					"scope", scope, "target", targetID, "request_id", reqID, "estimate", e)
 			} else {
 				// Mark still live — score ran ahead of the TTL; re-schedule.
@@ -1073,13 +1226,17 @@ func (s *BudgetService) applyBudgetDeltaKeyed(ctx context.Context, scope, target
 // correctness (kept for the legacy no-reqID path and for observability).
 // On exceed, lower levels are refunded via SettleScope(cost=0) — the
 // refund-as-settle-zero form of the same idempotent script.
-func (s *BudgetService) ReserveForRequest(ctx context.Context, scopes []BudgetScope, estimate float64, reqID string) (*BudgetReservations, string) {
+// ReserveForRequestE is the production admission entry: it returns a
+// TYPED error when the atomic reserve could not execute (dependency
+// outage — the caller must answer 503 budget_enforcement_unavailable, not
+// a quota 429), and exceededScope when a limit genuinely rejected.
+func (s *BudgetService) ReserveForRequestE(ctx context.Context, scopes []BudgetScope, estimate float64, reqID string) (*BudgetReservations, string, error) {
 	res := &BudgetReservations{
 		Reserved:   map[string]float64{},
 		PeriodKeys: map[string]string{},
 	}
 	if estimate <= 0 || len(scopes) == 0 {
-		return res, ""
+		return res, "", nil
 	}
 	for i, sc := range scopes {
 		if sc.Limit <= 0 {
@@ -1088,33 +1245,54 @@ func (s *BudgetService) ReserveForRequest(ctx context.Context, scopes []BudgetSc
 		// Resolve the period key once, here: reconciliation must adjust the
 		// same counter even if the request crosses a UTC period boundary.
 		pk := PeriodKey(sc.Period)
-		var written, exceeded bool
+		var written, exceeded, down bool
 		if reqID != "" {
-			_, _, written, exceeded = s.ReserveScopeMarked(ctx, sc.Scope, sc.ID, sc.Period, pk, reqID, estimate, sc.Limit)
+			_, _, written, exceeded, down = s.reserveScopeMarkedE(ctx, sc.Scope, sc.ID, sc.Period, pk, reqID, estimate, sc.Limit)
 		} else {
 			_, _, written, exceeded = s.reserveBudgetKeyed(ctx, sc.Scope, sc.ID, sc.Period, pk, estimate, sc.Limit)
+		}
+		if down {
+			// Enforcement outage: refund the levels reserved before this
+			// one (identical rollback to a genuine rejection) and reject
+			// with the typed error.
+			s.refundReserved(ctx, res, scopes, i, reqID)
+			return res, sc.Scope, ErrBudgetEnforcementUnavailable
 		}
 		if exceeded {
 			// Refund the levels reserved before this one; the script already
 			// rolled back this level's own increment.
-			for j := 0; j < i; j++ {
-				if prev := res.Reserved[scopes[j].Scope]; prev > 0 {
-					if reqID != "" {
-						s.SettleScope(ctx, scopes[j].Scope, scopes[j].ID, scopes[j].Period, res.PeriodKeys[scopes[j].Scope], reqID, 0)
-					} else {
-						s.applyBudgetDeltaKeyed(ctx, scopes[j].Scope, scopes[j].ID, scopes[j].Period, res.PeriodKeys[scopes[j].Scope], -prev)
-					}
-					delete(res.Reserved, scopes[j].Scope)
-				}
-			}
-			return res, sc.Scope
+			s.refundReserved(ctx, res, scopes, i, reqID)
+			return res, sc.Scope, nil
 		}
 		if written {
 			res.Reserved[sc.Scope] = estimate
 			res.PeriodKeys[sc.Scope] = pk
 		}
 	}
-	return res, ""
+	return res, "", nil
+}
+
+func (s *BudgetService) refundReserved(ctx context.Context, res *BudgetReservations, scopes []BudgetScope, upto int, reqID string) {
+	for j := 0; j < upto; j++ {
+		if prev := res.Reserved[scopes[j].Scope]; prev > 0 {
+			if reqID != "" {
+				s.SettleScope(ctx, scopes[j].Scope, scopes[j].ID, scopes[j].Period, res.PeriodKeys[scopes[j].Scope], reqID, 0)
+			} else {
+				s.applyBudgetDeltaKeyed(ctx, scopes[j].Scope, scopes[j].ID, scopes[j].Period, res.PeriodKeys[scopes[j].Scope], -prev)
+			}
+			delete(res.Reserved, scopes[j].Scope)
+		}
+	}
+}
+
+// ReserveForRequest is the legacy 2-tuple form (existing callers/tests):
+// an enforcement outage surfaces as the scope being reported exceeded.
+func (s *BudgetService) ReserveForRequest(ctx context.Context, scopes []BudgetScope, estimate float64, reqID string) (*BudgetReservations, string) {
+	res, scope, err := s.ReserveForRequestE(ctx, scopes, estimate, reqID)
+	if err != nil {
+		return res, scope
+	}
+	return res, scope
 }
 
 func (s *BudgetService) CheckCallLimit(ctx context.Context, keyID, period string, maxCalls int) (int, bool) {

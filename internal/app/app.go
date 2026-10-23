@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"net/http"
 	// Registers /debug/pprof/* handlers on http.DefaultServeMux; exposed ONLY
 	// behind CL_PPROF=1 + gateway auth (see the gated route below).
@@ -194,6 +195,52 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	if d, err := time.ParseDuration(cfg.Gateway.ModelConfigLookupTimeout); err == nil && d > 0 {
 		svcs.CacheSvc.SetModelConfigLookupTimeout(d)
 	}
+	// D-R1 crash floor (r78c 8-ID class): every F1' settle intent is
+	// journaled to local disk BEFORE its first attempt; the boot replay
+	// below is SYNCHRONOUS (billable admission on THIS instance starts on
+	// post-replay counters) and runs under the calibration lock so no
+	// replica's raise can interleave. Residual windows (surviving replicas
+	// until their next raise; kill->reboot gap; power loss) are documented
+	// in docs/deployment/problem-report-2026-10-22-settle-recovery-bootbound.md.
+	// STRICT boot recovery gate (v2 review): an unopenable journal is a
+	// billing-integrity failure -> refuse to start; the locked replay must
+	// COMPLETE before this assembly returns (serving starts only after),
+	// retrying while the lock store/lock is unavailable.
+	jdir := filepath.Join(filepath.Dir(cfg.Usage.SpoolDir), "settle-journal")
+	if jerr := svcs.BudgetSvc.OpenSettleJournal(jdir); jerr != nil {
+		slog.Error("settle journal NOT openable — refusing to start (billing-integrity component)",
+			"dir", jdir, "error", jerr)
+		os.Exit(1)
+	}
+	// v5: the calibration's near/far boundary must match the JOURNAL's
+	// settle-once guard (same markerTTL) — injected from the same config.
+	if mt, terr := time.ParseDuration(cfg.Gateway.BudgetMarkerTTL); terr == nil && mt > 0 {
+		svcs.BudgetCalSvc.SetJournalGuard(mt + 10*time.Minute + time.Hour)
+	}
+	svcs.BudgetCalSvc.SetLiveIntentCheck(svcs.BudgetSvc.JournalLiveIntents)
+	if gerr := svcs.BudgetSvc.SettleJournalBootGate(appCtx, svcs.BudgetCalSvc); gerr != nil {
+		slog.Error("settle journal boot gate aborted (context canceled)", "error", gerr)
+	}
+	// P-1 fix (r78l forensics): a request in flight at the kill left its
+	// reserve estimate inside budget with an expired mark; nothing ran the
+	// reaper until the first hourly calibration, so counters sat above the
+	// ledger for the whole boot window. Reap once immediately after the
+	// gate — idempotent, bounded, releases only marks past their TTL.
+	if n := svcs.BudgetSvc.ReapExpiredReservations(appCtx, time.Now()); n > 0 {
+		slog.Warn("boot reaper released expired reservations", "count", n)
+	}
+	// Marks still INSIDE their TTL at boot (an in-flight request at the
+	// kill, reserved seconds before death) release only after expiry: one
+	// delayed reap covers the boot window; the maintenance rounds reap on
+	// every tick afterwards.
+	if mt, terr := time.ParseDuration(cfg.Gateway.BudgetMarkerTTL); terr == nil && mt > 0 {
+		time.AfterFunc(mt+30*time.Second, func() {
+			if n := svcs.BudgetSvc.ReapExpiredReservations(appCtx, time.Now()); n > 0 {
+				slog.Warn("post-boot delayed reaper released expired reservations", "count", n)
+			}
+		})
+	}
+	go svcs.BudgetSvc.SettleJournalMaintenance(appCtx, svcs.BudgetCalSvc)
 	// Background refresh: keep permission cache in sync across instances
 	permCache.RunRefreshLoop(appCtx, 60*time.Second)
 

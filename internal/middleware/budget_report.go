@@ -106,6 +106,34 @@ func ReportBudgetUsage(budgetSvc service.BudgetServiceInterface, alertSvc servic
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer bgCancel()
 
+			// D-R1 crash floor (r78i finding): journal ALL scope intents
+			// BEFORE the sequential per-scope settles — a kill between
+			// scopes (each ladder is slow under outage) otherwise leaves
+			// the never-reached scopes with no durable trace.
+			if j, ok := budgetSvc.(interface {
+				JournalSettleIntents(reqID string, cost float64, scopes []service.SettleScopeRef, reservations *service.BudgetReservations)
+			}); ok {
+				scopes := make([]service.SettleScopeRef, 0, 3)
+				if apiKey.MaxBudget > 0 {
+					scopes = append(scopes, service.SettleScopeRef{Scope: "key", TargetID: fmt.Sprintf("%d", apiKey.ID), Period: apiKey.BudgetPeriod})
+				}
+				if teamPeriod, ok2 := c.Get("team_budget_period"); ok2 {
+					if p, _ := teamPeriod.(string); p != "" && apiKey.TeamID != nil {
+						scopes = append(scopes, service.SettleScopeRef{Scope: "team", TargetID: fmt.Sprintf("%d", *apiKey.TeamID), Period: p})
+					}
+				}
+				if orgCache != nil {
+					if orgID := c.GetInt64("org_id"); orgID != 0 {
+						if orgPd, _ := c.Get("org_budget_period"); orgPd != nil {
+							if orgPeriod, ok3 := orgPd.(string); ok3 && orgPeriod != "" {
+								scopes = append(scopes, service.SettleScopeRef{Scope: "org", TargetID: fmt.Sprintf("%d", orgID), Period: orgPeriod})
+							}
+						}
+					}
+				}
+				j.JournalSettleIntents(c.GetString("request_id"), cost, scopes, reservations)
+			}
+
 			// Report key-level budget usage
 			if apiKey.MaxBudget > 0 {
 				applyBudgetDelta(budgetSvc, bgCtx, "key",
