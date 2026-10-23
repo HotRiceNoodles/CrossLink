@@ -160,6 +160,7 @@ func TestCalibrateCross_X2_ExpiredForeignIntentConvergesViaFar(t *testing.T) {
 	if err := s.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.CloseSettleJournal)
 	cal := NewBudgetCalibrationService(db, rdb)
 	cal.SetLiveIntentCheck(func(time.Duration) int64 { return 0 })
 

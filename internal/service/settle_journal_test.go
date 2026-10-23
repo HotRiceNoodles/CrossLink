@@ -40,6 +40,7 @@ func newJournalHarness(t *testing.T) (*BudgetService, *BudgetCalibrationService,
 	if err := s.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatalf("journal open: %v", err)
 	}
+	t.Cleanup(s.CloseSettleJournal)
 	cal := NewBudgetCalibrationService(nil, nil)
 	cal.rdb = rdb
 	return s, cal, rdb, s.journal.path
@@ -308,6 +309,7 @@ func TestSettleJournal_T24_RaiseCertificationBlocksDoubleApply(t *testing.T) {
 	if err := s.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.CloseSettleJournal)
 	appendJournalLine(t, s.journal.path, "team", "21", "absorbed-1", 2.0, time.Now().Unix())
 	st, rerr := s.SettleJournalRound(context.Background(), cal, 5*time.Second)
 	if rerr != nil {

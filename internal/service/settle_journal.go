@@ -145,6 +145,22 @@ func (s *BudgetService) OpenSettleJournal(dir string) error {
 	return nil
 }
 
+// CloseSettleJournal releases the active-file handle. Production never calls
+// it (the journal lives for the process lifetime); tests need it so
+// t.TempDir cleanup can delete the directory on Windows, where an open
+// handle locks the file (same constraint as the usage spool's Close).
+func (s *BudgetService) CloseSettleJournal() {
+	if s.journal == nil {
+		return
+	}
+	s.journal.mu.Lock()
+	defer s.journal.mu.Unlock()
+	if s.journal.f != nil {
+		s.journal.f.Close()
+		s.journal.f = nil
+	}
+}
+
 // append writes one intent to the ACTIVE file (never a sealed segment).
 func (j *settleJournal) append(t settleRetryTask) error {
 	b, err := json.Marshal(journalLine{
@@ -276,8 +292,10 @@ func (s *BudgetService) replaySegment(ctx context.Context, seg string, verify fu
 	if err != nil {
 		return nil, fmt.Errorf("segment open: %w", err)
 	}
-	defer f.Close()
-
+	// Close BEFORE the trailing os.Remove(seg): Windows refuses to delete a
+	// file with an open handle (defer would close only at return, after the
+	// remove already failed). The scanner is the only reader; the settle
+	// phase below never touches f.
 	var lines []journalLine
 	seen := make(map[string]bool)
 	sc := bufio.NewScanner(f)
@@ -310,9 +328,11 @@ func (s *BudgetService) replaySegment(ctx context.Context, seg string, verify fu
 		lines = append(lines, l)
 	}
 	if err := sc.Err(); err != nil {
+		f.Close()
 		// Segment retained: scan error must not drop lines.
 		return nil, fmt.Errorf("segment scan: %w", err)
 	}
+	f.Close() // before Remove: Windows cannot delete an open file
 
 	var kept []journalLine
 	for i := 0; i < len(lines); i += journalBatchSize {
