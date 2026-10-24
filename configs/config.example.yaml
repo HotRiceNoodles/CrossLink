@@ -164,7 +164,21 @@ license:
   # license_key: ""                        # Filled after online activation
   # license_file: ""                       # Cache file for the online-activation JWT token
   # offline_file: ""                       # Offline license file (fingerprint-bound, used when license_key is empty)
-  # node_id: ""                            # Stable node identifier bound into the license fingerprint
+  # node_id: ""                            # Explicit stable node identity (wins over node_id_file; stateless replicas pin one per instance)
+  # node_id_file: "data/node-id"           # Persistent random identity file — fingerprint seed when node_id is unset.
+                                           #   Provisioned on first boot; KEEP ON THE DATA VOLUME and in backups.
+                                           #   Corrupt/unwritable file disables licensing loudly (never falls back to the hostname).
+  # verify_mode: "auto"                    # Signature verification (fail-closed default):
+                                           #   auto   = enforce with trusted keys; WITHOUT keys every licensed token is
+                                           #            rejected and the node runs as Community (upgrade checklist in docs)
+                                           #   off    = development only, never a production default
+                                           #   warn   = verify and log failures, tokens still accepted (migration window)
+                                           #   enforce= strict verification
+  # verify_issuer: ""                      # Optional iss claim check
+  # verify_audience: ""                    # Optional aud claim check
+  # verify_keys: ""                        # Trusted public keys: JSON {"kid": "<PEM or base64 raw Ed25519>"} or a PEM
+                                           #   list with "# kid=<id>" lines; "@<path>" reads from file. Fetch from the
+                                           #   License-Server admin signing-key endpoint before enabling production licenses.
   heartbeat_enabled: true
   heartbeat_interval: 24h
 

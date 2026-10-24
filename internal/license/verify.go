@@ -41,14 +41,27 @@ import (
 //     iss/aud checked when configured;
 //   - the pre-existing fingerprint binding / grace logic at the client call
 //     sites composes unchanged.
-// Modes: off (default) | warn (log failures, accept) | enforce (reject on
-// every load path — the single ParseToken point covers offline/cache/DB).
+// Modes: off | warn | enforce | auto (default, FAIL-CLOSED: enforce when
+// trusted keys are configured; keyless auto REJECTS every licensed token and
+// runs as Community — it never accepts unverified tokens; misconfiguration
+// locks down and rejects every token). The pre-existing fingerprint binding
+// / grace logic at the client call sites composes unchanged.
 // Production keys are the licensee's; this tree ships and generates NONE.
 
 const (
 	VerifyModeOff     = "off"
 	VerifyModeWarn    = "warn"
 	VerifyModeEnforce = "enforce"
+	// VerifyModeAuto is the shipped DEFAULT (forgery hardening review,
+	// 2026-10-24). Semantics are FAIL-CLOSED: with trusted keys it behaves
+	// exactly like enforce; without keys it REJECTS every license token
+	// (commercial licensing stays unloaded, Community keeps serving) and
+	// reports the missing configuration loudly. auto NEVER accepts an
+	// unverified token — compatibility for not-yet-migrated deployments is
+	// handled by the upgrade checklist (docs/节点身份与授权迁移.md), not by
+	// relaxing verification. off remains available as an EXPLICIT
+	// development-only escape hatch and is never a default.
+	VerifyModeAuto = "auto"
 )
 
 type licensedKey struct {
@@ -59,10 +72,17 @@ type licensedKey struct {
 }
 
 type tokenVerification struct {
-	mode     string
-	issuer   string
-	audience string
-	keys     map[string]*licensedKey
+	// configured is what the operator asked for (off|warn|enforce|auto);
+	// mode is the EFFECTIVE runtime decision mode (off|warn|enforce).
+	configured string
+	mode       string
+	issuer     string
+	audience   string
+	keys       map[string]*licensedKey
+	// note explains a deliberate fail-closed state — keyless auto or a
+	// misconfiguration lockdown. Empty means verification is running
+	// exactly as configured. Surfaced at boot and on the status endpoint.
+	note string
 }
 
 var verification tokenVerification
@@ -72,30 +92,75 @@ type ConfigureError struct{ Reason string }
 
 func (e *ConfigureError) Error() string { return "license verification configure: " + e.Reason }
 
+const keylessAutoNote = "auto mode has no trusted public keys (CL_LICENSE_VERIFY_KEYS / license.verify_keys) — " +
+	"licensed tokens are REJECTED and the node runs as Community until keys are configured; " +
+	"see docs/节点身份与授权迁移.md for the upgrade checklist"
+
 // ConfigureSignatureVerification installs the global verification state.
 // spec is inline key material or "@<path>": JSON {kid: <PEM text or base64
 // raw Ed25519 key>} or a PEM list where "# kid=<id>" precedes its block.
+//
+// Resolution:
+//   - off: explicit development escape hatch — no checks (never a default);
+//   - warn with keys: verify, report failures, caller decides (accept);
+//   - enforce with keys: verify, reject on failure;
+//   - auto with keys: exactly enforce;
+//   - auto without keys: enforce-with-note — EVERY token rejected (fail
+//     closed), reason reported; Community operation is unaffected;
+//   - warn/enforce without keys, or any unusable key spec / unknown mode:
+//     configuration error (caller is expected to lock down; the global
+//     state is left untouched so the caller controls fail-closed policy).
 func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
+	configured := mode
 	switch mode {
-	case "", VerifyModeOff:
-		mode = VerifyModeOff
-	case VerifyModeWarn, VerifyModeEnforce:
+	case "":
+		mode, configured = VerifyModeAuto, VerifyModeAuto
+	case VerifyModeOff, VerifyModeWarn, VerifyModeEnforce, VerifyModeAuto:
 	default:
-		return &ConfigureError{Reason: fmt.Sprintf("unknown mode %q (off|warn|enforce)", mode)}
+		return &ConfigureError{Reason: fmt.Sprintf("unknown mode %q (off|warn|enforce|auto)", mode)}
 	}
 	keys, err := loadLicenseKeys(spec)
 	if err != nil {
 		return err
 	}
-	if mode != VerifyModeOff && len(keys) == 0 {
+	note := ""
+	switch {
+	case mode == VerifyModeOff:
+		// explicit dev-only choice
+	case mode == VerifyModeAuto && len(keys) == 0:
+		mode, note = VerifyModeEnforce, keylessAutoNote
+	case mode == VerifyModeAuto:
+		mode = VerifyModeEnforce
+	case len(keys) == 0:
 		return &ConfigureError{Reason: "mode " + mode + " requires at least one whitelisted public key"}
 	}
-	verification = tokenVerification{mode: mode, issuer: issuer, audience: audience, keys: keys}
+	verification = tokenVerification{configured: configured, mode: mode, issuer: issuer, audience: audience, keys: keys, note: note}
 	return nil
 }
 
-// VerificationMode reports the active mode (boot logs and tests).
+// lockdownVerification is the fail-closed misconfiguration state: enforce
+// with zero keys, so VerifyRawToken rejects every token with the recorded
+// reason. Licensed tiers degrade to Community loudly; the process keeps
+// serving.
+func lockdownVerification(configured, reason string) {
+	verification = tokenVerification{
+		configured: configured,
+		mode:       VerifyModeEnforce,
+		keys:       map[string]*licensedKey{},
+		note:       "verification MISCONFIGURED — every license token is rejected until the config is fixed: " + reason,
+	}
+}
+
+// VerificationMode reports the EFFECTIVE runtime mode (off|warn|enforce).
 func VerificationMode() string { return verification.mode }
+
+// VerificationConfiguredMode reports what the operator configured
+// (off|warn|enforce|auto); auto is what an unset value resolves to.
+func VerificationConfiguredMode() string { return verification.configured }
+
+// VerificationNote reports the fail-closed reason (keyless auto or
+// misconfiguration lockdown), or "" when verification runs as configured.
+func VerificationNote() string { return verification.note }
 
 func loadLicenseKeys(spec string) (map[string]*licensedKey, error) {
 	out := map[string]*licensedKey{}
@@ -253,6 +318,11 @@ func VerifyRawToken(rawToken string) error {
 		return nil
 	}
 	if len(v.keys) == 0 {
+		// Keyless auto or misconfiguration lockdown: fail closed, with the
+		// recorded reason so operators see WHY every token is rejected.
+		if v.note != "" {
+			return errors.New(v.note)
+		}
 		return errors.New("verification configured without keys")
 	}
 	parts := strings.Split(rawToken, ".")

@@ -39,6 +39,17 @@ func (h *LicenseHandler) Status(c *gin.Context) {
 		"fingerprint":        gate.Fingerprint(),
 		"crypto_mode":        h.cfg.Crypto.Mode,
 		"license_management": h.cfg.License.HeartbeatEnabled,
+		"verify_mode":        license.VerificationMode(),
+		"verify_configured":  license.VerificationConfiguredMode(),
+	}
+
+	// Identity/verification failure visibility: operators must see WHY
+	// licensing is degraded without digging through boot logs.
+	if e := gate.IdentityError(); e != "" {
+		data["identity_error"] = e
+	}
+	if n := license.VerificationNote(); n != "" {
+		data["verify_note"] = n
 	}
 
 	if tk := gate.TokenSnapshot(); tk != nil {

@@ -17,21 +17,40 @@ func CommunityInit(cfg config.LicenseConfig, db *gorm.DB, cp crypto.CryptoProvid
 	return g
 }
 
-// configureVerificationFromConfig installs the U-37 Ed25519 verification
-// state from config. A malformed configuration is a hard startup error in
-// warn/enforce (fail-closed on misconfiguration), while mode off is the
-// silent default.
+// configureVerificationFromConfig installs the U-37 verification state from
+// config. FAIL-CLOSED everywhere (security review 2026-10-24):
+//   - misconfiguration (unknown mode, unusable key spec, keyless
+//     warn/enforce) → lockdown: every token rejected until the config is
+//     fixed; licensed tiers degrade loudly to Community, the process keeps
+//     serving;
+//   - the auto default without keys → every licensed token rejected with a
+//     clear reason (Community unaffected) — deployments upgrade by
+//     configuring keys (pre-upgrade checklist in
+//     docs/节点身份与授权迁移.md), never by relaxing verification;
+//   - off is honored only as an EXPLICIT development choice and is called
+//     out as such in the boot log.
 func configureVerificationFromConfig(cfg config.LicenseConfig) {
 	if err := ConfigureSignatureVerification(cfg.VerifyMode, cfg.VerifyIssuer, cfg.VerifyAudience, cfg.VerifyKeys); err != nil {
-		slog.Error("license signature verification MISCONFIGURED — falling back to off; fix config before enabling",
-			"error", err)
-		_ = ConfigureSignatureVerification(VerifyModeOff, "", "", "")
+		requested := cfg.VerifyMode
+		if requested == "" {
+			requested = VerifyModeAuto
+		}
+		lockdownVerification(requested, err.Error())
+		slog.Error("license signature verification MISCONFIGURED — locked down, every license token will be rejected until the config is fixed",
+			"requested", requested, "error", err)
 		return
 	}
-	if VerificationMode() != VerifyModeOff {
-		slog.Info("license signature verification active",
-			"mode", VerificationMode(), "keys", lenVerificationKeys())
+	if note := VerificationNote(); note != "" {
+		slog.Error("license verification unavailable — licensed tokens are REJECTED and the node runs as Community",
+			"configured", VerificationConfiguredMode(), "note", note)
+		return
 	}
+	if VerificationMode() == VerifyModeOff {
+		slog.Warn("license signature verification is EXPLICITLY OFF (development only) — license tokens are accepted WITHOUT signature checks")
+		return
+	}
+	slog.Info("license signature verification active",
+		"mode", VerificationMode(), "configured", VerificationConfiguredMode(), "keys", lenVerificationKeys())
 }
 
 func lenVerificationKeys() int { return len(verification.keys) }

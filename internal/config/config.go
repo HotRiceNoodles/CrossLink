@@ -402,6 +402,12 @@ type LicenseConfig struct {
 	HeartbeatEnabled  bool          `mapstructure:"heartbeat_enabled" yaml:"heartbeat_enabled"`
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval" yaml:"heartbeat_interval"`
 	NodeID            string        `mapstructure:"node_id" yaml:"node_id"`
+	// NodeIDFile is the persistent node-identity file used as the
+	// fingerprint seed when node_id/CL_LICENSE_FINGERPRINT are unset
+	// (Docker fingerprint-drift fix, 2026-10-24). Default "data/node-id"
+	// relative to the working directory — keep it on the data volume.
+	// Env: CL_LICENSE_NODE_ID_FILE.
+	NodeIDFile string `mapstructure:"node_id_file" yaml:"node_id_file"`
 	// U-37 Ed25519 signature verification (user-authorized 2026-10-19;
 	// production signing keys held by the user — this tree ships none).
 	// VerifyMode off|warn|enforce, DEFAULT off (the enforcement date is the
@@ -815,7 +821,12 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("license.heartbeat_enabled", false)
 	v.SetDefault("license.heartbeat_interval", "24h")
-	v.SetDefault("license.verify_mode", "off")
+	// auto (default) is FAIL-CLOSED: enforce signature verification when
+	// trusted keys are configured; WITHOUT keys every licensed token is
+	// rejected and the node runs as Community until keys are provisioned
+	// (never accepts unverified tokens). Explicit off/warn/enforce in an
+	// existing config still wins; off is a development-only escape hatch.
+	v.SetDefault("license.verify_mode", "auto")
 	v.SetDefault("license.verify_issuer", "")
 	v.SetDefault("license.verify_audience", "")
 	v.SetDefault("license.verify_keys", "")
@@ -834,6 +845,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("license.license_file", "")
 	v.SetDefault("license.offline_file", "")
 	v.SetDefault("license.node_id", "")
+	// Persistent identity file (fingerprint seed when node_id is unset);
+	// relative to the working directory so containers (/app) and bare metal
+	// (WorkingDirectory) both land it beside the sqlite data dir.
+	v.SetDefault("license.node_id_file", "data/node-id")
 
 	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.max_servers", 0)

@@ -11,6 +11,11 @@ type Gate struct {
 	token       atomic.Pointer[VerifiedToken]
 	stopCh      chan struct{}
 	fingerprint string
+	// identityErr records why the persistent node identity could not be
+	// established (corrupt/unreadable/unwritable identity file). Non-empty
+	// means licensing is disabled: no volatile fallback exists, and the
+	// reason is surfaced on /admin/api/license/status.
+	identityErr atomic.Pointer[string]
 	// schemaOK gates commercial tiers: their tables/columns exist only in
 	// migrations/postgres (U-01). False until the caller confirms the active
 	// dialect carries the commercial schema via SetSchemaSupported.
@@ -129,6 +134,19 @@ func (g *Gate) RawToken() string {
 
 func (g *Gate) Fingerprint() string {
 	return g.fingerprint
+}
+
+// SetIdentityError records a node-identity failure (licensing disabled).
+func (g *Gate) SetIdentityError(reason string) {
+	g.identityErr.Store(&reason)
+}
+
+// IdentityError returns the node-identity failure reason, or "".
+func (g *Gate) IdentityError() string {
+	if p := g.identityErr.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func (g *Gate) Stop() {

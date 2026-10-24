@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crosslink/internal/config"
 	gmSm2 "github.com/tjfoc/gmsm/sm2"
 	smx509 "github.com/tjfoc/gmsm/x509"
 )
@@ -424,4 +425,150 @@ func hmacSHA256(secret, msg string) []byte {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(msg))
 	return m.Sum(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Behavior matrix (security review 2026-10-24): every configured mode ×
+// keys present/absent, as the executable twin of the report matrix.
+//
+//	configured | keys | effective | licensed-token decision
+//	-----------+------+-----------+------------------------------------------
+//	auto       | yes  | enforce   | verify; signature failures rejected
+//	auto       | no   | enforce*  | EVERY licensed token rejected (fail
+//	                        closed, note set; Community unaffected)
+//	off        | any  | off       | no checks — development only, explicit
+//	warn       | yes  | warn      | verify; failures reported, caller accepts
+//	warn       | no   | cfg error | wired via config -> lockdown
+//	enforce    | yes  | enforce   | verify; signature failures rejected
+//	enforce    | no   | cfg error | wired via config -> lockdown
+//	any        | bad  | cfg error | wired via config -> lockdown
+//
+// * auto-keyless never relaxes to "accept unverified" — un-migrated
+// deployments follow the upgrade checklist instead.
+func TestVerify_AutoOffWarnEnforceMatrix(t *testing.T) {
+	good := newRS256(t)
+	bad := newRS256(t)
+	whitelistSpec := whitelist(kidJSON("k1", good.material()))
+	goodToken := mint(t, good, "k1", stdClaims())
+	forgedToken := mint(t, bad, "k1", stdClaims())
+	t.Cleanup(func() { _ = ConfigureSignatureVerification(VerifyModeOff, "", "", "") })
+
+	// auto + keys -> enforce semantics.
+	if err := ConfigureSignatureVerification(VerifyModeAuto, "", "", whitelistSpec); err != nil {
+		t.Fatalf("auto+keys configure: %v", err)
+	}
+	if VerificationMode() != VerifyModeEnforce || VerificationConfiguredMode() != VerifyModeAuto {
+		t.Fatalf("auto+keys must run enforce (configured auto), got mode=%q configured=%q",
+			VerificationMode(), VerificationConfiguredMode())
+	}
+	if VerificationNote() != "" {
+		t.Fatal("auto+keys must not carry a note")
+	}
+	if err := VerifyRawToken(goodToken); err != nil {
+		t.Fatalf("auto+keys rejected a valid token: %v", err)
+	}
+	if err := VerifyRawToken(forgedToken); err == nil {
+		t.Fatal("auto+keys accepted a forged token")
+	}
+
+	// auto keyless -> fail-closed enforce: EVERY licensed token rejected,
+	// reason recorded, configured mode still reported as auto.
+	if err := ConfigureSignatureVerification(VerifyModeAuto, "", "", ""); err != nil {
+		t.Fatalf("auto keyless configure: %v", err)
+	}
+	if VerificationMode() != VerifyModeEnforce {
+		t.Fatalf("auto keyless must stay enforce, got %q", VerificationMode())
+	}
+	if VerificationNote() == "" {
+		t.Fatal("auto keyless must record the fail-closed reason")
+	}
+	if err := VerifyRawToken(goodToken); err == nil {
+		t.Fatal("auto keyless accepted a licensed token (must reject ALL)")
+	}
+
+	// empty configured mode resolves to auto (the shipped default).
+	if err := ConfigureSignatureVerification("", "", "", whitelistSpec); err != nil {
+		t.Fatalf("empty mode configure: %v", err)
+	}
+	if VerificationConfiguredMode() != VerifyModeAuto || VerificationMode() != VerifyModeEnforce {
+		t.Fatalf("empty mode must resolve to auto/enforce, got %q/%q",
+			VerificationConfiguredMode(), VerificationMode())
+	}
+
+	// explicit off -> no checks (development only).
+	if err := ConfigureSignatureVerification(VerifyModeOff, "", "", ""); err != nil {
+		t.Fatalf("off configure: %v", err)
+	}
+	if VerificationMode() != VerifyModeOff || VerificationNote() != "" {
+		t.Fatalf("explicit off must be off without notes, got %q/%q", VerificationMode(), VerificationNote())
+	}
+	if err := VerifyRawToken(forgedToken); err != nil {
+		t.Fatalf("explicit off skips checks, got %v", err)
+	}
+
+	// warn + keys -> detects failures (caller decides), valid passes.
+	if err := ConfigureSignatureVerification(VerifyModeWarn, "", "", whitelistSpec); err != nil {
+		t.Fatalf("warn+keys configure: %v", err)
+	}
+	if VerificationMode() != VerifyModeWarn {
+		t.Fatalf("warn must stay warn, got %q", VerificationMode())
+	}
+	if err := VerifyRawToken(goodToken); err != nil {
+		t.Fatalf("warn rejected valid token: %v", err)
+	}
+	if err := VerifyRawToken(forgedToken); err == nil {
+		t.Fatal("warn must still DETECT failures")
+	}
+
+	// enforce + keys -> enforce semantics.
+	if err := ConfigureSignatureVerification(VerifyModeEnforce, "", "", whitelistSpec); err != nil {
+		t.Fatalf("enforce+keys configure: %v", err)
+	}
+	if err := VerifyRawToken(goodToken); err != nil {
+		t.Fatalf("enforce rejected valid token: %v", err)
+	}
+	if err := VerifyRawToken(forgedToken); err == nil {
+		t.Fatal("enforce accepted a forged token")
+	}
+
+	// keyless warn/enforce are configuration errors (never unverified).
+	if err := ConfigureSignatureVerification(VerifyModeWarn, "", "", ""); err == nil {
+		t.Fatal("keyless warn must be a configure error")
+	}
+	if err := ConfigureSignatureVerification(VerifyModeEnforce, "", "", ""); err == nil {
+		t.Fatal("keyless enforce must be a configure error")
+	}
+}
+
+// configureVerificationFromConfig turns every configuration error into
+// lockdown (reject-everything), never a silent unverified fallback; a valid
+// config afterwards clears the state.
+func TestVerify_ConfigMisconfigurationLocksDown(t *testing.T) {
+	t.Cleanup(func() {
+		_ = ConfigureSignatureVerification(VerifyModeOff, "", "", "")
+	})
+	cases := map[string]struct{ mode, keys string }{
+		"keyless-enforce": {VerifyModeEnforce, ""},
+		"keyless-warn":    {VerifyModeWarn, ""},
+		"auto-bad-keys":   {VerifyModeAuto, "@/no/such/file.json"},
+		"unknown-mode":    {"sometimes", ""},
+	}
+	for name, c := range cases {
+		configureVerificationFromConfig(config.LicenseConfig{VerifyMode: c.mode, VerifyKeys: c.keys})
+		if VerificationNote() == "" {
+			t.Fatalf("%s: must lock down with a note", name)
+		}
+		if VerificationMode() != VerifyModeEnforce {
+			t.Fatalf("%s: lockdown must run as enforce, got %q", name, VerificationMode())
+		}
+		if err := VerifyRawToken("anything"); err == nil {
+			t.Fatalf("%s: lockdown must reject every token", name)
+		}
+	}
+
+	// A valid configuration clears the lockdown (recoverable, not sticky).
+	configureVerificationFromConfig(config.LicenseConfig{VerifyMode: VerifyModeOff})
+	if VerificationNote() != "" {
+		t.Fatal("valid config must clear the lockdown note")
+	}
 }
