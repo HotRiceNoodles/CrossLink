@@ -98,6 +98,11 @@ var proExtraActions = map[string]bool{
 	"datalens:export":             true,
 	"datalens:schedule":           true,
 	"datalens:manage_aggregation": true,
+	// 内容合规（content_compliance 引擎、事件与人工复核）—— Pro 及以上。
+	"compliance:policy":  true,
+	"compliance:check":   true,
+	"compliance:logs":    true,
+	"compliance:review":  true,
 }
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).

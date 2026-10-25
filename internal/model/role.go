@@ -119,6 +119,11 @@ var ValidActions = map[string]bool{
 	"template:create":             true,
 	"template:update":             true,
 	"template:delete":             true,
+	// 内容合规（商业版 content_compliance 引擎 + 事件复核）
+	"compliance:policy":           true,
+	"compliance:check":            true,
+	"compliance:logs":             true,
+	"compliance:review":           true,
 }
 
 // AdminRequiredActions are actions that must always remain on the admin role.

@@ -180,6 +180,11 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			writeGuardrailError(c, result, c.Request.URL.Path)
 			c.Abort()
 			return
+		case "review":
+			// 拦截待人工复核：内容不放行，复核结论只完成审计闭环。
+			writeGuardrailError(c, result, c.Request.URL.Path)
+			c.Abort()
+			return
 		case "log":
 			c.Set("guardrail_triggered", true)
 			c.Set("guardrail_rule", result.RuleName)

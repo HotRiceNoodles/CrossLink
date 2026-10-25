@@ -330,6 +330,11 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
 					return
 				}
+				if grResult.Action == "review" {
+					// 拦截待人工复核：不放行内容；复核结论仅关闭审计闭环。
+					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_review", "message": "blocked by guardrail: pending manual review"}})
+					return
+				}
 				if grResult.Action == "log" {
 					c.Set("guardrail_triggered", true)
 					c.Set("guardrail_rule", grResult.RuleName)
