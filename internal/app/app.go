@@ -364,8 +364,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		DataLensRepo:   repos.DataLensRepo,
 		AppCtx:         appCtx,
 	}
-	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, nil)
-	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, nil)
+	// Response-side guardrail wiring: the handlers' non-stream and stream
+	// response checks (and the idempotency-cache re-check) are gated on this
+	// service reference. Passing nil here left every response-direction rule
+	// dead in production — the checks existed but never ran. The service is
+	// constructed above (ext.Deps.GuardrailSvc); handlers nil-check internally.
+	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, guardrailSvc)
+	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, guardrailSvc)
 	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
 	portalUsageHandler := handler.NewPortalUsageHandler(svcs.BudgetSvc)
 	templateCatalogHandler := handler.NewTemplateCatalogHandler(db)
