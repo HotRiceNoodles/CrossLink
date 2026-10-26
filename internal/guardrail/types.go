@@ -115,6 +115,12 @@ type CheckRequest struct {
 	APIKeyID  int64
 	TeamID    int64
 	OrgID     int64
+	// Prompt carries the original user input (last user message) for
+	// DirectionResponse checks. Context-aware engines (e.g. Qwen3Guard
+	// response moderation) judge the assistant output against it; engines
+	// that don't need it ignore it. Empty = unknown; handlers set it on a
+	// best-effort basis.
+	Prompt string
 }
 
 type CheckResponse struct {

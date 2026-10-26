@@ -93,6 +93,17 @@ func bindPlaygroundRequest(c *gin.Context) (*PlaygroundRequest, bool) {
 	return &req, true
 }
 
+// guardLastUserText extracts the last user message for context-aware
+// response-direction guardrail checks (mirrors the proxy handler helper).
+func guardLastUserText(messages []domain.OpenAIMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return domain.ContentText(messages[i].Content)
+		}
+	}
+	return ""
+}
+
 func mapPlaygroundErrorStatus(err error) int {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) {
@@ -216,6 +227,7 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 				APIKeyID:  0,
 				TeamID:    0,
 				OrgID:     0,
+				Prompt:    guardLastUserText(req.Messages),
 			})
 			if grErr != nil {
 				slog.Warn("playground: guardrail response check failed", "error", grErr)
@@ -385,6 +397,7 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		wrapper := guardrail.NewStreamGuardrailWrapper(result.StreamCh, h.guardrailSvc, req.Model, 0, 0, 0)
+		wrapper.SetTurnPrompt(guardLastUserText(req.Messages))
 	guardLoop:
 		for {
 			select {

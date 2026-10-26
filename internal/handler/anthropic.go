@@ -108,7 +108,7 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 	}
 	c.Set("usage_logged", true)
 	submitUsageEntry(h.usageSvc, &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:       c.GetString("request_id"),
 		RouteType:          "anthropic",
 		ModelRequested:     model,
 		ProviderID:         providerID,
@@ -211,7 +211,11 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				// policy — a cached response must never bypass updated rules. A
 				// policy rejection REPLIES with an error: an idempotent replay
 				// must never re-execute the (possibly side-effecting) operation.
-				if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model) {
+				// The replay request itself carries the original user input —
+				// pass it so context-aware engines review the cached output as
+				// a (prompt, response) pair instead of a degraded promptless
+				// check (same turn semantics as the non-cached path).
+				if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model, extractLastUserMessage(req.Messages)) {
 					c.Set("skip_call_count", true) // rejected before any upstream work
 					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
 					return
@@ -309,6 +313,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				APIKeyID:  apiKeyID,
 				TeamID:    teamID,
 				OrgID:     orgID,
+				Prompt:    extractLastUserMessage(req.Messages),
 			})
 			if grErr != nil {
 				if h.guardrailSvc.IsFailOpen() {
@@ -410,7 +415,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:    c.GetString("request_id"),
 		RouteType:       "anthropic",
 		ModelRequested:  req.Model,
 		ModelUsed:       result.ModelUsed,
@@ -542,6 +547,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	var messageStopSent bool
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
+		grWrapper.SetTurnPrompt(extractLastUserMessage(req.Messages))
 	}
 	strictMode := grWrapper != nil && grWrapper.Strict()
 	var strictOverflow bool
@@ -862,7 +868,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:    c.GetString("request_id"),
 		RouteType:       "anthropic",
 		ModelRequested:  req.Model,
 		ModelUsed:       result.ModelUsed,
@@ -1052,7 +1058,7 @@ func maskJoinedRange(content string, spans []guardrail.Span, start, end int) *st
 // or the check failed fail-closed — the caller must REJECT the replay with an
 // error, never fall through: an idempotent replay must not re-execute the
 // original (possibly side-effecting) operation under a changed policy.
-func idemReplayPassesGuardrail(c *gin.Context, svc *guardrail.GuardrailService, body []byte, model string) bool {
+func idemReplayPassesGuardrail(c *gin.Context, svc *guardrail.GuardrailService, body []byte, model, prompt string) bool {
 	if svc == nil || !svc.IsEnabled() {
 		return true
 	}
@@ -1078,6 +1084,7 @@ func idemReplayPassesGuardrail(c *gin.Context, svc *guardrail.GuardrailService, 
 		APIKeyID:  apiKeyID,
 		TeamID:    teamID,
 		OrgID:     orgID,
+		Prompt:    prompt,
 	})
 	if err != nil {
 		if svc.IsFailOpen() {

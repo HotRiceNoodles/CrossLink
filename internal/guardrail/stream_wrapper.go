@@ -35,6 +35,7 @@ type StreamGuardrailWrapper struct {
 	apiKeyID   int64
 	teamID     int64
 	orgID      int64
+	turnPrompt string
 	buf        strings.Builder
 	windowSize int
 	failOpen   bool
@@ -104,6 +105,15 @@ func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService,
 	}
 	return w
 }
+
+// SetTurnPrompt records the original user input so response-direction checks
+// can judge the streamed assistant output in context (engines that don't need
+// it ignore the value; call before the first Next).
+func (w *StreamGuardrailWrapper) SetTurnPrompt(p string) { w.turnPrompt = p }
+
+// SetTurnPrompt is the CallbackStreamGuardrail counterpart of
+// StreamGuardrailWrapper.SetTurnPrompt.
+func (w *CallbackStreamGuardrail) SetTurnPrompt(p string) { w.turnPrompt = p }
 
 type StreamResult struct {
 	Chunk   *domain.SSEChunk
@@ -321,6 +331,7 @@ func (w *StreamGuardrailWrapper) finalizeStrict(ctx context.Context, doneChunk *
 		APIKeyID:  w.apiKeyID,
 		TeamID:    w.teamID,
 		OrgID:     w.orgID,
+		Prompt:    w.turnPrompt,
 	})
 	if err != nil {
 		if !w.failOpen {
@@ -490,6 +501,7 @@ func (w *StreamGuardrailWrapper) nextWindow(ctx context.Context) StreamResult {
 				APIKeyID:  w.apiKeyID,
 				TeamID:    w.teamID,
 				OrgID:     w.orgID,
+				Prompt:    w.turnPrompt,
 			})
 			if err != nil {
 				if !w.failOpen {
@@ -532,6 +544,7 @@ func (w *StreamGuardrailWrapper) nextWindow(ctx context.Context) StreamResult {
 			APIKeyID:  w.apiKeyID,
 			TeamID:    w.teamID,
 			OrgID:     w.orgID,
+			Prompt:    w.turnPrompt,
 		})
 		if err != nil {
 			if !w.failOpen {
@@ -555,6 +568,7 @@ type CallbackStreamGuardrail struct {
 	apiKeyID   int64
 	teamID     int64
 	orgID      int64
+	turnPrompt string
 	buf        strings.Builder
 	windowSize int
 	failOpen   bool
@@ -705,6 +719,7 @@ func (w *CallbackStreamGuardrail) StrictFinish(ctx context.Context) (StrictDecis
 		APIKeyID:  w.apiKeyID,
 		TeamID:    w.teamID,
 		OrgID:     w.orgID,
+		Prompt:    w.turnPrompt,
 	})
 	if err != nil {
 		if !w.failOpen {
@@ -917,6 +932,7 @@ func (w *CallbackStreamGuardrail) CheckText(ctx context.Context, text string) (b
 		APIKeyID:  w.apiKeyID,
 		TeamID:    w.teamID,
 		OrgID:     w.orgID,
+		Prompt:    w.turnPrompt,
 	})
 	if err != nil {
 		if !w.failOpen {

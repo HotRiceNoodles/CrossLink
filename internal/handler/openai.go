@@ -95,7 +95,7 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 	attempts := attemptsJSON(result.Attempts)
 	c.Set("usage_logged", true)
 	submitUsageEntry(h.usageSvc, &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:       c.GetString("request_id"),
 		RouteType:          "openai",
 		ModelRequested:     reqModel,
 		ProviderID:         providerID,
@@ -280,7 +280,9 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			// a cached response must never bypass updated guardrail rules. A
 			// policy rejection REPLIES with an error: an idempotent replay must
 			// never re-execute the (possibly side-effecting) operation.
-			if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model) {
+			// Replay request carries the original user input: pair-review the
+			// cached output instead of a degraded promptless check.
+			if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model, extractLastOpenAIUserMessage(req.Messages)) {
 				c.Set("skip_call_count", true) // rejected before any upstream work
 				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
 				return
@@ -446,6 +448,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				APIKeyID:  apiKeyID,
 				TeamID:    teamID,
 				OrgID:     orgID,
+				Prompt:    extractLastOpenAIUserMessage(req.Messages),
 			})
 			if grErr != nil {
 				if h.guardrailSvc.IsFailOpen() {
@@ -542,7 +545,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:    c.GetString("request_id"),
 		RouteType:       "openai",
 		ModelRequested:  req.Model,
 		ModelUsed:       route.ProviderModel,
@@ -771,6 +774,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
 		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
+		wrapper.SetTurnPrompt(extractLastOpenAIUserMessage(req.Messages))
 	gwLoop:
 		for {
 			sr := wrapper.Next(c.Request.Context())
@@ -964,7 +968,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
-		GinRequestID:   c.GetString("request_id"),
+		GinRequestID:    c.GetString("request_id"),
 		RouteType:       "openai",
 		ModelRequested:  req.Model,
 		ModelUsed:       route.ProviderModel,
