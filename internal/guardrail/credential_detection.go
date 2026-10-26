@@ -52,6 +52,11 @@ type customCredPattern struct {
 var builtinCredentialPatterns = []credentialPattern{
 	// API Keys — high confidence
 	{Name: "openai_key", Category: "api_key", Regex: `sk-[a-zA-Z0-9]{20,}`, Severity: "critical", Confidence: "high"},
+	// OpenAI project-scoped / service-account keys carry a hyphenated prefix
+	// the plain sk- pattern cannot match (sk- followed by "proj"/"svcacct"
+	// is under the 20-char run before the next hyphen).
+	{Name: "openai_project_key", Category: "api_key", Regex: `sk-proj-[a-zA-Z0-9_\-]{20,}`, Severity: "critical", Confidence: "high"},
+	{Name: "openai_svcacct_key", Category: "api_key", Regex: `sk-svcacct-[a-zA-Z0-9_\-]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "anthropic_key", Category: "api_key", Regex: `sk-ant-[a-zA-Z0-9\-]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "stripe_live_key", Category: "api_key", Regex: `sk_live_[a-zA-Z0-9]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "stripe_test_key", Category: "api_key", Regex: `sk_test_[a-zA-Z0-9]{20,}`, Severity: "high", Confidence: "high"},

@@ -3,6 +3,7 @@ package guardrail
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,57 @@ func TestCredentialDetection_OpenAIKey(t *testing.T) {
 	}
 	if result.RuleName != "credential_detection" {
 		t.Errorf("expected rule_name=credential_detection, got %q", result.RuleName)
+	}
+}
+
+func TestCredentialDetection_OpenAIHyphenatedPrefixes(t *testing.T) {
+	// Project-scoped (sk-proj-…) and service-account (sk-svcacct-…) keys are
+	// the current OpenAI formats; the plain sk-[a-zA-Z0-9]{20,} pattern cannot
+	// match them (hyphen right after the 4-char prefix segment).
+	raw := json.RawMessage(`{}`)
+	eng, err := NewCredentialDetectionEngineFromConfig(raw)
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"project key", "key: sk-proj-4tqSX9f2Zc7mLp8xvN3aBcD1eF2gH3iJk4lM5nO6pQ7rS"},
+		{"service account key", "key: sk-svcacct-VzQ4tqSX9f2Zc7mLp8xvN3aBcD1eF2gH3iJk4lM5n"},
+	}
+	for _, tc := range cases {
+		result, err := eng.Check(context.Background(), tc.text, DirectionRequest, "gpt-4")
+		if err != nil {
+			t.Fatalf("%s: check: %v", tc.name, err)
+		}
+		if !result.Blocked {
+			t.Errorf("%s: should block", tc.name)
+		}
+		if result.Severity != "critical" {
+			t.Errorf("%s: expected severity=critical, got %q", tc.name, result.Severity)
+		}
+	}
+
+	// Anthropic keys must keep their own classification, not fall into the
+	// new openai patterns.
+	ant, err := eng.Check(context.Background(), "key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890", DirectionRequest, "gpt-4")
+	if err != nil {
+		t.Fatalf("anthropic: check: %v", err)
+	}
+	if !ant.Blocked || !strings.Contains(ant.Reason, "anthropic_key") {
+		t.Errorf("anthropic key should classify as anthropic_key, got blocked=%v reason=%q", ant.Blocked, ant.Reason)
+	}
+
+	// Short hyphenless runs that merely start with sk- must not trip the new
+	// patterns (needs 20+ chars after the prefix).
+	ok, err := eng.Check(context.Background(), "prefix sk-proj-too-short is fine", DirectionRequest, "gpt-4")
+	if err != nil {
+		t.Fatalf("negative: check: %v", err)
+	}
+	if ok.Blocked {
+		t.Errorf("short sk-proj- run should not block, reason=%q", ok.Reason)
 	}
 }
 
