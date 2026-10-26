@@ -122,8 +122,16 @@ admin:
   token_expiry: 24
 
 secret_manager:
+  # Master key for encrypting provider API keys: base64 of raw bytes —
+  # 32 bytes (AES) in standard mode / 16 bytes (SM4) in gm mode.
+  # Generate: openssl rand -base64 32   (gm: openssl rand -base64 16)
+  # Provision at install time via env CL_ENCRYPTION_KEY or here; UI generation
+  # in the setup wizard is policy-disabled by default (see allow_wizard_generation).
   encryption_key: "aU8za9Ezj+PMGvWr0F2YLb1oLiNxD7nEq4CbdWsP5ek="    # gm: 3DYiFuVMEbi77ENlkqyWqg==
   # cache_ttl: 5m              # TTL for resolved external secret references
+  # allow_wizard_generation: false   # eval/demo ONLY: re-enables the wizard's
+  #                                   "generate encryption key" entry (key lands
+  #                                   in the same DB as the ciphertexts)
 
 crypto:
   mode: standard          # standard (SHA-256/RSA/AES) or gm (SM3/SM2/SM4)

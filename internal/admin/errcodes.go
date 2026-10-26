@@ -135,6 +135,10 @@ const (
 	ErrTimezoneInvalid     = "timezone_invalid"
 	ErrBaseURLInvalid      = "base_url_invalid"
 	ErrEncryptionKeyActive = "encryption_key_active"
+	// UI-side master-key generation is policy-disabled
+	// (secret_manager.allow_wizard_generation=false): provision via
+	// CL_ENCRYPTION_KEY / config yaml at install time instead.
+	ErrEncryptionKeyUiDisabled = "encryption_key_ui_disabled"
 
 	// File / upload
 	ErrFailedReadFile = "failed_read_file"

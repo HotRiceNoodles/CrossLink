@@ -367,8 +367,15 @@ type CacheConfig struct {
 }
 
 type SecretManagerConfig struct {
-	EncryptionKey string        `mapstructure:"encryption_key"`
+	EncryptionKey string `mapstructure:"encryption_key"`
 	CacheTTL      time.Duration `mapstructure:"cache_ttl"`
+	// AllowWizardGeneration gates the setup wizard / settings page
+	// "generate encryption key" control. The generated key lands in
+	// system_settings — the SAME database as the provider ciphertexts — so a
+	// full DB dump defeats the encryption. Default false: master keys are
+	// provisioned at install time via CL_ENCRYPTION_KEY / config yaml and the
+	// UI entry is refused. Explicit opt-in only for eval/demo profiles.
+	AllowWizardGeneration bool `mapstructure:"allow_wizard_generation"`
 }
 
 type SMTPConfig struct {
@@ -785,6 +792,7 @@ func setDefaults(v *viper.Viper) {
 	// handled entirely in Load, which treats unset/whitespace env as "keep the
 	// YAML value".
 	v.SetDefault("secret_manager.encryption_key", "")
+	v.SetDefault("secret_manager.allow_wizard_generation", false)
 	v.SetDefault("demo.enabled", false)
 	v.SetDefault("demo.api_key", "")
 	v.SetDefault("captcha.slider.piece_size", 44)
@@ -875,6 +883,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Allow both short and long env var names for the encryption key
 	v.BindEnv("secret_manager.encryption_key", "CL_ENCRYPTION_KEY", "CL_SECRET_MANAGER_ENCRYPTION_KEY")
+	v.BindEnv("secret_manager.allow_wizard_generation", "CL_SECRET_MANAGER_ALLOW_WIZARD_GENERATION")
 }
 
 // WriteLicenseKey updates the license.license_key field in the YAML config file.

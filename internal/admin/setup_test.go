@@ -65,7 +65,11 @@ func TestSetupApply_WritesAllRowsAndHotAppliesTimezone(t *testing.T) {
 
 func TestSetupApply_GeneratesEncryptionKeyWhenKeyless(t *testing.T) {
 	db := setupReadinessTestDB(t)
-	h := newSetupHandlerForTest(t, db, &config.Config{})
+	// UI generation is an explicit opt-in (secret_manager.allow_wizard_generation,
+	// default false — see TestSetupApply_KeyGenerationRefusedWhenPolicyDisabled).
+	cfg := &config.Config{}
+	cfg.SecretManager.AllowWizardGeneration = true
+	h := newSetupHandlerForTest(t, db, cfg)
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/setup/apply", map[string]any{
 		"generate_encryption_key": true,
@@ -87,6 +91,27 @@ func TestSetupApply_GeneratesEncryptionKeyWhenKeyless(t *testing.T) {
 	assert.True(t, resp.Data.RestartRecommended, "process booted keyless (encStore nil) → restart until watcher picks it up")
 	// Never leak the raw key in the response.
 	assert.Equal(t, "generated", resp.Data.Applied["encryption_key"])
+}
+
+func TestSetupApply_KeyGenerationRefusedWhenPolicyDisabled(t *testing.T) {
+	// Default policy: master keys are operator-provisioned (env/config), the
+	// wizard/settings-page entry is refused with 403 and nothing is written.
+	db := setupReadinessTestDB(t)
+	h := newSetupHandlerForTest(t, db, &config.Config{})
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/setup/apply", map[string]any{"generate_encryption_key": true, "status": "done"})
+	h.Apply(c)
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+
+	var body struct {
+		ErrorCode string `json:"error_code"`
+	}
+	decodeResponse(t, w, &body)
+	assert.Equal(t, ErrEncryptionKeyUiDisabled, body.ErrorCode)
+
+	var count int64
+	db.Model(&model.SystemSetting{}).Where("key = ?", "encryption_key").Count(&count)
+	assert.Zero(t, count, "no encryption_key row may be written when policy-disabled")
 }
 
 func TestSetupApply_KeyGenerationRefusedWhenKeyActive(t *testing.T) {

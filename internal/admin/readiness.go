@@ -44,6 +44,11 @@ type ReadinessCheck struct {
 	DetailParams map[string]any `json:"detail_params,omitempty"`
 	FixHintKey   string         `json:"fix_hint_key,omitempty"`
 	FixAction    string         `json:"fix_action,omitempty"`
+	// UiGenerationAllowed is set only on the encryption_key check: whether the
+	// setup wizard / settings page may generate the master key
+	// (secret_manager.allow_wizard_generation). Frontends hide the UI entry
+	// and show config guidance when false.
+	UiGenerationAllowed *bool `json:"ui_generation_allowed,omitempty"`
 }
 
 type ReadinessSummary struct {
@@ -198,6 +203,8 @@ func (r *ReadinessChecker) Evaluate(ctx context.Context) (*ReadinessReport, erro
 
 func (r *ReadinessChecker) checkEncryptionKey(inp *readinessInputs) ReadinessCheck {
 	c := ReadinessCheck{ID: "encryption_key", TitleKey: "doctor.check.encryptionKey.title"}
+	uiAllowed := r.cfg.SecretManager.AllowWizardGeneration
+	c.UiGenerationAllowed = &uiAllowed
 	if r.encryptionActive(inp) {
 		c.Severity = SeverityOK
 		c.DetailKey = "doctor.check.encryptionKey.active"
@@ -211,8 +218,15 @@ func (r *ReadinessChecker) checkEncryptionKey(inp *readinessInputs) ReadinessChe
 		c.Severity = SeverityWarn
 		c.DetailKey = "doctor.check.encryptionKey.notConfigured"
 	}
-	c.FixHintKey = "doctor.check.encryptionKey.hint"
-	c.FixAction = FixOpenWizard
+	if uiAllowed {
+		// Wizard can generate + hot-activate the key.
+		c.FixHintKey = "doctor.check.encryptionKey.hint"
+		c.FixAction = FixOpenWizard
+	} else {
+		// Policy: keys are provisioned by the operator via env/config — point
+		// there instead of the wizard.
+		c.FixHintKey = "doctor.check.encryptionKey.hintConfig"
+	}
 	return c
 }
 

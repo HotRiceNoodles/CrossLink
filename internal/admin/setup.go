@@ -72,12 +72,20 @@ func (h *SetupHandler) Apply(c *gin.Context) {
 	}
 
 	// Server-side key generation (never trust a client-supplied key). Refused
-	// when any key is already active — rotation is the Pro rotate-key flow.
+	// when any key is already active — rotation is the Pro rotate-key flow —
+	// and when policy disables UI generation: the generated key is persisted
+	// in system_settings (same DB as the provider ciphertexts), so production
+	// keys must come from CL_ENCRYPTION_KEY / config yaml instead.
 	newKey := ""
 	if input.GenerateEncryptionKey {
 		if h.activeKeyExists() {
 			errorResp(c, http.StatusConflict, ErrEncryptionKeyActive,
 				"an encryption key is already active; use /secrets/rotate-key (Pro) to change it")
+			return
+		}
+		if !h.cfg.SecretManager.AllowWizardGeneration {
+			errorResp(c, http.StatusForbidden, ErrEncryptionKeyUiDisabled,
+				"UI encryption-key generation is disabled by policy (secret_manager.allow_wizard_generation=false); provision the master key at install time via CL_ENCRYPTION_KEY / secret_manager.encryption_key")
 			return
 		}
 		raw := make([]byte, h.cp.CipherKeySize())
