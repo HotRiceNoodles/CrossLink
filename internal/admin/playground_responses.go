@@ -255,7 +255,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 	// the final check BEFORE anything is released. Window mode: emit as it
 	// arrives and still run the end-of-stream check for observability —
 	// already-emitted window content is not retractable (documented tradeoff).
-	strict := h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && h.guardrailSvc.StreamMode() == "strict"
+	strict := h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && h.guardrailSvc.StreamModeFor(c.Request.Context()) == "strict"
 	var held []string
 	var text strings.Builder
 	heldBytes, heldEvents := 0, 0
@@ -349,9 +349,9 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 			f.Flush()
 		}
 	}
-	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
+	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && h.guardrailSvc.StreamModeFor(c.Request.Context()) != "incremental" {
 		grCtx, grCancel := guardResponseCtx(c, h.guardrailSvc)
-		grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: req.Model})
+		grResult, grErr := h.guardrailSvc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: req.Model, OrgID: c.GetInt64("org_id"), TeamID: c.GetInt64("team_id")})
 		grCancel()
 		if grErr != nil {
 			if h.guardrailSvc.IsFailOpen() {
@@ -373,7 +373,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		if grResult != nil && grResult.Truncated {
 			c.Set("guardrail_truncated", true)
 		}
-		if grErr == nil && grResult != nil && grResult.Blocked {
+		if grErr == nil && grResult != nil && (grResult.Blocked || (strict && grResult.Action == "mask")) {
 			// Strict: nothing was released — withhold the buffer and emit only
 			// the guardrail error. Window: content already emitted; the error
 			// event still terminates the stream for the client.
@@ -434,7 +434,7 @@ const pgMaxSSELineBytes = 4 << 20
 // lines count toward bytes) and releases them only after the final check;
 // window mode passes through and end-checks for observability.
 func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailService, model string) {
-	strict := svc != nil && svc.IsEnabled() && svc.StreamMode() == "strict"
+	strict := svc != nil && svc.IsEnabled() && svc.StreamModeFor(c.Request.Context()) == "strict"
 	flusher, _ := c.Writer.(http.Flusher)
 	br := bufio.NewReader(rc)
 	var held []string
@@ -510,11 +510,11 @@ func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailServ
 		}
 		return
 	}
-	if svc == nil || !svc.IsEnabled() {
+	if svc == nil || !svc.IsEnabled() || svc.StreamModeFor(c.Request.Context()) == "incremental" {
 		return
 	}
 	grCtx, grCancel := guardResponseCtx(c, svc)
-	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: model})
+	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text.String(), Direction: guardrail.DirectionResponse, Model: model, OrgID: c.GetInt64("org_id"), TeamID: c.GetInt64("team_id")})
 	grCancel()
 	if grErr != nil {
 		if svc.IsFailOpen() {
@@ -535,7 +535,7 @@ func pgCopySSEGuarded(c *gin.Context, rc io.Reader, svc *guardrail.GuardrailServ
 	if grResult != nil && grResult.Truncated {
 		c.Set("guardrail_truncated", true)
 	}
-	if grErr == nil && grResult != nil && grResult.Blocked {
+	if grErr == nil && grResult != nil && (grResult.Blocked || (strict && grResult.Action == "mask")) {
 		c.Set("guardrail_triggered", true)
 		c.Set("guardrail_rule", grResult.RuleName)
 		if strict {
@@ -590,7 +590,7 @@ func pgResponsesGuardBlocked(c *gin.Context, svc *guardrail.GuardrailService, mo
 	}
 	grCtx, grCancel := guardResponseCtx(c, svc)
 	defer grCancel()
-	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text, Direction: guardrail.DirectionResponse, Model: model})
+	grResult, grErr := svc.Check(grCtx, &guardrail.CheckRequest{Content: text, Direction: guardrail.DirectionResponse, Model: model, OrgID: c.GetInt64("org_id"), TeamID: c.GetInt64("team_id")})
 	if grErr != nil {
 		// Check only returns an error when it could not verify AND policy is
 		// fail-closed (fail-open is absorbed inside the service). Mirror the

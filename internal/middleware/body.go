@@ -305,8 +305,13 @@ func ReadBodyWithBudget(maxSize int64, budget *InflightBodyBudget, multipartRese
 		defer res.releaseAll()
 
 		var bodyBytes []byte
-		if c.Request.ContentLength > 0 {
-			// Length known and budget-reserved: a single bounded ReadAll.
+		if c.Request.Body == nil || c.Request.Body == http.NoBody {
+			// 无请求体无需申请未知长度读取的临时块；仍保留零字节预留，
+			// 使后续请求体改写继续受大小及内存预算约束。
+			bodyBytes = []byte{}
+		} else if c.Request.ContentLength > 0 || budget == nil || budget.limit <= 0 {
+			// 长度已知或预算关闭时，按单请求大小上限读取；关闭预算
+			// 不应进入依赖预算容量的未知长度准入路径。
 			b, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSize+1))
 			c.Request.Body.Close()
 			if err != nil {

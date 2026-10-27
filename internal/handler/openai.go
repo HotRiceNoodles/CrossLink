@@ -773,7 +773,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	}
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
+		wrapper := guardrail.NewStreamGuardrailWrapper(ch, h.guardrailSvc, req.Model, apiKeyID, teamID, orgID, c.Request.Context())
 		wrapper.SetTurnPrompt(extractLastOpenAIUserMessage(req.Messages))
 	gwLoop:
 		for {

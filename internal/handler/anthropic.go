@@ -545,8 +545,8 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 
 	var grWrapper *guardrail.CallbackStreamGuardrail
 	var messageStopSent bool
-	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID)
+	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() && h.guardrailSvc.StreamModeFor(c.Request.Context()) != "incremental" {
+		grWrapper = guardrail.NewCallbackStreamGuardrail(h.guardrailSvc, req.Model, apiKeyID, teamID, orgID, c.Request.Context())
 		grWrapper.SetTurnPrompt(extractLastUserMessage(req.Messages))
 	}
 	strictMode := grWrapper != nil && grWrapper.Strict()

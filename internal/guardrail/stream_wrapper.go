@@ -14,6 +14,8 @@ import (
 )
 
 // Stream guardrail execution modes (GuardrailService.StreamMode):
+//   - "incremental": the request middleware's shared SSE writer owns checking
+//     and release. Without that writer, the effective mode is strict.
 //   - "window" (default, legacy): content is checked in a sliding window as it
 //     accumulates; chunks are returned to the caller as they arrive, so up to
 //     one window of violating content may already have been emitted when a
@@ -29,16 +31,17 @@ import (
 //     masked tool-arguments string is no longer valid JSON) fails closed too.
 
 type StreamGuardrailWrapper struct {
-	ch         <-chan domain.SSEChunk
-	svc        *GuardrailService
-	model      string
-	apiKeyID   int64
-	teamID     int64
-	orgID      int64
-	turnPrompt string
-	buf        strings.Builder
-	windowSize int
-	failOpen   bool
+	ch          <-chan domain.SSEChunk
+	svc         *GuardrailService
+	model       string
+	apiKeyID    int64
+	teamID      int64
+	orgID       int64
+	turnPrompt  string
+	buf         strings.Builder
+	windowSize  int
+	failOpen    bool
+	passthrough bool
 
 	strict          bool
 	strictMaxRunes  int
@@ -86,7 +89,7 @@ type streamFrag struct {
 	end      int
 }
 
-func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService, model string, apiKeyID, teamID, orgID int64) *StreamGuardrailWrapper {
+func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService, model string, apiKeyID, teamID, orgID int64, contexts ...context.Context) *StreamGuardrailWrapper {
 	w := &StreamGuardrailWrapper{
 		ch:         ch,
 		svc:        svc,
@@ -98,7 +101,12 @@ func NewStreamGuardrailWrapper(ch <-chan domain.SSEChunk, svc *GuardrailService,
 	}
 	if svc != nil {
 		w.failOpen = svc.IsFailOpen()
-		w.strict = svc.StreamMode() == "strict"
+		var ctx context.Context
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		w.strict = svc.StreamModeFor(ctx) == "strict"
+		w.passthrough = svc.StreamModeFor(ctx) == "incremental"
 		w.strictMaxRunes = svc.StrictMaxRunes()
 		w.strictMaxBytes = svc.StrictMaxBytes()
 		w.strictMaxEvents = svc.StrictMaxEvents()
@@ -124,6 +132,17 @@ type StreamResult struct {
 func (w *StreamGuardrailWrapper) Strict() bool { return w.strict }
 
 func (w *StreamGuardrailWrapper) Next(ctx context.Context) StreamResult {
+	if w.passthrough {
+		select {
+		case chunk, ok := <-w.ch:
+			if !ok {
+				return StreamResult{Done: true}
+			}
+			return StreamResult{Chunk: &chunk}
+		case <-ctx.Done():
+			return StreamResult{Done: true}
+		}
+	}
 	if w.strict {
 		return w.nextStrict(ctx)
 	}
@@ -595,7 +614,7 @@ type callbackEvent struct {
 func (e callbackEvent) Name() string { return e.name }
 func (e callbackEvent) Data() string { return e.data }
 
-func NewCallbackStreamGuardrail(svc *GuardrailService, model string, apiKeyID, teamID, orgID int64) *CallbackStreamGuardrail {
+func NewCallbackStreamGuardrail(svc *GuardrailService, model string, apiKeyID, teamID, orgID int64, contexts ...context.Context) *CallbackStreamGuardrail {
 	w := &CallbackStreamGuardrail{
 		svc:        svc,
 		model:      model,
@@ -606,7 +625,11 @@ func NewCallbackStreamGuardrail(svc *GuardrailService, model string, apiKeyID, t
 	}
 	if svc != nil {
 		w.failOpen = svc.IsFailOpen()
-		w.strict = svc.StreamMode() == "strict"
+		var ctx context.Context
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		w.strict = svc.StreamModeFor(ctx) == "strict"
 		w.strictMaxRunes = svc.StrictMaxRunes()
 		w.strictMaxBytes = svc.StrictMaxBytes()
 		w.strictMaxEvents = svc.StrictMaxEvents()

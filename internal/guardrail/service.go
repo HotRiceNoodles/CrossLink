@@ -37,6 +37,8 @@ type GuardrailService struct {
 	//                       emitted before the covering check runs) or
 	//                       "strict" (full buffering, nothing is emitted
 	//                       before the final check passes).
+	//                       "incremental" uses per-response sessions and the
+	//                       shared SSE gate, falling back to strict when needed.
 	//   strictMaxRunes      strict-mode buffer cap; exceeding it fails closed.
 	//   requestBudgetMs     total request-direction detection budget.
 	//   responseBudgetMs    budget for one response/stream final check.
@@ -63,8 +65,10 @@ type GuardrailService struct {
 
 	sf singleflight.Group
 
-	engineMu sync.Mutex
-	engines  map[int64]GuardrailEngine
+	engineMu       sync.Mutex
+	engines        map[int64]GuardrailEngine
+	streamEngineMu sync.Mutex
+	streamEngines  map[streamEngineKey]*streamEngineEntry
 
 	handlersMu sync.RWMutex
 	handlers   []EventHandler
@@ -276,6 +280,7 @@ func (s *GuardrailService) LoadRules(ctx context.Context) error {
 		}
 	}
 	s.engineMu.Unlock()
+	s.pruneStreamEngines(rules)
 
 	return nil
 }
@@ -438,7 +443,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 	// flag the result as partial coverage. Never a silent clean pass.
 	truncated := false
 	if utf8.RuneCountInString(req.Content) > maxCheckContent {
-		if s.OversizeAction() == "reject" || s.StrictCoverage() || (s.StreamMode() == "strict" && req.Direction == DirectionResponse) {
+		if s.OversizeAction() == "reject" || s.StrictCoverage() || (s.StreamModeFor(ctx) == "strict" && req.Direction == DirectionResponse) {
 			s.emitEvent(ctx, GuardrailEvent{
 				EngineType: "guardrail_service",
 				Direction:  string(req.Direction),
@@ -701,6 +706,11 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 
 	if len(maskedSpans) > 0 {
 		composed := composeSpans(maskedSpans)
+		if req.Direction == DirectionRequest {
+			if vault := PIIVaultFromContext(ctx); vault != nil {
+				vault.maskSpans(req.Content, composed)
+			}
+		}
 		return &CheckResponse{
 			Blocked:       false,
 			Action:        "mask",
@@ -751,6 +761,11 @@ func composeSpans(spans []Span) []Span {
 			continue
 		}
 		if n := len(out); n > 0 && sp.Start < out[n-1].End {
+			// Never restore an overlapping credential/other-rule mask, or a
+			// union wider than the original PII detection.
+			if sp.Start != out[n-1].Start || sp.End != out[n-1].End || !sp.Reversible {
+				out[n-1].Reversible = false
+			}
 			if sp.End > out[n-1].End {
 				out[n-1].End = sp.End
 			}
@@ -820,7 +835,7 @@ func (s *GuardrailService) RefreshSettings(ctx context.Context) {
 		case "guardrails_fail_open":
 			s.failOpen.Store(st.Value == "true")
 		case "guardrails_stream_mode":
-			if st.Value == "strict" || st.Value == "window" {
+			if st.Value == "strict" || st.Value == "window" || st.Value == "incremental" {
 				s.streamMode.Store(st.Value)
 			} else {
 				slog.Warn("guardrail: ignored invalid guardrails_stream_mode", "value", st.Value)

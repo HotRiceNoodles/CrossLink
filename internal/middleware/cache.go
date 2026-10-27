@@ -59,6 +59,13 @@ type CacheHitBiller func(c *gin.Context, cached *service.CacheEntry)
 // content that today's policy forbids.
 func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, guardrailSvc *guardrail.GuardrailService, billHit CacheHitBiller) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Tokens are scoped to this request; semantic cache entries cannot be
+		// reused without the private mapping and must never store restored PII.
+		if vault := guardrail.PIIVaultFromContext(c.Request.Context()); vault != nil && vault.Active() {
+			c.Header("X-Cache", "BYPASS-PII")
+			c.Next()
+			return
+		}
 		if cacheSvc == nil {
 			c.Next()
 			return

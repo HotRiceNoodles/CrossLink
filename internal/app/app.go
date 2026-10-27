@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"net/http"
+	"path/filepath"
 	// Registers /debug/pprof/* handlers on http.DefaultServeMux; exposed ONLY
 	// behind CL_PPROF=1 + gateway auth (see the gated route below).
 	_ "net/http/pprof"
@@ -19,8 +19,8 @@ import (
 	"net"
 
 	"github.com/crosslink/internal/admin"
-	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/apidoc"
+	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
@@ -364,13 +364,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		DataLensRepo:   repos.DataLensRepo,
 		AppCtx:         appCtx,
 	}
-	// Response-side guardrail wiring: the handlers' non-stream and stream
-	// response checks (and the idempotency-cache re-check) are gated on this
-	// service reference. Passing nil here left every response-direction rule
-	// dead in production — the checks existed but never ran. The service is
-	// constructed above (ext.Deps.GuardrailSvc); handlers nil-check internally.
-	anthropicHandler := handler.NewAnthropicHandler(infra.GatewaySvc, infra.Resolver, svcs.UsageSvc, svcs.IdemCache, guardrailSvc)
-	openaiHandler := handler.NewOpenAIHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, nil, svcs.ActiveTracker, svcs.IdemCache, infra.RetryBudget, guardrailSvc)
+	openaiHandler, anthropicHandler := newGatewayProtocolHandlers(infra, svcs, guardrailSvc)
 	usageQueryHandler := handler.NewUsageQueryHandler(svcs.BudgetSvc)
 	portalUsageHandler := handler.NewPortalUsageHandler(svcs.BudgetSvc)
 	templateCatalogHandler := handler.NewTemplateCatalogHandler(db)

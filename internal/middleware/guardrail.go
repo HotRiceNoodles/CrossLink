@@ -70,7 +70,8 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 		}
 
 		var probe struct {
-			Model string `json:"model"`
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
 		}
 		if json.Unmarshal(bodyBytes, &probe) != nil && !multipartFile {
 			c.Next()
@@ -78,6 +79,48 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 		}
 
 		ex := extractContent(bodyBytes, c.Request.URL.Path)
+		streamContent := ""
+		if ex != nil {
+			streamContent = ex.text
+		}
+		piiCtx, piiVault, piiErr := guardrail.WithPIIVault(c.Request.Context())
+		if piiErr != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "PII mapping unavailable"}})
+			return
+		}
+		c.Request = c.Request.WithContext(piiCtx)
+		defer piiVault.Clear()
+		next := func() {
+			if c.IsAborted() {
+				return
+			}
+			if piiVault.Active() {
+				if c.GetHeader("X-Idempotency-Key") != "" {
+					c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": "reversible PII masking does not support X-Idempotency-Key; mappings are request-scoped"}})
+					return
+				}
+				finish := installPIIRestore(c, piiVault, svc.StrictMaxBytes(), svc.StrictMaxEvents())
+				defer finish()
+			}
+			// Response engines are opened only after request-side approval;
+			// contextual engines receive the transformed request when masked.
+			if probe.Stream && svc.StreamMode() == "incremental" {
+				meta := guardrail.CheckRequest{Content: streamContent, Model: probe.Model, Direction: guardrail.DirectionResponse, OrgID: c.GetInt64("org_id")}
+				if key := GetAPIKeyFromContext(c); key != nil {
+					meta.APIKeyID = key.ID
+					if key.TeamID != nil {
+						meta.TeamID = *key.TeamID
+					}
+				}
+				finish, err := installIncrementalStream(c, svc, meta)
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "guardrail_error", "message": "stream guardrail unavailable"}})
+					return
+				}
+				defer finish()
+			}
+			c.Next()
+		}
 
 		// Strict coverage: a POST gateway content endpoint whose body we cannot
 		// structurally inspect — no extractable text, or non-text media parts
@@ -98,7 +141,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			return
 		}
 		if ex == nil || ex.text == "" {
-			c.Next()
+			next()
 			return
 		}
 
@@ -138,7 +181,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 		if err != nil {
 			if svc.IsFailOpen() {
 				slog.Warn("guardrail check failed, failing open", "error", err)
-				c.Next()
+				next()
 				return
 			}
 			slog.Error("guardrail: request check failed", "error", err)
@@ -169,9 +212,10 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 				setSecurityEvent(c, result, "")
 				if result.Action == "mask" {
 					applyRequestMask(c, ex, result)
+					streamContent = result.MaskedContent
 				}
 			}
-			c.Next()
+			next()
 			return
 		}
 
@@ -194,9 +238,10 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			c.Set("guardrail_rule", result.RuleName)
 			setSecurityEvent(c, result, "")
 			applyRequestMask(c, ex, result)
+			streamContent = result.MaskedContent
 		}
 
-		c.Next()
+		next()
 	}
 }
 

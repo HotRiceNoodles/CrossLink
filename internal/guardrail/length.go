@@ -52,10 +52,11 @@ func (e *LengthEngine) Check(_ context.Context, content string, direction Direct
 	}
 	if (direction == DirectionResponse || direction == DirectionBoth) && e.maxOutputChars > 0 && length > e.maxOutputChars {
 		return &GuardrailResult{
-			Blocked:  true,
-			RuleName: e.name,
-			Reason:   fmt.Sprintf("output length %d exceeds max %d characters", length, e.maxOutputChars),
-			Severity: "low",
+			Blocked:        true,
+			RuleName:       e.name,
+			Reason:         fmt.Sprintf("output length %d exceeds max %d characters", length, e.maxOutputChars),
+			Severity:       "low",
+			ContentSnippet: "[OUTPUT_LENGTH_EXCEEDED]",
 		}, nil
 	}
 

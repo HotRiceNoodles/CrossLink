@@ -18,6 +18,11 @@ import (
 // reach these labels; log sanitization (SanitizePreview) is unchanged.
 
 var (
+	guardrailStreamReleaseSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cl_guardrail_stream_release_seconds",
+		Help:    "Time from receiving a complete SSE frame to releasing that approved frame, including checking and pending predecessors.",
+		Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2, 5},
+	})
 	guardrailChecksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cl_guardrail_checks_total",
 		Help: "Guardrail engine checks by engine type, direction and result (hit|miss|error).",

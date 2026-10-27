@@ -225,8 +225,8 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 				Direction: guardrail.DirectionResponse,
 				Model:     req.Model,
 				APIKeyID:  0,
-				TeamID:    0,
-				OrgID:     0,
+				TeamID:    c.GetInt64("team_id"),
+				OrgID:     orgID,
 				Prompt:    guardLastUserText(req.Messages),
 			})
 			if grErr != nil {
@@ -396,7 +396,7 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 	ctxDone := c.Request.Context().Done()
 
 	if h.guardrailSvc != nil && h.guardrailSvc.IsEnabled() {
-		wrapper := guardrail.NewStreamGuardrailWrapper(result.StreamCh, h.guardrailSvc, req.Model, 0, 0, 0)
+		wrapper := guardrail.NewStreamGuardrailWrapper(result.StreamCh, h.guardrailSvc, req.Model, 0, c.GetInt64("team_id"), orgID, c.Request.Context())
 		wrapper.SetTurnPrompt(guardLastUserText(req.Messages))
 	guardLoop:
 		for {
@@ -1340,8 +1340,8 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 			Direction: guardrail.DirectionResponse,
 			Model:     req.Model,
 			APIKeyID:  0,
-			TeamID:    0,
-			OrgID:     0,
+			TeamID:    c.GetInt64("team_id"),
+			OrgID:     orgID,
 		})
 		if grErr != nil {
 			slog.Warn("playground: guardrail STT response check failed", "error", grErr)

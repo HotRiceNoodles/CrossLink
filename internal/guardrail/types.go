@@ -38,6 +38,8 @@ type Span struct {
 	Start       int    `json:"start"`
 	End         int    `json:"end"`
 	Replacement string `json:"replacement"`
+	// Reversible is internal only; original values never enter API results or events.
+	Reversible bool `json:"-"`
 }
 
 type GuardrailEngine interface {
