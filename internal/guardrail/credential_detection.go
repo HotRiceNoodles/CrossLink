@@ -57,6 +57,7 @@ var builtinCredentialPatterns = []credentialPattern{
 	// is under the 20-char run before the next hyphen).
 	{Name: "openai_project_key", Category: "api_key", Regex: `sk-proj-[a-zA-Z0-9_\-]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "openai_svcacct_key", Category: "api_key", Regex: `sk-svcacct-[a-zA-Z0-9_\-]{20,}`, Severity: "critical", Confidence: "high"},
+	{Name: "sk_bf_key", Category: "api_key", Regex: `sk-bf-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}`, Severity: "critical", Confidence: "high"},
 	{Name: "anthropic_key", Category: "api_key", Regex: `sk-ant-[a-zA-Z0-9\-]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "stripe_live_key", Category: "api_key", Regex: `sk_live_[a-zA-Z0-9]{20,}`, Severity: "critical", Confidence: "high"},
 	{Name: "stripe_test_key", Category: "api_key", Regex: `sk_test_[a-zA-Z0-9]{20,}`, Severity: "high", Confidence: "high"},
@@ -171,19 +172,20 @@ func (e *credentialDetectionEngine) Check(_ context.Context, content string, _ D
 
 	var reasons []string
 	var highestSeverity string
-	var allMasked string
 	var hasBlockingMatch bool
 
 	for _, p := range e.activePatterns {
-		loc := p.re.FindStringIndex(processed)
+		var loc []int
+		for _, candidate := range p.re.FindAllStringIndex(processed, -1) {
+			if p.Confidence != "medium" || validateMediumConfidenceMatch(processed[candidate[0]:candidate[1]]) {
+				loc = candidate
+				break
+			}
+		}
 		if loc == nil {
 			continue
 		}
 		match := processed[loc[0]:loc[1]]
-
-		if p.Confidence == "medium" && !validateMediumConfidenceMatch(match) {
-			continue
-		}
 
 		if severityOrder[p.Severity] > severityOrder[highestSeverity] {
 			highestSeverity = p.Severity
@@ -197,12 +199,6 @@ func (e *credentialDetectionEngine) Check(_ context.Context, content string, _ D
 		masked := maskCredential(match, e.maskKeepPrefix, e.maskKeepSuffix, e.maskChar)
 		reasons = append(reasons, fmt.Sprintf("%s: %s", p.Name, masked))
 
-		// Mask all instances of this pattern in content
-		if allMasked == "" {
-			allMasked = processed
-		}
-		allMasked = maskAllMatches(p.re, allMasked, e.maskKeepPrefix, e.maskKeepSuffix, e.maskChar)
-
 		if len(reasons) >= e.maxMatches {
 			break
 		}
@@ -212,32 +208,15 @@ func (e *credentialDetectionEngine) Check(_ context.Context, content string, _ D
 		return &GuardrailResult{Blocked: false}, nil
 	}
 
-	// Field spans are computed against the ORIGINAL content: offsets in the
-	// preprocessed string (which appends decoded variants) do not map back to
-	// caller fields. Matches visible only in decoded variants still block,
-	// but cannot be masked in place — the whole-string MaskedContent covers
-	// them for legacy consumers.
-	var spans []Span
-	for _, p := range e.activePatterns {
-		for _, loc := range p.re.FindAllStringIndex(content, -1) {
-			match := content[loc[0]:loc[1]]
-			if p.Confidence == "medium" && !validateMediumConfidenceMatch(match) {
-				continue
-			}
-			spans = append(spans, Span{
-				Start:       loc[0],
-				End:         loc[1],
-				Replacement: maskCredential(match, e.maskKeepPrefix, e.maskKeepSuffix, e.maskChar),
-			})
-		}
-	}
+	// 解码副本仅用于检测；替换始终作用于原文，编码凭据也必须有原文字节范围。
+	maskedContent, spans := e.maskOriginalCredentialContent(content, processed)
 
 	return &GuardrailResult{
 		Blocked:        hasBlockingMatch,
 		RuleName:       e.name,
 		Reason:         fmt.Sprintf("credentials detected: %s", strings.Join(reasons, ", ")),
 		Severity:       highestSeverity,
-		MaskedContent:  allMasked,
+		MaskedContent:  maskedContent,
 		MaskedSpans:    spans,
 		ContentSnippet: truncateCred(reasons[0], 80),
 	}, nil
@@ -273,13 +252,13 @@ func preprocessCredentialContent(content string) string {
 	} else {
 		parts = append(parts, content)
 	}
-	// URL decode
-	base := parts[len(parts)-1]
-	if idx := strings.IndexByte(base, '%'); idx >= 0 {
-		// Only attempt if there are percent signs suggesting URL encoding
-		decoded := decodeURL(base)
-		if decoded != base {
-			parts = append(parts, decoded)
+	// 原文与 Base64 解码结果分别处理 URL 转义，避免另一个安全 Base64 行
+	// 使原文中的 URL 编码凭据失去检查。与增量检查的独立通道保持一致。
+	for i, count := 0, len(parts); i < count; i++ {
+		if base := parts[i]; strings.Contains(base, "%") {
+			if decoded := decodeURL(base); decoded != base {
+				parts = append(parts, decoded)
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -387,12 +366,6 @@ func maskCredential(value string, keepPrefix, keepSuffix int, maskChar string) s
 		}
 	}
 	return b.String()
-}
-
-func maskAllMatches(re *regexp.Regexp, content string, keepPrefix, keepSuffix int, maskChar string) string {
-	return re.ReplaceAllStringFunc(content, func(match string) string {
-		return maskCredential(match, keepPrefix, keepSuffix, maskChar)
-	})
 }
 
 func truncateCred(s string, maxLen int) string {

@@ -7,6 +7,47 @@ import (
 	"testing"
 )
 
+func TestCredentialDetection_SKBFKey(t *testing.T) {
+	uuid := "01234567-89ab-cdef-0123-456789abcdef"
+	secret := "sk-bf-" + uuid
+	for _, tc := range []struct {
+		name, text, config string
+		blocked            bool
+	}{
+		{"完整值", secret, `{}`, true},
+		{"大写十六进制", "sk-bf-" + strings.ToUpper(uuid), `{}`, true},
+		{"赋值上下文", "api_key=" + secret, `{}`, true},
+		{"启用API类别", secret, `{"categories":["api_key"]}`, true},
+		{"排除API类别", secret, `{"categories":["cloud_credential"]}`, false},
+		{"普通UUID", uuid, `{}`, false},
+		{"文档占位符", "sk-bf-<UUID>", `{}`, false},
+		{"错误前缀", "sk-bg-" + uuid, `{}`, false},
+		{"非十六进制", "sk-bf-g" + uuid[1:], `{}`, false},
+		{"未完成UUID", secret[:len(secret)-1], `{}`, false},
+		{"错误分组长度", "sk-bf-01234567-89a-cdef-0123-456789abcdef", `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := credentialEngine(t, tc.config)
+			for _, direction := range []Direction{DirectionRequest, DirectionResponse} {
+				text := "普通前文：" + tc.text + "，后文。"
+				result, err := engine.Check(t.Context(), text, direction, "")
+				if err != nil || result.Blocked != tc.blocked {
+					t.Fatalf("direction=%s: 预期阻断=%v，结果=%+v，错误=%v", direction, tc.blocked, result, err)
+				}
+				if tc.blocked {
+					value := strings.TrimPrefix(tc.text, "api_key=")
+					if result.Severity != "critical" || !strings.Contains(result.Reason, "sk_bf_key:") || strings.Contains(result.Reason, value) || strings.Contains(result.ContentSnippet, value) || strings.Contains(result.MaskedContent, value) {
+						t.Fatalf("凭据归因或脱敏错误：%+v", result)
+					}
+					if len(result.MaskedSpans) != 1 || result.MaskedSpans[0].Start != len("普通前文：")+len(tc.text)-len(value) || result.MaskedSpans[0].End != len("普通前文：")+len(tc.text) {
+						t.Fatalf("脱敏范围错误：%+v", result.MaskedSpans)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCredentialDetection_OpenAIKey(t *testing.T) {
 	raw := json.RawMessage(`{}`)
 	eng, err := NewCredentialDetectionEngineFromConfig(raw)

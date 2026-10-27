@@ -316,6 +316,15 @@ func (h *GuardrailHandler) Test(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "check failed"})
 		return
 	}
+	if rule.Type == "pii_detection" && rule.Action == "mask" {
+		_, vault, err := guardrail.WithPIIVault(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "PII mapping unavailable"})
+			return
+		}
+		defer vault.Clear()
+		vault.MaskResult(input.Text, result)
+	}
 
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "guardrail:test", "guardrail", fmt.Sprintf("%d", rule.ID), rule.Name, service.AuditDetail(map[string]any{"blocked": result.Blocked}))
@@ -411,8 +420,8 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 		staged["guardrails_fail_open"] = boolToStr(*input.FailOpen)
 	}
 	if input.StreamMode != nil {
-		if *input.StreamMode != "window" && *input.StreamMode != "strict" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "stream_mode must be \"window\" or \"strict\""})
+		if *input.StreamMode != "window" && *input.StreamMode != "strict" && *input.StreamMode != "incremental" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "stream_mode must be \"window\", \"strict\" or \"incremental\""})
 			return
 		}
 		staged["guardrails_stream_mode"] = *input.StreamMode
