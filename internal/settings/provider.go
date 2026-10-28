@@ -121,7 +121,7 @@ func (p *Provider) EncryptSecret(plain string) (stored string, encrypted bool, e
 func (p *Provider) load(ctx context.Context) error {
 	var rows []model.SystemSetting
 	if err := p.db.WithContext(ctx).
-		Where("key IN ?", KeyNames()).
+		Where("system_settings.key IN ?", KeyNames()).
 		Find(&rows).Error; err != nil {
 		return err
 	}

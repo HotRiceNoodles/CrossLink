@@ -58,6 +58,10 @@ var ValidActions = map[string]bool{
 	"guardrail:update":            true,
 	"guardrail:delete":            true,
 	"guardrail:test":              true,
+	// crosslink-guard 管理动作位（旁路检测服务专属；网关路由不引用，
+	// 对网关部署无授权面影响）。
+	"guard:token_manage":          true,
+	"guard:event_view":            true,
 	"secret:test":                 true,
 	"secret:manage":               true,
 	"audit:list":                  true,

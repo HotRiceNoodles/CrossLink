@@ -154,7 +154,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Load middleware log config from DB
 	var mlCfg model.SystemSetting
-	if db.Where("key = ?", "log_middleware_errors").First(&mlCfg).Error == nil {
+	if db.Where("system_settings.key = ?", "log_middleware_errors").First(&mlCfg).Error == nil {
 		var cfg service.MiddlewareLogConfig
 		if json.Unmarshal([]byte(mlCfg.Value), &cfg) == nil {
 			svcs.UsageSvc.SetMiddlewareLogConfig(&cfg)
@@ -246,14 +246,14 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Load log_content setting into cache
 	var logContentSetting model.SystemSetting
-	if err := db.Where("key = ?", "log_content").First(&logContentSetting).Error; err == nil {
+	if err := db.Where("system_settings.key = ?", "log_content").First(&logContentSetting).Error; err == nil {
 		svcs.UsageSvc.SetContentLogEnabled(logContentSetting.Value == "true")
 	}
 
 	// Debug store
 	debugStore := debug.NewStore(100, 10*1024*1024)
 	var debugModeSetting model.SystemSetting
-	if err := db.Where("key = ?", "debug_mode").First(&debugModeSetting).Error; err == nil {
+	if err := db.Where("system_settings.key = ?", "debug_mode").First(&debugModeSetting).Error; err == nil {
 		debugStore.SetEnabled(debugModeSetting.Value == "true")
 	}
 
@@ -271,17 +271,17 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 	// Cache service configuration
 	var cacheEnabled model.SystemSetting
-	if err := db.Where("key = ?", "cache_enabled").First(&cacheEnabled).Error; err == nil {
+	if err := db.Where("system_settings.key = ?", "cache_enabled").First(&cacheEnabled).Error; err == nil {
 		svcs.CacheSvc.SetEnabled(cacheEnabled.Value == "true")
 	}
 	var cacheDefaultTTL model.SystemSetting
-	if err := db.Where("key = ?", "cache_default_ttl").First(&cacheDefaultTTL).Error; err == nil {
+	if err := db.Where("system_settings.key = ?", "cache_default_ttl").First(&cacheDefaultTTL).Error; err == nil {
 		if d, err := time.ParseDuration(cacheDefaultTTL.Value); err == nil {
 			svcs.CacheSvc.SetDefaultTTL(d)
 		}
 	}
 	var cacheEmbeddingsTTL model.SystemSetting
-	if err := db.Where("key = ?", "cache_embeddings_ttl").First(&cacheEmbeddingsTTL).Error; err == nil {
+	if err := db.Where("system_settings.key = ?", "cache_embeddings_ttl").First(&cacheEmbeddingsTTL).Error; err == nil {
 		if d, err := time.ParseDuration(cacheEmbeddingsTTL.Value); err == nil {
 			svcs.CacheSvc.SetEmbeddingsTTL(d)
 		}

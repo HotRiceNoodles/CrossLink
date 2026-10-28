@@ -69,7 +69,7 @@ func LoadResilienceConfig(db *gorm.DB) ResilienceConfig {
 	}
 	loadInt := func(key string, target *int) {
 		var s model.SystemSetting
-		if db.Where("key = ?", key).First(&s).Error == nil {
+		if db.Where("system_settings.key = ?", key).First(&s).Error == nil {
 			if v, err := strconv.Atoi(s.Value); err == nil {
 				*target = v
 			}
@@ -121,7 +121,7 @@ func RunResilienceRefreshLoop(ctx context.Context, db *gorm.DB, health *provider
 func (h *SystemHandler) GetContentLog(c *gin.Context) {
 	enabled := false
 	var s model.SystemSetting
-	if h.db.Where("key = ?", "log_content").First(&s).Error == nil {
+	if h.db.Where("system_settings.key = ?", "log_content").First(&s).Error == nil {
 		enabled = s.Value == "true"
 	}
 	if h.usageSvc != nil {
@@ -162,7 +162,7 @@ func (h *SystemHandler) UpdateContentLog(c *gin.Context) {
 // falling back to the config value if none is stored.
 func LoadAdminPassword(db *gorm.DB, cfg *config.AdminConfig) {
 	var setting model.SystemSetting
-	err := db.Where("key = ?", "admin_password_hash").First(&setting).Error
+	err := db.Where("system_settings.key = ?", "admin_password_hash").First(&setting).Error
 	if err == nil {
 		cfg.PasswordHash = setting.Value
 	} else {

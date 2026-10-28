@@ -56,6 +56,10 @@ var communityActions = map[string]bool{
 	"guardrail:update": true,
 	"guardrail:delete": true,
 	"guardrail:test":   true,
+	// crosslink-guard 管理动作位：guard 独立部署运行 Community 档，
+	// 其管理 API 必须在 Community 档可用（网关路由不引用这些动作位）。
+	"guard:token_manage": true,
+	"guard:event_view":   true,
 	// Scoped PAT support — community-core.
 	"budget:read": true,
 	"health:read": true,

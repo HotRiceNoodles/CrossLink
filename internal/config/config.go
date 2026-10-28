@@ -35,6 +35,7 @@ type Config struct {
 	Captcha        CaptchaConfig        `mapstructure:"captcha"`
 	Demo           DemoConfig           `mapstructure:"demo"`
 	Usage          UsageConfig          `mapstructure:"usage"`
+	Guard          GuardConfig          `mapstructure:"guard"`
 }
 
 // UsageConfig sizes the async usage-logging worker pool. Tasks carry billing
@@ -70,6 +71,48 @@ type UsageConfig struct {
 	// Empty disables persistence (in-process block only). Env:
 	// CL_USAGE_INTEGRITY_STATE_FILE.
 	IntegrityStateFile string `mapstructure:"integrity_state_file"`
+}
+
+// GuardConfig configures the standalone crosslink-guard service (bypass
+// detection deployment, docs/design/bypass-guard-service.md). The gateway
+// binary ignores this section entirely.
+type GuardConfig struct {
+	// Queue sizes the async detection worker pool. Tasks carry detection
+	// verdicts for event persistence; when the queue and the overflow
+	// allowance are both exhausted, payloads are dropped (counted by
+	// cl_guard_ingest_dropped_total) — the guard must never push
+	// backpressure onto the mirrored customer gateway.
+	Queue GuardQueueConfig `mapstructure:"queue"`
+	// TraceStore bounds the in-memory request/response pairing window
+	// (request prompt kept for response-side contextual engines; TTL + cap).
+	TraceStore GuardTraceStoreConfig `mapstructure:"trace_store"`
+	// DetectBudgetMs bounds one synchronous detection call (context
+	// deadline), mirroring guardrails_request_budget_ms.
+	DetectBudgetMs int `mapstructure:"detect_budget_ms"`
+	// RetentionDays is the guard_events/guard_traces cleanup horizon.
+	RetentionDays int `mapstructure:"retention_days"`
+	// Ingest bounds payload size and the two-level (token + org) rate limits.
+	Ingest GuardIngestConfig `mapstructure:"ingest"`
+}
+
+// GuardQueueConfig sizes the guard detection worker pool.
+type GuardQueueConfig struct {
+	Workers     int `mapstructure:"workers"`      // concurrent detection workers
+	QueueSize   int `mapstructure:"queue_size"`   // buffered queue depth
+	OverflowCap int `mapstructure:"overflow_cap"` // extra detached tasks when full
+}
+
+// GuardTraceStoreConfig bounds the in-memory request/response pairing window.
+type GuardTraceStoreConfig struct {
+	TTLMinutes int `mapstructure:"ttl_minutes"` // pairing window before expiry
+	MaxEntries int `mapstructure:"max_entries"` // LRU cap across all tenants
+}
+
+// GuardIngestConfig bounds one ingest payload and the two-level rate limits.
+type GuardIngestConfig struct {
+	MaxBodyBytes int64 `mapstructure:"max_body_bytes"` // 413 beyond this cap
+	TokenRPM     int   `mapstructure:"token_rpm"`      // per-ingest-token requests/minute
+	OrgRPM       int   `mapstructure:"org_rpm"`        // per-org aggregate requests/minute
 }
 
 type ServerConfig struct {
@@ -367,7 +410,7 @@ type CacheConfig struct {
 }
 
 type SecretManagerConfig struct {
-	EncryptionKey string `mapstructure:"encryption_key"`
+	EncryptionKey string        `mapstructure:"encryption_key"`
 	CacheTTL      time.Duration `mapstructure:"cache_ttl"`
 	// AllowWizardGeneration gates the setup wizard / settings page
 	// "generate encryption key" control. The generated key lands in
@@ -409,6 +452,12 @@ type LicenseConfig struct {
 	HeartbeatEnabled  bool          `mapstructure:"heartbeat_enabled" yaml:"heartbeat_enabled"`
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval" yaml:"heartbeat_interval"`
 	NodeID            string        `mapstructure:"node_id" yaml:"node_id"`
+	// Product 是激活请求携带的产品维度（gateway|guard，缺省 gateway）：
+	// crosslink-guard 商业构建设 guard，激活心跳据此区分节点配额
+	// （license server 侧 product_type 按产品分计）。缺省值保证网关
+	// 部署与旧 license server 行为完全一致（未知字段被忽略）。
+	// Env: CL_LICENSE_PRODUCT.
+	Product string `mapstructure:"product" yaml:"product"`
 	// NodeIDFile is the persistent node-identity file used as the
 	// fingerprint seed when node_id/CL_LICENSE_FINGERPRINT are unset
 	// (Docker fingerprint-drift fix, 2026-10-24). Default "data/node-id"
@@ -704,6 +753,18 @@ func setDefaults(v *viper.Viper) {
 	// to disable the tier entirely.
 	v.SetDefault("usage.spool_emergency_max_bytes", 1<<30)
 
+	// crosslink-guard standalone service (docs/design/bypass-guard-service.md)
+	v.SetDefault("guard.queue.workers", 8)
+	v.SetDefault("guard.queue.queue_size", 1000)
+	v.SetDefault("guard.queue.overflow_cap", 200)
+	v.SetDefault("guard.trace_store.ttl_minutes", 15)
+	v.SetDefault("guard.trace_store.max_entries", 100000)
+	v.SetDefault("guard.detect_budget_ms", 2000)
+	v.SetDefault("guard.retention_days", 90)
+	v.SetDefault("guard.ingest.max_body_bytes", 10<<20)
+	v.SetDefault("guard.ingest.token_rpm", 600)
+	v.SetDefault("guard.ingest.org_rpm", 6000)
+
 	v.SetDefault("database.driver", "postgres")
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
@@ -857,6 +918,10 @@ func setDefaults(v *viper.Viper) {
 	// relative to the working directory so containers (/app) and bare metal
 	// (WorkingDirectory) both land it beside the sqlite data dir.
 	v.SetDefault("license.node_id_file", "data/node-id")
+	// Product dimension on activation requests (gateway|guard): guard
+	// commercial builds set "guard" so the license server can meter node
+	// quotas per product; default keeps gateway behavior byte-identical.
+	v.SetDefault("license.product", "gateway")
 
 	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.max_servers", 0)

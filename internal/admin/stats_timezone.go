@@ -30,7 +30,7 @@ var (
 // default).
 func LoadStatsTimezone(db *gorm.DB) string {
 	var row model.SystemSetting
-	if err := db.Where("key = ?", "stats_timezone").First(&row).Error; err != nil || row.Value == "" {
+	if err := db.Where("system_settings.key = ?", "stats_timezone").First(&row).Error; err != nil || row.Value == "" {
 		return ""
 	}
 	if _, err := time.LoadLocation(row.Value); err != nil {

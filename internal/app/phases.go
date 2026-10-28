@@ -166,7 +166,7 @@ func runEncryptionWatcher(ctx context.Context, db *gorm.DB, secretResolver *secr
 		case <-ticker.C:
 		}
 		var watchKey model.SystemSetting
-		if result := db.Where("key = ?", "encryption_key").First(&watchKey); result.Error == nil && watchKey.Value != "" {
+		if result := db.Where("system_settings.key = ?", "encryption_key").First(&watchKey); result.Error == nil && watchKey.Value != "" {
 			switch {
 			case encStore != nil && watchKey.Value != *activeKeyPtr:
 				if err := encStore.SetMasterKey(watchKey.Value); err == nil {

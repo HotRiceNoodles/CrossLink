@@ -169,5 +169,5 @@ func (h *SetupHandler) activeKeyExists() bool {
 		return true
 	}
 	var row model.SystemSetting
-	return h.db.Where("key = ?", "encryption_key").First(&row).Error == nil && row.Value != ""
+	return h.db.Where("system_settings.key = ?", "encryption_key").First(&row).Error == nil && row.Value != ""
 }

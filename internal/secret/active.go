@@ -22,7 +22,7 @@ import (
 func InitActiveEncryption(db *gorm.DB, cfgKey string, cp crypto.CryptoProvider) (*EncryptedDBStore, string, error) {
 	activeKey := cfgKey
 	var dbKey model.SystemSetting
-	if result := db.Where("key = ?", "encryption_key").First(&dbKey); result.Error == nil && dbKey.Value != "" {
+	if result := db.Where("system_settings.key = ?", "encryption_key").First(&dbKey); result.Error == nil && dbKey.Value != "" {
 		activeKey = dbKey.Value
 	}
 	if activeKey == "" {

@@ -140,7 +140,7 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 		now := time.Now().UTC()
 		for _, op := range ops {
 			if op.delete {
-				if err := tx.Where("key = ?", op.key).Delete(&model.SystemSetting{}).Error; err != nil {
+				if err := tx.Where("system_settings.key = ?", op.key).Delete(&model.SystemSetting{}).Error; err != nil {
 					return err
 				}
 				deleted = append(deleted, op.key)
