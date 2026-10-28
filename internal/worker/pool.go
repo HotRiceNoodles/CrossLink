@@ -81,6 +81,11 @@ func (p *Pool) Dropped() int64 { return p.dropped.Load() }
 // Spilled reports how many tasks were handed to the caller's spill fallback.
 func (p *Pool) Spilled() int64 { return p.spilled.Load() }
 
+// Depth reports the current backlog: tasks waiting in the queue plus
+// detached tasks executing under the overflow allowance. Sampling cost is
+// O(1) (two channel len reads); suitable for a /metrics gauge.
+func (p *Pool) Depth() int { return len(p.ch) + len(p.overflow) }
+
 // Submit enqueues fn, degrading through the bounded overflow allowance. A
 // task is only dropped (and counted) when both queue and overflow are full
 // and no caller fallback exists.

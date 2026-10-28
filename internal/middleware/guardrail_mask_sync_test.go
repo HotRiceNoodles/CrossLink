@@ -26,9 +26,9 @@ func TestApplyRequestMaskSyncsBodyBuffer(t *testing.T) {
 	r := gin.New()
 	r.Use(ReadBody(10 << 20))
 	r.Use(func(c *gin.Context) {
-		ex := extractContent(GetBodyBytes(c), "/v1/chat/completions")
+		ex := guardrail.ExtractContent(GetBodyBytes(c), "/v1/chat/completions")
 		if ex == nil {
-			t.Fatalf("extractContent returned nil for fixture body")
+			t.Fatalf("ExtractContent returned nil for fixture body")
 		}
 		applyRequestMask(c, ex, &guardrail.CheckResponse{
 			Action:      "mask",
@@ -80,11 +80,11 @@ func TestApplyCredentialMaskRemovesOriginalEncodedValue(t *testing.T) {
 				r := gin.New()
 				r.Use(ReadBody(10 << 20))
 				r.Use(func(c *gin.Context) {
-					ex := extractContent(GetBodyBytes(c), path)
+					ex := guardrail.ExtractContent(GetBodyBytes(c), path)
 					if ex == nil {
 						t.Fatal("测试请求缺少可检查字段")
 					}
-					result, err := engine.Check(t.Context(), ex.text, guardrail.DirectionRequest, "")
+					result, err := engine.Check(t.Context(), ex.Text, guardrail.DirectionRequest, "")
 					if err != nil || !result.Blocked || len(result.MaskedSpans) == 0 {
 						t.Fatal("编码凭据缺少原文脱敏范围", err)
 					}

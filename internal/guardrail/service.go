@@ -814,7 +814,7 @@ func (s *GuardrailService) RefreshSettings(ctx context.Context) {
 		Value string `gorm:"column:value"`
 	}
 	if err := s.db.WithContext(ctx).Table("system_settings").
-		Where("key IN ?", []string{
+		Where("system_settings.key IN ?", []string{
 			"guardrails_enabled", "guardrails_log_only", "guardrails_fail_open",
 			"guardrails_stream_mode", "guardrails_stream_strict_max_runes",
 			"guardrails_stream_strict_max_bytes", "guardrails_stream_strict_max_events",

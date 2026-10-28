@@ -354,13 +354,13 @@ func extractCachedResponseText(body []byte, path string) string {
 			return ""
 		}
 		for _, ch := range choices {
-			if s, ok := rawString(ch.Message.Content); ok && s != "" {
+			if s, ok := guardrail.RawString(ch.Message.Content); ok && s != "" {
 				parts = append(parts, s)
 			} else {
 				var contentParts []map[string]json.RawMessage
 				if json.Unmarshal(ch.Message.Content, &contentParts) == nil {
 					for _, p := range contentParts {
-						if t, ok := rawString(p["text"]); ok && t != "" {
+						if t, ok := guardrail.RawString(p["text"]); ok && t != "" {
 							parts = append(parts, t)
 						}
 					}
