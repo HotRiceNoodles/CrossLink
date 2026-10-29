@@ -43,6 +43,7 @@ type AnthropicHandler struct {
 	guardrailSvc *guardrail.GuardrailService
 	budgetSvc    *service.BudgetService      // pre-request budget reservation (C5); nil = disabled
 	calibration  *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
+	toolObs      domain.ToolObserver         // agent toolset profiling seam (Pro overlay); nil = disabled
 }
 
 func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver, usageSvc *service.UsageService, idemCache *service.IdempotencyCache, guardrailSvc *guardrail.GuardrailService) *AnthropicHandler {
@@ -56,6 +57,10 @@ func (h *AnthropicHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc 
 // SetCalibration injects the token-estimation calibration service
 // (context analysis). Optional; nil disables calibration.
 func (h *AnthropicHandler) SetCalibration(c *service.CalibrationService) { h.calibration = c }
+
+// SetToolObserver injects the agent toolset profiling observer (commercial
+// overlay seam). Optional; nil (Community) disables observation entirely.
+func (h *AnthropicHandler) SetToolObserver(o domain.ToolObserver) { h.toolObs = o }
 
 // estimateAnthropicInputTokens rough-estimates the input token count of an
 // Anthropic /v1/messages request, for pre-request budget reservation (C5).
@@ -482,6 +487,13 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				entry.ModelResponse = truncateContent(strings.Join(texts, "\n"))
 			}
 		}
+		observeTools(h.toolObs, buildAnthropicToolObservation(toolsetInput{
+			keyID:    apiKeyID,
+			teamID:   teamID,
+			orgID:    orgID,
+			model:    result.ModelUsed,
+			cacheHit: entry.CacheHit,
+		}, &req, result.Response))
 		BuildContextAnalysisResult(contextAnalysisInput{
 			anthropicReq:   &req,
 			maxContext:     maxCtx,
@@ -531,6 +543,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Status(http.StatusOK)
 
 	var modelRespBuf strings.Builder
+	var streamToolNames []string // tool names seen in tool_use block starts (toolset profiling)
 	var firstTokenAt time.Time
 	var apiKeyID, teamID int64
 	if key := middleware.GetAPIKeyFromContext(c); key != nil {
@@ -596,6 +609,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 				Index int `json:"index"`
 				Block struct {
 					Type     string          `json:"type"`
+					Name     string          `json:"name,omitempty"`
 					Text     string          `json:"text"`
 					Thinking string          `json:"thinking"`
 					Input    json.RawMessage `json:"input"`
@@ -609,6 +623,9 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 				case "tool_use":
 					if len(start.Block.Input) > 0 {
 						startInput = string(start.Block.Input)
+					}
+					if start.Block.Name != "" {
+						streamToolNames = append(streamToolNames, start.Block.Name)
 					}
 				case "thinking":
 					startThinking = start.Block.Thinking
@@ -928,6 +945,14 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			entry.UserMessage = truncateContent(extractLastUserMessage(req.Messages))
 			entry.ModelResponse = truncateContent(modelRespBuf.String())
 		}
+		observeTools(h.toolObs, buildAnthropicToolObservation(toolsetInput{
+			keyID:    apiKeyID,
+			teamID:   teamID,
+			orgID:    orgID,
+			model:    result.ModelUsed,
+			cacheHit: entry.CacheHit,
+			invoked:  streamToolNames,
+		}, req, nil))
 		// Stream: UsageFromUpstr marks real upstream usage â the translator seeds
 		// InputTokens with an estimate that must not feed calibration.
 		BuildContextAnalysisResult(contextAnalysisInput{

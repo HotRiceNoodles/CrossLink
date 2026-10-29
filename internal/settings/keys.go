@@ -10,6 +10,11 @@
 // mechanisms.
 package settings
 
+import (
+	"fmt"
+	"strings"
+)
+
 // KeyDef describes one system_settings key managed by this package.
 type KeyDef struct {
 	Name string
@@ -33,6 +38,9 @@ type KeyDef struct {
 	// origins). Receives the parsed Go value (string, int, float64, bool,
 	// []string).
 	Validate func(v any) error
+	// EnumValues is set for string keys restricted to a fixed set; surfaced
+	// in GET meta so the UI can render a select instead of free text.
+	EnumValues []string
 }
 
 // Key types.
@@ -91,6 +99,11 @@ const (
 	KeyGAContentPreview = "guardrail_alert_content_preview"
 	KeyGAPreviewLen     = "guardrail_alert_content_preview_len"
 	KeyIPBCooldown      = "ip_binding_notify_cooldown_seconds"
+	KeyToolsetEnabled   = "toolset_enabled"
+	KeyToolsetGran      = "toolset_granularity"
+	KeyToolsetDescLen   = "toolset_desc_max_len"
+	KeyToolsetRetention = "toolset_retention_days"
+	KeyToolsetAlertEn   = "toolset_alert_enabled"
 )
 
 // section names (meta grouping + UI).
@@ -104,6 +117,7 @@ const (
 	SectionMCP            = "mcp"
 	SectionGuardrailAlert = "guardrail_alert"
 	SectionIPBinding      = "ip_binding"
+	SectionToolset        = "toolset"
 )
 
 func k(name, typ, section string) KeyDef {
@@ -127,6 +141,24 @@ func restart(d KeyDef) KeyDef {
 // sensitive marks a value never returned by the API.
 func sensitive(d KeyDef) KeyDef {
 	d.Sensitive = true
+	return d
+}
+
+// kEnum builds a string key restricted to the given values.
+func kEnum(name, section string, vals ...string) KeyDef {
+	d := k(name, TypeString, section)
+	set := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		set[v] = true
+	}
+	d.EnumValues = vals
+	d.Validate = func(v any) error {
+		s, _ := v.(string)
+		if !set[s] {
+			return fmt.Errorf("must be one of: %s", strings.Join(vals, "|"))
+		}
+		return nil
+	}
 	return d
 }
 
@@ -196,6 +228,13 @@ var Registry = []KeyDef{
 
 	// --- ip_binding (overlay email alerts) ---
 	kRange(KeyIPBCooldown, TypeInt, SectionIPBinding, 0, 86400),
+
+	// --- toolset (overlay agent toolset profiling) ---
+	k(KeyToolsetEnabled, TypeBool, SectionToolset),
+	kEnum(KeyToolsetGran, SectionToolset, "name", "name_desc", "full"),
+	kRange(KeyToolsetDescLen, TypeInt, SectionToolset, 0, 8000),
+	kRange(KeyToolsetRetention, TypeInt, SectionToolset, 0, 0),
+	k(KeyToolsetAlertEn, TypeBool, SectionToolset),
 }
 
 // RegistryMap indexes Registry by key name.

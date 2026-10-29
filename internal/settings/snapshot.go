@@ -24,6 +24,7 @@ type Snapshot struct {
 	DataLens       config.DataLensConfig
 	MCP            config.MCPConfig
 	Captcha        config.CaptchaConfig
+	Toolset        config.ToolsetConfig
 
 	// Sources maps every registry key to "db" (row applied), "default"
 	// (yaml/env value in effect), or "db-error" (row present but not
@@ -73,6 +74,7 @@ func buildSnapshot(baseline *config.Config, values map[string]string, decrypt de
 		DataLens:       baseline.DataLens,
 		MCP:            baseline.MCP,
 		Captcha:        baseline.Captcha,
+		Toolset:        baseline.Toolset,
 		Sources:        make(map[string]string, len(Registry)),
 		SensitiveSet:   make(map[string]bool),
 	}
@@ -238,6 +240,13 @@ func buildSnapshot(baseline *config.Config, values map[string]string, decrypt de
 
 	// --- ip_binding ---
 	apply(KeyIPBCooldown, integer(KeyIPBCooldown, &snap.IPBinding.NotifyCooldownSeconds))
+
+	// --- toolset ---
+	apply(KeyToolsetEnabled, boolean(KeyToolsetEnabled, &snap.Toolset.Enabled))
+	apply(KeyToolsetGran, str(KeyToolsetGran, &snap.Toolset.Granularity))
+	apply(KeyToolsetDescLen, integer(KeyToolsetDescLen, &snap.Toolset.DescMaxLen))
+	apply(KeyToolsetRetention, integer(KeyToolsetRetention, &snap.Toolset.RetentionDays))
+	apply(KeyToolsetAlertEn, boolean(KeyToolsetAlertEn, &snap.Toolset.AlertEnabled))
 
 	snap.LoadedAt = time.Now().UTC()
 	return snap

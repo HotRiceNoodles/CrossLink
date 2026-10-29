@@ -94,7 +94,7 @@ func TestGatewayWiringEnforcesOrganizationResponseRules(t *testing.T) {
 					GatewaySvc: service.NewGatewayService(resolver, registry, nil, nil, nil)}
 				openai, anthropic := newGatewayProtocolHandlers(infra, svcs, gs)
 				r := gin.New()
-				r.Use(func(c *gin.Context) { c.Set("org_id", orgID) }, middleware.GuardrailsRequest(gs))
+				r.Use(func(c *gin.Context) { c.Set("org_id", orgID) }, middleware.GuardrailsRequest(gs, nil))
 				r.POST("/v1/chat/completions", openai.HandleChatCompletions)
 				r.POST("/v1/messages", anthropic.HandleMessages)
 				body := `{"model":"phone-test","messages":[{"role":"user","content":"请输出测试模板"}],"max_tokens":2000`

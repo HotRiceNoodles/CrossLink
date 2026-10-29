@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
@@ -18,7 +19,11 @@ import (
 
 const maxGuardrailBodySize = 10 << 20
 
-func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
+// GuardrailsRequest guards request-direction content. toolObs (agent toolset
+// seam, nil in Community) receives a Declared-only observation when a request
+// is blocked or held for review — the blocked agent's tool declarations are
+// capability evidence worth profiling even though no call was answered.
+func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObserver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if svc == nil || !svc.IsEnabled() {
 			c.Next()
@@ -219,13 +224,37 @@ func GuardrailsRequest(svc *guardrail.GuardrailService) gin.HandlerFunc {
 			return
 		}
 
+		// Declared-only toolset observation for the blocked request. No
+		// invocations exist (nothing was answered), but the declared tools
+		// are the key's real capability claim — that is the security signal.
+		observeBlocked := func() {
+			if toolObs == nil || apiKeyID <= 0 {
+				return
+			}
+			declared := parseDeclaredToolsFromRaw(blockedToolProtocol(c), bodyBytes)
+			if len(declared) == 0 {
+				return
+			}
+			toolObs.Observe(domain.ToolObservation{
+				APIKeyID: apiKeyID,
+				TeamID:   teamID,
+				OrgID:    orgID,
+				Source:   "proxy",
+				Protocol: blockedToolProtocol(c),
+				Model:    probe.Model,
+				Declared: declared,
+			})
+		}
+
 		switch result.Action {
 		case "block":
+			observeBlocked()
 			writeGuardrailError(c, result, c.Request.URL.Path)
 			c.Abort()
 			return
 		case "review":
 			// 拦截待人工复核：内容不放行，复核结论只完成审计闭环。
+			observeBlocked()
 			writeGuardrailError(c, result, c.Request.URL.Path)
 			c.Abort()
 			return

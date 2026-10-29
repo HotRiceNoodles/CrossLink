@@ -107,6 +107,15 @@ var proExtraActions = map[string]bool{
 	"compliance:check":   true,
 	"compliance:logs":    true,
 	"compliance:review":  true,
+	// Agent 工具集画像（按 key 观测 tools 声明与 tool 调用）—— Pro 及以上。
+	// 采集器与查询端点均在商业 overlay（社区仅留 ToolObserver seam 与空表）；
+	// 迁移侧已把该动作种子进 admin/member/viewer 角色。
+	"toolset:list": true,
+	// 工具集变化告警规则管理（M2，端点在商业 overlay）—— Pro 及以上。
+	"toolset_alert:list":   true,
+	"toolset_alert:create": true,
+	"toolset_alert:update": true,
+	"toolset_alert:delete": true,
 }
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).

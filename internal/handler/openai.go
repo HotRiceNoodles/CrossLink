@@ -37,6 +37,7 @@ type OpenAIHandler struct {
 	guardRDB      *redis.Client               // P3a: per-(provider,model) guardrail counters; nil = disabled
 	budgetSvc     *service.BudgetService      // pre-request budget reservation (C5); nil = disabled
 	calibration   *service.CalibrationService // context analysis calibration; nil = disabled (Task 9 wires it)
+	toolObs       domain.ToolObserver         // agent toolset profiling seam (Pro overlay); nil = disabled
 }
 
 func NewOpenAIHandler(resolver *router.Resolver, usageSvc *service.UsageService, latencySvc *service.LatencyService, _ interface{}, activeTracker service.ProviderLoadTracker, idemCache *service.IdempotencyCache, budget *provider.RetryBudget, guardrailSvc *guardrail.GuardrailService) *OpenAIHandler {
@@ -70,6 +71,10 @@ func (h *OpenAIHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b
 // SetCalibration injects the token-estimation calibration service
 // (context analysis). Optional; nil disables calibration.
 func (h *OpenAIHandler) SetCalibration(c *service.CalibrationService) { h.calibration = c }
+
+// SetToolObserver injects the agent toolset profiling observer (commercial
+// overlay seam). Optional; nil (Community) disables observation entirely.
+func (h *OpenAIHandler) SetToolObserver(o domain.ToolObserver) { h.toolObs = o }
 
 func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode int, start time.Time, routes []*router.RouteResult, result *service.FallbackResult, retryCount int, sessionID string) {
 	var keyID int64
@@ -608,6 +613,13 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 				entry.ModelResponse = truncateContent(domain.ContentText(resp.Choices[0].Message.Content))
 			}
 		}
+		observeTools(h.toolObs, buildOpenAIToolObservation(toolsetInput{
+			keyID:    apiKeyID,
+			teamID:   teamID,
+			orgID:    orgID,
+			model:    route.ProviderModel,
+			cacheHit: entry.CacheHit,
+		}, req, resp))
 		// Non-stream: PromptTokens is real upstream usage when > 0.
 		// route is result.Route (the winning post-fallback route), so
 		// route.ProviderModel is the actually-served model, same source as
@@ -731,6 +743,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	var reasoningTokens, cacheReadTokens int
 	var outputEstimate int
 	var modelRespBuf strings.Builder
+	var streamToolNames []string // tool names seen in streamed tool_calls deltas (toolset profiling)
 	var gotDone bool
 	var guardrailBlocked bool
 	var firstTokenAt time.Time
@@ -851,6 +864,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 						firstTokenAt = time.Now()
 					}
 				}
+				streamToolNames = append(streamToolNames, streamToolCallNames(chunk.Chunk.Choices[0].Delta)...)
 			}
 		}
 	} else {
@@ -925,6 +939,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 						firstTokenAt = time.Now()
 					}
 				}
+				streamToolNames = append(streamToolNames, streamToolCallNames(chunk.Chunk.Choices[0].Delta)...)
 			}
 		}
 	}
@@ -1030,6 +1045,14 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			entry.UserMessage = truncateContent(extractLastOpenAIUserMessage(req.Messages))
 			entry.ModelResponse = truncateContent(modelRespBuf.String())
 		}
+		observeTools(h.toolObs, buildOpenAIToolObservation(toolsetInput{
+			keyID:    apiKeyID,
+			teamID:   teamID,
+			orgID:    orgID,
+			model:    route.ProviderModel,
+			cacheHit: entry.CacheHit,
+			invoked:  streamToolNames,
+		}, req, nil))
 		// Stream: inputTokens may have been replaced by an estimate above when the
 		// provider sent no usage — only calibrate on the real upstream value.
 		// route is result.Route (the winning post-fallback route), so

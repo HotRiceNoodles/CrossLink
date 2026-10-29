@@ -36,6 +36,7 @@ type Config struct {
 	Demo           DemoConfig           `mapstructure:"demo"`
 	Usage          UsageConfig          `mapstructure:"usage"`
 	Guard          GuardConfig          `mapstructure:"guard"`
+	Toolset        ToolsetConfig        `mapstructure:"toolset"`
 }
 
 // UsageConfig sizes the async usage-logging worker pool. Tasks carry billing
@@ -521,6 +522,17 @@ type DataLensAggConfig struct {
 	Levels              []string `mapstructure:"levels"`
 }
 
+// ToolsetConfig configures the agent toolset profile collector. Consumed by
+// the commercial overlay (community builds read but ignore it — same pattern
+// as SMTP / guardrail_alert).
+type ToolsetConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`       // collection master switch (on top of license)
+	Granularity   string `mapstructure:"granularity"`   // name | name_desc | full (hash+size always kept)
+	DescMaxLen    int    `mapstructure:"desc_max_len"`  // description truncation length
+	RetentionDays int    `mapstructure:"retention_days"`
+	AlertEnabled  bool   `mapstructure:"alert_enabled"` // change-alert master switch (M2; rules gate further)
+}
+
 // Validate checks that config values are within acceptable ranges.
 // Returns an error describing the first invalid field found.
 func (c *Config) Validate() error {
@@ -945,6 +957,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("datalens.aggregation.backfill_concurrency", 1)
 	v.SetDefault("datalens.aggregation.levels", []string{"global", "by_model", "by_team", "by_provider", "by_key", "team_model", "key_model"})
 	v.SetDefault("datalens.from_name", "CrossLink DataLens")
+
+	v.SetDefault("toolset.enabled", true)
+	v.SetDefault("toolset.granularity", "name_desc")
+	v.SetDefault("toolset.desc_max_len", 200)
+	v.SetDefault("toolset.retention_days", 180)
+	v.SetDefault("toolset.alert_enabled", false)
 
 	// Allow both short and long env var names for the encryption key
 	v.BindEnv("secret_manager.encryption_key", "CL_ENCRYPTION_KEY", "CL_SECRET_MANAGER_ENCRYPTION_KEY")

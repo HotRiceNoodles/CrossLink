@@ -90,7 +90,7 @@ func TestCodexAcceptanceStrictCoverageRejectsMixedMedia(t *testing.T) {
 		t.Fatal("fixture strict coverage not enabled")
 	}
 	r := gin.New()
-	r.Use(GuardrailsRequest(svc))
+	r.Use(GuardrailsRequest(svc, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"benign text"},{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}]}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))

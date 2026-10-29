@@ -68,7 +68,7 @@ func TestIncrementalMiddlewareLocalEngines(t *testing.T) {
 				}
 				svc := incrementalMiddlewareService(t, false, guardrail.GuardrailRule{Type: kind, Config: cfg})
 				r := gin.New()
-				r.Use(GuardrailsRequest(svc))
+				r.Use(GuardrailsRequest(svc, nil))
 				out := httptest.NewRecorder()
 				r.POST(path, func(c *gin.Context) {
 					if svc.StreamModeFor(c.Request.Context()) != "incremental" {
@@ -111,7 +111,7 @@ func TestIncrementalMiddlewareGuardsAllSSEPaths(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			svc := incrementalMiddlewareService(t, false)
 			r := gin.New()
-			r.Use(GuardrailsRequest(svc))
+			r.Use(GuardrailsRequest(svc, nil))
 			r.POST(path, func(c *gin.Context) {
 				if svc.StreamModeFor(c.Request.Context()) != "incremental" {
 					t.Fatal("gate not installed")
@@ -141,7 +141,7 @@ func TestIncrementalMiddlewareSelectsStrictFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := incrementalMiddlewareService(t, true)
 	r := gin.New()
-	r.Use(GuardrailsRequest(svc))
+	r.Use(GuardrailsRequest(svc, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		ch := make(chan domain.SSEChunk, 2)
 		ch <- domain.SSEChunk{Chunk: &domain.OpenAIChunk{Choices: []domain.OpenAIChunkChoice{{Index: 0, Delta: domain.OpenAIChunkDelta{Content: "SECRET"}}}}}
@@ -166,7 +166,7 @@ func TestIncrementalMiddlewareDoesNotAlterJSONErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := incrementalMiddlewareService(t, false)
 	r := gin.New()
-	r.Use(GuardrailsRequest(svc))
+	r.Use(GuardrailsRequest(svc, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) { c.JSON(400, gin.H{"error": "invalid model"}) })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","stream":true,"messages":[{"role":"user","content":"hello"}]}`))

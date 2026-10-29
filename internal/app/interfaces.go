@@ -7,6 +7,7 @@ import (
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
 	"github.com/crosslink/internal/dialect"
+	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/mcp"
 	"github.com/crosslink/internal/middleware"
@@ -80,6 +81,7 @@ type Extensions struct {
 	MCPSettingsSetter  func(p mcp.MCPSettingsProvider)         // called by app.go after the settings provider is ready
 	IPPolicy           service.IPPolicy
 	AssemblerHook      middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
+	ToolObserver       domain.ToolObserver      // pro seam: agent toolset profiling collector; nil in Community
 	Gate               GateInterface
 	Deps               *AppDeps
 }

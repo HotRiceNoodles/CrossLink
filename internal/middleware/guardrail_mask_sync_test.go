@@ -158,7 +158,7 @@ func TestGuardrailsRequestMultipartImagePassesThroughUnmodified(t *testing.T) {
 	original := payload.Bytes()
 
 	r := gin.New()
-	r.Use(GuardrailsRequest(svc))
+	r.Use(GuardrailsRequest(svc, nil))
 	r.POST("/v1/images/edits", func(c *gin.Context) {
 		got, err := io.ReadAll(c.Request.Body)
 		if err != nil {

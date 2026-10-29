@@ -393,6 +393,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	anthropicHandler.SetCalibration(calibSvc)
 	openaiHandler.SetCalibration(calibSvc)
 
+	// Agent toolset profiling (Pro overlay seam); nil in Community — the
+	// handlers then skip observation entirely on the hot path.
+	anthropicHandler.SetToolObserver(ext.ToolObserver)
+	openaiHandler.SetToolObserver(ext.ToolObserver)
+
 	usageWorkers := worker.NewPool("usage", cfg.Usage.Workers, cfg.Usage.QueueSize, cfg.Usage.OverflowCap)
 	handler.SetUsageWorkers(usageWorkers)
 	// Disk spill for billing rows the pool cannot accept (queue + overflow
@@ -607,7 +612,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	adminGroup.Use(middleware.OrgResolve())
 	adminGroup.Use(middleware.AdminRateLimit(rdb, 300, time.Minute, ""))
 	adminGroup.Use(middleware.CSRFGuard())
-	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
+	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc, ext.ToolObserver))
 	{
 		// Providers
 		// Intentionally no RequireAction: read-only metadata endpoint, not sensitive.
@@ -831,7 +836,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
-	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc))
+	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc, ext.ToolObserver))
 	gwGroup.Use(middleware.RateLimitFromProvider(rdb, settingsProvider, teamCache, orgCache))
 	// BudgetCheck before TPMLimit: a budget-rejected request must not make a
 	// TPM reservation (the aborting chain never reaches ReportTokens).

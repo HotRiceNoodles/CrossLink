@@ -62,6 +62,7 @@ func (p *Provider) IPBinding() config.IPBindingConfig           { return p.Get()
 func (p *Provider) DataLens() config.DataLensConfig             { return p.Get().DataLens }
 func (p *Provider) MCP() config.MCPConfig                       { return p.Get().MCP }
 func (p *Provider) Captcha() config.CaptchaConfig               { return p.Get().Captcha }
+func (p *Provider) Toolset() config.ToolsetConfig               { return p.Get().Toolset }
 
 // Subscribe registers a callback invoked with every new snapshot (initial
 // load, poll tick, RefreshNow). Callbacks must be cheap and non-blocking —

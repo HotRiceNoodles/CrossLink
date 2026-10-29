@@ -109,6 +109,16 @@ func (s *Snapshot) APIMap() map[string]any {
 			setIfNotSensitive(d, s.GuardrailAlert.ContentPreviewLen)
 		case KeyIPBCooldown:
 			setIfNotSensitive(d, s.IPBinding.NotifyCooldownSeconds)
+		case KeyToolsetEnabled:
+			setIfNotSensitive(d, s.Toolset.Enabled)
+		case KeyToolsetGran:
+			setIfNotSensitive(d, s.Toolset.Granularity)
+		case KeyToolsetDescLen:
+			setIfNotSensitive(d, s.Toolset.DescMaxLen)
+		case KeyToolsetRetention:
+			setIfNotSensitive(d, s.Toolset.RetentionDays)
+		case KeyToolsetAlertEn:
+			setIfNotSensitive(d, s.Toolset.AlertEnabled)
 		}
 	}
 	return out
@@ -117,12 +127,13 @@ func (s *Snapshot) APIMap() map[string]any {
 // APIMeta renders per-key metadata for GET /system/config. SetMap supplies
 // the "configured" bit for sensitive keys (value itself never leaves).
 type APIMeta struct {
-	Section         string `json:"section"`
-	Source          string `json:"source"`
-	RestartRequired bool   `json:"restart_required"`
-	Sensitive       bool   `json:"sensitive"`
-	Type            string `json:"type"`
-	Set             bool   `json:"set,omitempty"`
+	Section         string   `json:"section"`
+	Source          string   `json:"source"`
+	RestartRequired bool     `json:"restart_required"`
+	Sensitive       bool     `json:"sensitive"`
+	Type            string   `json:"type"`
+	EnumValues      []string `json:"enum_values,omitempty"`
+	Set             bool     `json:"set,omitempty"`
 }
 
 func (s *Snapshot) MetaMap() map[string]APIMeta {
@@ -134,6 +145,7 @@ func (s *Snapshot) MetaMap() map[string]APIMeta {
 			RestartRequired: d.RestartRequired,
 			Sensitive:       d.Sensitive,
 			Type:            d.Type,
+			EnumValues:      d.EnumValues,
 		}
 		if d.Sensitive {
 			m.Set = s.SensitiveSet[d.Name]
@@ -162,6 +174,11 @@ func ParseAndValidate(key string, raw json.RawMessage) (string, error) {
 		if key == KeyDataLensInterval || key == KeyDataLensLookback {
 			if _, err := time.ParseDuration(v); err != nil {
 				return "", fmt.Errorf("%s: invalid duration %q", key, v)
+			}
+		}
+		if d.Validate != nil {
+			if err := d.Validate(v); err != nil {
+				return "", fmt.Errorf("%s: %s", key, err.Error())
 			}
 		}
 		return v, nil
