@@ -158,6 +158,7 @@ var queryableDimensions = map[string]bool{
 	"provider": true,
 	"status":   true,
 	"currency": true,
+	"tool":     true, // M3b: routes to datalens_tool_daily_metrics
 }
 
 var dimensionColumnMap = map[string]string{
@@ -170,6 +171,7 @@ var dimensionColumnMap = map[string]string{
 	"error_type": "error_type",
 	"agent":      "agent_type",
 	"currency":   "currency",
+	"tool":       "tool_name",
 }
 
 // allowedOperators is the set of valid filter operators.
@@ -314,6 +316,199 @@ func getMetricDefs() map[string]metricDef {
 }
 
 // ---------------------------------------------------------------------------
+// Tool dimension (M3b) — datalens_tool_daily_metrics has its own column set,
+// so tool queries carry a separate metric registry and SQL builder instead of
+// grafting onto the usage-table path above.
+// ---------------------------------------------------------------------------
+
+var toolMetricDefs = map[string]metricDef{
+	"mcp_calls": {
+		Expr:   "SUM(mcp_calls)",
+		Label:  "MCP Calls",
+		Format: "number",
+	},
+	"mcp_errors": {
+		Expr:   "SUM(mcp_errors)",
+		Label:  "MCP Errors",
+		Format: "number",
+	},
+	"mcp_blocked": {
+		Expr:   "SUM(mcp_blocked)",
+		Label:  "MCP Blocked",
+		Format: "number",
+	},
+	"mcp_avg_duration": {
+		Expr:   "CASE WHEN SUM(duration_samples) > 0 THEN SUM(total_duration_ms) / SUM(duration_samples) ELSE 0 END",
+		Label:  "MCP Avg Duration",
+		Format: "ms",
+	},
+	"tool_first_seen": {
+		Expr:   "SUM(first_seen_count)",
+		Label:  "New Tools",
+		Format: "number",
+	},
+	"tool_changed": {
+		Expr:   "SUM(definition_changed_count)",
+		Label:  "Tool Definition Changes",
+		Format: "number",
+	},
+}
+
+// isToolQuery reports whether the query touches the tool rollup table:
+// a "tool" dimension/filter, or any tool metric.
+func isToolQuery(p *QueryParams) bool {
+	for _, d := range p.Dimensions {
+		if d == "tool" {
+			return true
+		}
+	}
+	for _, m := range p.Metrics {
+		if _, ok := toolMetricDefs[m]; ok {
+			return true
+		}
+	}
+	for _, f := range p.Filters {
+		if f.Dimension == "tool" {
+			return true
+		}
+	}
+	return false
+}
+
+// queryToolMetrics executes a query against datalens_tool_daily_metrics.
+// Dimensions are limited to time/tool/key; granularity is daily or coarser.
+func (s *PgMetricsStore) queryToolMetrics(ctx context.Context, params QueryParams) (*QueryResult, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	start := time.Now()
+
+	// Dimensions: only tool/key carry meaning in the rollup table.
+	for _, d := range params.Dimensions {
+		if d == "time" {
+			continue
+		}
+		if d != "tool" && d != "key" {
+			return nil, fmt.Errorf("dimension %q cannot be combined with tool metrics (allowed: tool, key)", d)
+		}
+	}
+	// Granularity: the rollup is daily; hour would be silently wrong.
+	if params.Granularity == "hour" {
+		return nil, fmt.Errorf("tool metrics are daily-granularity only")
+	}
+	// Metrics: all must come from the tool registry (no usage metrics here).
+	for _, m := range params.Metrics {
+		if _, ok := toolMetricDefs[m]; !ok {
+			return nil, fmt.Errorf("metric %q is not available for the tool dimension", m)
+		}
+	}
+
+	rangeStart, rangeEnd, err := resolveTimeRange(&params.TimeRange)
+	if err != nil {
+		return nil, fmt.Errorf("resolve time range: %w", err)
+	}
+
+	gran := params.Granularity
+	if gran == "" {
+		gran = "day"
+	}
+	timeExpr := s.d.DateTrunc(gran, "day_bucket")
+
+	var selectCols []string
+	var groupCols []string
+	var columnMeta []ColumnMeta
+
+	selectCols = append(selectCols, timeExpr+" AS time_bucket")
+	groupCols = append(groupCols, timeExpr)
+	columnMeta = append(columnMeta, ColumnMeta{Key: "time_bucket", Label: "Time", Type: "time"})
+
+	dims := make([]string, 0, len(params.Dimensions))
+	for _, d := range params.Dimensions {
+		if d != "time" {
+			dims = append(dims, d)
+		}
+	}
+	for _, dim := range dims {
+		col := dimensionColumnMap[dim]
+		selectCols = append(selectCols, col)
+		groupCols = append(groupCols, col)
+		columnMeta = append(columnMeta, ColumnMeta{Key: dim, Label: dimLabel(dim), Type: "dimension"})
+	}
+	for _, m := range params.Metrics {
+		def := toolMetricDefs[m]
+		selectCols = append(selectCols, def.Expr+" AS "+m)
+		columnMeta = append(columnMeta, ColumnMeta{Key: m, Label: def.Label, Type: "metric", Format: def.Format})
+	}
+
+	var whereConds []string
+	var whereArgs []any
+	if params.OrgID > 0 {
+		whereConds = append(whereConds, "org_id = ?")
+		whereArgs = append(whereArgs, params.OrgID)
+	}
+	whereConds = append(whereConds, "day_bucket >= ?")
+	whereArgs = append(whereArgs, rangeStart)
+	whereConds = append(whereConds, "day_bucket < ?")
+	whereArgs = append(whereArgs, rangeEnd)
+
+	for _, f := range params.Filters {
+		if f.Dimension != "tool" && f.Dimension != "key" {
+			return nil, fmt.Errorf("filter dimension %q cannot be combined with tool metrics (allowed: tool, key)", f.Dimension)
+		}
+		cond, args, err := buildFilterCondition(dimensionColumnMap[f.Dimension], f)
+		if err != nil {
+			return nil, fmt.Errorf("filter %s: %w", f.Dimension, err)
+		}
+		if cond != "" {
+			whereConds = append(whereConds, cond)
+			whereArgs = append(whereArgs, args...)
+		}
+	}
+
+	sql := fmt.Sprintf("SELECT %s FROM datalens_tool_daily_metrics WHERE %s",
+		strings.Join(selectCols, ", "), strings.Join(whereConds, " AND "))
+	if len(groupCols) > 0 {
+		sql += " GROUP BY " + strings.Join(groupCols, ", ")
+	}
+	if params.SortBy != "" {
+		dir := "ASC"
+		if strings.EqualFold(params.SortOrder, "desc") {
+			dir = "DESC"
+		}
+		sortCol := params.SortBy
+		if col, ok := dimensionColumnMap[params.SortBy]; ok {
+			sortCol = col
+		}
+		sql += fmt.Sprintf(" ORDER BY %s %s", sortCol, dir)
+	}
+	if params.Limit > 0 {
+		sql += fmt.Sprintf(" LIMIT %d", params.Limit)
+	}
+
+	var rows []map[string]any
+	if err := s.db.WithContext(queryCtx).Raw(sql, whereArgs...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("execute tool query: %w", err)
+	}
+
+	if err := s.resolveDimensionNames(queryCtx, rows, params.Dimensions); err != nil {
+		return nil, fmt.Errorf("resolve dimension names: %w", err)
+	}
+
+	meta := QueryMeta{
+		QueryTimeMs: int(time.Since(start).Milliseconds()),
+		DataSource:  "datalens_tool_daily_metrics",
+	}
+	s.enrichMeta(queryCtx, &meta)
+
+	return &QueryResult{
+		Columns: columnMeta,
+		Rows:    rows,
+		Total:   len(rows),
+		Meta:    meta,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
 // PgMetricsStore — PostgreSQL implementation of MetricsStore
 // ---------------------------------------------------------------------------
 
@@ -345,6 +540,12 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 	// 1. Validate inputs.
 	if err := validateQueryParams(&params); err != nil {
 		return nil, err
+	}
+
+	// 1b. Tool-dimension queries (M3b) target a separate rollup table with
+	// its own column set — route them before the usage-table SQL assembly.
+	if isToolQuery(&params) {
+		return s.queryToolMetrics(ctx, params)
 	}
 
 	// 2. Resolve time range to concrete start/end.
@@ -1097,6 +1298,8 @@ func dimLabel(dim string) string {
 		return "Agent"
 	case "currency":
 		return "Currency"
+	case "tool":
+		return "Tool"
 	default:
 		return dim
 	}

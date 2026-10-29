@@ -122,6 +122,31 @@ type DataLensDailyMetric struct {
 
 func (DataLensDailyMetric) TableName() string { return "datalens_daily_metrics" }
 
+// DataLensToolDailyMetric is a row in the tool daily rollup (M3b): per
+// org/key/tool/day counters from mcp_tool_call_logs (mcp_*) and
+// agent_toolset_events (first_seen/definition_changed). api_key_id NULL =
+// no key identity (config-auth MCP traffic). PostgreSQL-only chain, like
+// the other pre-agg tables.
+type DataLensToolDailyMetric struct {
+	ID                     int64     `gorm:"primaryKey" json:"id"`
+	OrgID                  int64     `gorm:"not null" json:"org_id"`
+	DayBucket              time.Time `gorm:"not null;type:date" json:"day_bucket"`
+	APIKeyID               *int64    `json:"api_key_id,omitempty"`
+	ToolName               string    `gorm:"size:256;not null" json:"tool_name"`
+	McpCalls               int64     `gorm:"not null;default:0" json:"mcp_calls"`
+	McpErrors              int64     `gorm:"not null;default:0" json:"mcp_errors"`
+	McpBlocked             int64     `gorm:"not null;default:0" json:"mcp_blocked"`
+	TotalDurationMs        int64     `gorm:"not null;default:0" json:"total_duration_ms"`
+	DurationSamples        int64     `gorm:"not null;default:0" json:"duration_samples"`
+	FirstSeenCount         int       `gorm:"not null;default:0" json:"first_seen_count"`
+	DefinitionChangedCount int       `gorm:"not null;default:0" json:"definition_changed_count"`
+	// CURRENT_TIMESTAMP (not now()) so AutoMigrate DDL parses on SQLite in
+	// unit tests; the authoritative schema is migration 000089.
+	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
+}
+
+func (DataLensToolDailyMetric) TableName() string { return "datalens_tool_daily_metrics" }
+
 // DataLensAggStatus tracks aggregation health per level.
 type DataLensAggStatus struct {
 	ID             int64     `gorm:"primaryKey" json:"id"`

@@ -133,6 +133,12 @@ func (s *DataLensAggregatorService) runAggregationCycle(ctx context.Context) err
 			firstErr = err
 		}
 	}
+	if err := s.aggregateToolDaily(ctx); err != nil {
+		slog.Warn("datalens aggregator: tool daily failed", "error", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
 	if err := s.cleanupRetentionPolicy(ctx); err != nil {
 		slog.Warn("datalens aggregator: cleanup failed", "error", err)
 		if firstErr == nil {
@@ -557,6 +563,109 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 	return firstErr
 }
 
+// aggregateToolDaily rolls up per-tool daily counters (M3b DataLens tool
+// dimension). Both sources are folded into one INSERT..SELECT via UNION ALL
+// so a (org, day, key, tool) row written by either source is upserted exactly
+// once per cycle — two separate statements would zero each other's columns
+// under DO UPDATE SET. Idempotent whole-row replacement, same 3-day self-heal
+// window as aggregateDaily.
+func (s *DataLensAggregatorService) aggregateToolDaily(ctx context.Context) error {
+	now := time.Now().UTC()
+	dayEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	const toolLookbackDays = 3
+	dayStart := dayEnd.Add(-toolLookbackDays * 24 * time.Hour)
+
+	sql, args := s.buildToolDailySQL(dayStart, dayEnd)
+	t0 := time.Now()
+	result := s.db.WithContext(ctx).Exec(sql, args...)
+	elapsed := time.Since(t0)
+	rows := 0
+	if result.RowsAffected >= 0 {
+		rows = int(result.RowsAffected)
+	}
+	if result.Error != nil {
+		slog.Warn("datalens aggregator: tool daily failed", "error", result.Error, "elapsed_ms", elapsed.Milliseconds())
+		s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), rows, result.Error)
+		return result.Error
+	}
+	slog.Info("datalens aggregator: tool daily done", "rows", rows, "elapsed_ms", elapsed.Milliseconds())
+	s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), rows, nil)
+	return nil
+}
+
+// buildToolDailySQL builds the tool rollup UPSERT.
+// Source 1: mcp_tool_call_logs (per-call truth; only tools/call counts as a
+// tool call, tools/list is discovery traffic). Tool names get the mcp/
+// {server}/{tool} prefix to match agent_toolset_profiles (M4 naming).
+// Source 2: agent_toolset_events (first_seen / definition_changed history).
+// api_key_id 0 (config-auth MCP traffic) normalizes to NULL; the upsert
+// index uses COALESCE(api_key_id, -1), same pattern as the sibling tables.
+func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (string, []any) {
+	mcpDay := s.d.DateTrunc("day", "l.created_at")
+	evDay := s.d.DateTrunc("day", "e.created_at")
+
+	insertCols := []string{
+		"org_id", "day_bucket", "api_key_id", "tool_name",
+		"mcp_calls", "mcp_errors", "mcp_blocked",
+		"total_duration_ms", "duration_samples",
+		"first_seen_count", "definition_changed_count",
+	}
+	updateCols := []string{
+		"mcp_calls", "mcp_errors", "mcp_blocked",
+		"total_duration_ms", "duration_samples",
+		"first_seen_count", "definition_changed_count",
+	}
+	var setParts []string
+	for _, col := range updateCols {
+		setParts = append(setParts, col+" = EXCLUDED."+col)
+	}
+
+	sql := fmt.Sprintf(
+		"INSERT INTO datalens_tool_daily_metrics (%s)\n"+
+			"SELECT org_id, day_bucket, api_key_id, tool_name,\n"+
+			"  SUM(mcp_calls) AS mcp_calls, SUM(mcp_errors) AS mcp_errors, SUM(mcp_blocked) AS mcp_blocked,\n"+
+			"  SUM(total_duration_ms) AS total_duration_ms, SUM(duration_samples) AS duration_samples,\n"+
+			"  SUM(first_seen_count) AS first_seen_count, SUM(definition_changed_count) AS definition_changed_count\n"+
+			"FROM (\n"+
+			"  SELECT l.org_id AS org_id, %s AS day_bucket, NULLIF(l.api_key_id, 0) AS api_key_id,\n"+
+			"    'mcp/' || l.server_name || '/' || l.tool_name AS tool_name,\n"+
+			"    COUNT(*) AS mcp_calls,\n"+
+			"    %s AS mcp_errors,\n"+
+			"    %s AS mcp_blocked,\n"+
+			"    %s AS total_duration_ms,\n"+
+			"    %s AS duration_samples,\n"+
+			"    0 AS first_seen_count, 0 AS definition_changed_count\n"+
+			"  FROM mcp_tool_call_logs l\n"+
+			"  WHERE l.created_at >= $1 AND l.created_at < $2 AND l.method = 'tools/call' AND l.org_id IS NOT NULL\n"+
+			"  GROUP BY l.org_id, %s, NULLIF(l.api_key_id, 0), l.server_name, l.tool_name\n"+
+			"  UNION ALL\n"+
+			"  SELECT e.org_id AS org_id, %s AS day_bucket, NULLIF(e.api_key_id, 0) AS api_key_id,\n"+
+			"    e.tool_name AS tool_name,\n"+
+			"    0 AS mcp_calls, 0 AS mcp_errors, 0 AS mcp_blocked, 0 AS total_duration_ms, 0 AS duration_samples,\n"+
+			"    %s AS first_seen_count,\n"+
+			"    %s AS definition_changed_count\n"+
+			"  FROM agent_toolset_events e\n"+
+			"  WHERE e.created_at >= $1 AND e.created_at < $2 AND e.org_id IS NOT NULL\n"+
+			"  GROUP BY e.org_id, %s, NULLIF(e.api_key_id, 0), e.tool_name\n"+
+			") src\n"+
+			"GROUP BY org_id, day_bucket, api_key_id, tool_name\n"+
+			"ON CONFLICT (org_id, COALESCE(api_key_id, -1), day_bucket, tool_name) DO UPDATE SET %s",
+		strings.Join(insertCols, ", "),
+		mcpDay,
+		s.d.ConditionalSum("l.status = 0"),
+		s.d.ConditionalSum("l.status = -1"),
+		s.d.ConditionalSumCol("l.duration", "l.status = 1"),
+		s.d.ConditionalSum("l.status = 1"),
+		mcpDay,
+		evDay,
+		s.d.ConditionalSum("e.event_type = 'first_seen'"),
+		s.d.ConditionalSum("e.event_type = 'definition_changed'"),
+		evDay,
+		strings.Join(setParts, ", "),
+	)
+	return sql, []any{start, end}
+}
+
 // backfill aggregates historical data for the last backfillDays days.
 func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 	if s.backfillDays <= 0 {
@@ -594,6 +703,12 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 		if err := s.aggregateDailyFromHourly(ctx, dayStart, dayEnd); err != nil {
 			slog.Warn("datalens aggregator: backfill daily failed",
 				"day", dayStart.Format("2006-01-02"), "error", err)
+		}
+		// Tool rollup for this day (M3b).
+		toolSQL, toolArgs := s.buildToolDailySQL(dayStart, dayEnd)
+		if result := s.db.WithContext(ctx).Exec(toolSQL, toolArgs...); result.Error != nil {
+			slog.Warn("datalens aggregator: backfill tool daily failed",
+				"day", dayStart.Format("2006-01-02"), "error", result.Error)
 		}
 		if err := s.updateDailyDistinctCounts(ctx, dayStart, dayEnd); err != nil {
 			slog.Warn("datalens aggregator: backfill daily distinct failed",
@@ -656,6 +771,18 @@ func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) 
 			}
 		} else if result.RowsAffected > 0 {
 			slog.Info("datalens aggregator: daily cleanup", "deleted", result.RowsAffected, "cutoff", cutoff.Format("2006-01-02"))
+		}
+		// Tool rollup shares the daily retention window (M3b).
+		result = s.db.WithContext(ctx).Exec(
+			"DELETE FROM datalens_tool_daily_metrics WHERE day_bucket < $1", cutoff,
+		)
+		if result.Error != nil {
+			slog.Warn("datalens aggregator: tool daily cleanup failed", "error", result.Error)
+			if firstErr == nil {
+				firstErr = result.Error
+			}
+		} else if result.RowsAffected > 0 {
+			slog.Info("datalens aggregator: tool daily cleanup", "deleted", result.RowsAffected, "cutoff", cutoff.Format("2006-01-02"))
 		}
 	}
 	return firstErr
