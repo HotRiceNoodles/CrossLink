@@ -352,6 +352,11 @@ var toolMetricDefs = map[string]metricDef{
 		Label:  "Tool Definition Changes",
 		Format: "number",
 	},
+	"tool_disappeared": {
+		Expr:   "SUM(disappeared_count)",
+		Label:  "Disappeared Tools",
+		Format: "number",
+	},
 }
 
 // isToolQuery reports whether the query touches the tool rollup table:

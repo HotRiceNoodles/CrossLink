@@ -44,6 +44,9 @@ func TestObserveMCPCall_ToolsListDeclared(t *testing.T) {
 	if o.APIKeyID != 9 || o.TeamID != 5 || o.OrgID != 7 {
 		t.Fatalf("identity = %+v", o)
 	}
+	if !o.FullInventory {
+		t.Fatalf("uncapped tools/list must mark FullInventory (disappearance evidence)")
+	}
 	if o.Source != "proxy" || o.Protocol != "mcp" || o.Model != "" {
 		t.Fatalf("meta = %+v", o)
 	}
@@ -152,5 +155,8 @@ func TestObserveMCPCall_DeclaredCap(t *testing.T) {
 	}
 	if len(rec.obs[0].Declared) != maxMCPDeclaredTools {
 		t.Fatalf("cap not enforced: %d", len(rec.obs[0].Declared))
+	}
+	if rec.obs[0].FullInventory {
+		t.Fatalf("capped tools/list must not claim FullInventory — a truncated list cannot prove disappearances")
 	}
 }

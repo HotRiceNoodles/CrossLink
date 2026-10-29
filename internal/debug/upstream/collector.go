@@ -56,6 +56,7 @@ func UpstreamCollectorFromContext(ctx context.Context) *UpstreamCollector {
 var sensitiveHeaders = []string{
 	"Authorization",
 	"X-Api-Key",
+	"X-Replay-Token", // single-use replay credential (middleware/replay.go); redact for the rare pre-Auth abort case where it is still live
 	"Cookie",
 	"Set-Cookie",
 	"Proxy-Authorization",

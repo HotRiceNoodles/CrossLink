@@ -38,10 +38,12 @@ func TestAggregatorToolDailyRollup(t *testing.T) {
 
 	insertMCPLogs(t, db, testOrgID, seedTime)
 
-	// Toolset events: same key, two tools; one first_seen + one changed.
+	// Toolset events: same key, two tools; one first_seen + one changed + one
+	// disappeared (disappeared rollup column, pg migration 000091).
 	evs := []model.AgentToolsetEvent{
 		{OrgID: testOrgID, APIKeyID: 42, ToolName: "exec_shell", EventType: "first_seen", CreatedAt: seedTime},
 		{OrgID: testOrgID, APIKeyID: 42, ToolName: "mcp/fs/read_file", EventType: "definition_changed", CreatedAt: seedTime},
+		{OrgID: testOrgID, APIKeyID: 42, ToolName: "mcp/fs/read_file", EventType: "disappeared", CreatedAt: seedTime},
 	}
 	for i := range evs {
 		require.NoError(t, db.Create(&evs[i]).Error)
@@ -61,11 +63,12 @@ func TestAggregatorToolDailyRollup(t *testing.T) {
 		DurationSamples        int64
 		FirstSeenCount         int
 		DefinitionChangedCount int
+		DisappearedCount       int
 	}
 	var rows []row
 	require.NoError(t, db.Raw(`
 		SELECT tool_name, api_key_id, mcp_calls, mcp_errors, mcp_blocked,
-		       total_duration_ms, duration_samples, first_seen_count, definition_changed_count
+		       total_duration_ms, duration_samples, first_seen_count, definition_changed_count, disappeared_count
 		FROM datalens_tool_daily_metrics WHERE org_id = ? ORDER BY tool_name`, testOrgID).Scan(&rows).Error)
 
 	byTool := map[string]row{}
@@ -88,6 +91,7 @@ func TestAggregatorToolDailyRollup(t *testing.T) {
 	assert.Equal(t, int64(120), rf.TotalDurationMs)
 	assert.Equal(t, int64(1), rf.DurationSamples)
 	assert.Equal(t, 1, rf.DefinitionChangedCount)
+	assert.Equal(t, 1, rf.DisappearedCount, "disappeared event must roll up (000091 column)")
 	require.NotNil(t, rf.APIKeyID)
 	assert.EqualValues(t, 42, *rf.APIKeyID)
 

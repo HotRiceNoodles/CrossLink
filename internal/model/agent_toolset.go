@@ -21,6 +21,7 @@ type AgentToolsetProfile struct {
 	SchemaSHA256      string     `gorm:"size:64;not null;default:''" json:"schema_sha256"`
 	SchemaBytes       int        `gorm:"not null;default:0" json:"schema_bytes"`
 	DefinitionVersion int        `gorm:"not null;default:1" json:"definition_version"`
+	Present           bool       `gorm:"not null;default:true" json:"present"` // false = gone from the server's last complete inventory (disappeared); reappearing flips it back without a new first_seen
 	DeclaredCount     int64      `gorm:"not null;default:0" json:"declared_count"`
 	InvokedCount      int64      `gorm:"not null;default:0" json:"invoked_count"`
 	FirstSeenAt       time.Time  `gorm:"not null" json:"first_seen_at"`
@@ -33,8 +34,8 @@ type AgentToolsetProfile struct {
 
 func (AgentToolsetProfile) TableName() string { return "agent_toolset_profiles" }
 
-// AgentToolsetEvent records toolset changes (first_seen / definition_changed)
-// powering the profile history view and, later, change alerts (M2).
+// AgentToolsetEvent records toolset changes (first_seen / definition_changed /
+// disappeared) powering the profile history view and the M2 change alerts.
 type AgentToolsetEvent struct {
 	ID              int64     `gorm:"primaryKey" json:"id"`
 	OrgID           int64     `gorm:"index;not null;default:0" json:"org_id"`
@@ -52,8 +53,8 @@ func (AgentToolsetEvent) TableName() string { return "agent_toolset_events" }
 // AgentToolsetAlertRule routes toolset change events to notification
 // channels (M2). org_id NULL = global fallback rule (matched when the event's
 // org has no rule of its own). event_types is a CSV of first_seen /
-// definition_changed; empty = both. Cooldown is rule-level, like the guardrail
-// and provider-guard alert rules.
+// definition_changed / disappeared; empty = all. Cooldown is rule-level, like
+// the guardrail and provider-guard alert rules.
 type AgentToolsetAlertRule struct {
 	ID              int64          `gorm:"primaryKey" json:"id"`
 	OrgID           *int64         `gorm:"index:idx_tsar_org_enabled" json:"org_id,omitempty"`

@@ -86,6 +86,7 @@ func TestRedactHeaders_RemovesSensitive(t *testing.T) {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer secret")
 	h.Set("X-Api-Key", "key123")
+	h.Set("X-Replay-Token", "deadbeef")
 	h.Set("Cookie", "session=abc")
 	h.Set("Set-Cookie", "token=xyz")
 	h.Set("Proxy-Authorization", "Basic abc")
@@ -95,6 +96,7 @@ func TestRedactHeaders_RemovesSensitive(t *testing.T) {
 
 	assert.Empty(t, redacted.Get("Authorization"))
 	assert.Empty(t, redacted.Get("X-Api-Key"))
+	assert.Empty(t, redacted.Get("X-Replay-Token"))
 	assert.Empty(t, redacted.Get("Cookie"))
 	assert.Empty(t, redacted.Get("Set-Cookie"))
 	assert.Empty(t, redacted.Get("Proxy-Authorization"))

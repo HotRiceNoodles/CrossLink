@@ -608,12 +608,12 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 		"org_id", "day_bucket", "api_key_id", "tool_name",
 		"mcp_calls", "mcp_errors", "mcp_blocked",
 		"total_duration_ms", "duration_samples",
-		"first_seen_count", "definition_changed_count",
+		"first_seen_count", "definition_changed_count", "disappeared_count",
 	}
 	updateCols := []string{
 		"mcp_calls", "mcp_errors", "mcp_blocked",
 		"total_duration_ms", "duration_samples",
-		"first_seen_count", "definition_changed_count",
+		"first_seen_count", "definition_changed_count", "disappeared_count",
 	}
 	var setParts []string
 	for _, col := range updateCols {
@@ -625,7 +625,8 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 			"SELECT org_id, day_bucket, api_key_id, tool_name,\n"+
 			"  SUM(mcp_calls) AS mcp_calls, SUM(mcp_errors) AS mcp_errors, SUM(mcp_blocked) AS mcp_blocked,\n"+
 			"  SUM(total_duration_ms) AS total_duration_ms, SUM(duration_samples) AS duration_samples,\n"+
-			"  SUM(first_seen_count) AS first_seen_count, SUM(definition_changed_count) AS definition_changed_count\n"+
+			"  SUM(first_seen_count) AS first_seen_count, SUM(definition_changed_count) AS definition_changed_count,\n"+
+			"  SUM(disappeared_count) AS disappeared_count\n"+
 			"FROM (\n"+
 			"  SELECT l.org_id AS org_id, %s AS day_bucket, NULLIF(l.api_key_id, 0) AS api_key_id,\n"+
 			"    'mcp/' || l.server_name || '/' || l.tool_name AS tool_name,\n"+
@@ -634,7 +635,7 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 			"    %s AS mcp_blocked,\n"+
 			"    %s AS total_duration_ms,\n"+
 			"    %s AS duration_samples,\n"+
-			"    0 AS first_seen_count, 0 AS definition_changed_count\n"+
+			"    0 AS first_seen_count, 0 AS definition_changed_count, 0 AS disappeared_count\n"+
 			"  FROM mcp_tool_call_logs l\n"+
 			"  WHERE l.created_at >= $1 AND l.created_at < $2 AND l.method = 'tools/call' AND l.org_id IS NOT NULL\n"+
 			"  GROUP BY l.org_id, %s, NULLIF(l.api_key_id, 0), l.server_name, l.tool_name\n"+
@@ -643,7 +644,8 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 			"    e.tool_name AS tool_name,\n"+
 			"    0 AS mcp_calls, 0 AS mcp_errors, 0 AS mcp_blocked, 0 AS total_duration_ms, 0 AS duration_samples,\n"+
 			"    %s AS first_seen_count,\n"+
-			"    %s AS definition_changed_count\n"+
+			"    %s AS definition_changed_count,\n"+
+			"    %s AS disappeared_count\n"+
 			"  FROM agent_toolset_events e\n"+
 			"  WHERE e.created_at >= $1 AND e.created_at < $2 AND e.org_id IS NOT NULL\n"+
 			"  GROUP BY e.org_id, %s, NULLIF(e.api_key_id, 0), e.tool_name\n"+
@@ -660,6 +662,7 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 		evDay,
 		s.d.ConditionalSum("e.event_type = 'first_seen'"),
 		s.d.ConditionalSum("e.event_type = 'definition_changed'"),
+		s.d.ConditionalSum("e.event_type = 'disappeared'"),
 		evDay,
 		strings.Join(setParts, ", "),
 	)

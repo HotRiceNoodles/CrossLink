@@ -18,6 +18,10 @@ type ToolObservation struct {
 	// Invoked are tool names actually emitted by the model in this response
 	// (tool_use / tool_calls). Empty when the response was a cache replay.
 	Invoked []string
+	// FullInventory marks Declared as the source's COMPLETE tool inventory
+	// (an uncapped MCP tools/list response). Only complete inventories can
+	// prove a tool disappeared; per-request declared sets never set this.
+	FullInventory bool
 }
 
 // DeclaredTool is one tool definition as seen on the wire. SchemaRaw is the

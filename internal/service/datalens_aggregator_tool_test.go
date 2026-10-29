@@ -35,8 +35,10 @@ func TestBuildToolDailySQL(t *testing.T) {
 		"FROM agent_toolset_events e",
 		"e.event_type = 'first_seen'",
 		"e.event_type = 'definition_changed'",
+		"e.event_type = 'disappeared'",
 		"ON CONFLICT (org_id, COALESCE(api_key_id, -1), day_bucket, tool_name)",
 		"first_seen_count = EXCLUDED.first_seen_count",
+		"disappeared_count = EXCLUDED.disappeared_count",
 		"mcp_calls = EXCLUDED.mcp_calls",
 	} {
 		assert.Contains(t, sql, want)

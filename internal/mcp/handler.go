@@ -84,6 +84,9 @@ func (h *Handler) observeMCPCall(c *gin.Context, serverName string, req *JSONRPC
 		if json.Unmarshal(b, &result) != nil {
 			return
 		}
+		// An uncapped list is the server's complete inventory — the observer
+		// uses that to prove disappearances; a capped one cannot.
+		obs.FullInventory = len(result.Tools) <= maxMCPDeclaredTools
 		for i, t := range result.Tools {
 			if i >= maxMCPDeclaredTools {
 				break
@@ -131,6 +134,7 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 	// Check tool permissions for tools/call
 	if req.Method == MethodToolsCall {
 		if err := h.checkPermission(c, serverName, &req); err != nil {
+			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("permission: %s", err), "permission")
 			h.observeMCPCall(c, serverName, &req, nil) // toolset: denied attempt
 			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return
@@ -139,7 +143,7 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 		// before anything is forwarded upstream.
 		if gerr := h.checkToolCallParams(c, &req); gerr != nil {
 			resp := JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: gerr}
-			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("guardrail: %s", gerr.Message))
+			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("guardrail: %s", gerr.Message), "guardrail")
 			h.observeMCPCall(c, serverName, &req, nil) // toolset: blocked attempt
 			c.JSON(http.StatusOK, resp)
 			return
@@ -152,7 +156,7 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 
 	if err != nil {
 		slog.Error("MCP forward failed", "server", serverName, "method", req.Method, "error", err)
-		h.logToolCallAsync(c, serverName, &req, duration, 0, err)
+		h.logToolCallAsync(c, serverName, &req, duration, 0, err, "")
 		h.observeMCPCall(c, serverName, &req, nil) // toolset: failed attempt
 		c.JSON(http.StatusBadGateway, gin.H{"error": "upstream server error"})
 		return
@@ -169,13 +173,18 @@ func (h *Handler) HandleJSONRPC(c *gin.Context) {
 	// it is returned to the client.
 	h.checkToolCallResult(c, &req, resp)
 
-	h.logToolCallAsync(c, serverName, &req, duration, outputSize, nil)
+	h.logToolCallAsync(c, serverName, &req, duration, outputSize, nil, "")
 	h.observeMCPCall(c, serverName, &req, resp) // toolset: declared (tools/list) / invoked (tools/call)
 	c.JSON(http.StatusOK, resp)
 }
 
 // logToolCallAsync writes a tool call log record in the background.
-func (h *Handler) logToolCallAsync(c *gin.Context, serverName string, req *JSONRPCRequest, duration int64, outputSize int, fwdErr error) {
+// blockedBy ("guardrail" / "permission") marks rejected calls as status -1
+// with the BlockedBy column set; fwdErr alone is an upstream/forward failure
+// (status 0). Identity columns (org/team/user) come from the API key object —
+// MCP routes are key-authed and never carry a session user, so the key's
+// creator (CreatedByID) is the closest honest UserID.
+func (h *Handler) logToolCallAsync(c *gin.Context, serverName string, req *JSONRPCRequest, duration int64, outputSize int, fwdErr error, blockedBy string) {
 	if req.Method != MethodToolsList && req.Method != MethodToolsCall {
 		return
 	}
@@ -195,6 +204,10 @@ func (h *Handler) logToolCallAsync(c *gin.Context, serverName string, req *JSONR
 			toolLog.ErrorMsg = toolLog.ErrorMsg[:500]
 		}
 	}
+	if blockedBy != "" {
+		toolLog.Status = -1
+		toolLog.BlockedBy = blockedBy
+	}
 
 	if req.Params != nil {
 		toolLog.InputSize = len(req.Params)
@@ -209,9 +222,23 @@ func (h *Handler) logToolCallAsync(c *gin.Context, serverName string, req *JSONR
 		}
 	}
 
-	if keyID, ok := c.Get("api_key_id"); ok {
-		if id, ok := keyID.(int64); ok {
-			toolLog.APIKeyID = id
+	if v, ok := c.Get("api_key"); ok {
+		if ak, ok := v.(*model.APIKey); ok {
+			toolLog.APIKeyID = ak.ID
+			toolLog.OrgID = ak.OrgID
+			if ak.TeamID != nil {
+				toolLog.TeamID = *ak.TeamID
+			}
+			if ak.CreatedByID != nil {
+				toolLog.UserID = *ak.CreatedByID
+			}
+		}
+	}
+	if toolLog.APIKeyID == 0 {
+		if keyID, ok := c.Get("api_key_id"); ok {
+			if id, ok := keyID.(int64); ok {
+				toolLog.APIKeyID = id
+			}
 		}
 	}
 
@@ -256,6 +283,7 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 	// Check tool permissions for tools/call
 	if req.Method == MethodToolsCall {
 		if err := h.checkPermission(c, serverName, &req); err != nil {
+			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("permission: %s", err), "permission")
 			h.observeMCPCall(c, serverName, &req, nil) // toolset: denied attempt
 			c.Header("Content-Type", "text/event-stream")
 			c.Status(http.StatusOK)
@@ -266,6 +294,7 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 		// Content guardrail: inspect (and possibly mask) the call arguments
 		// before anything is forwarded upstream.
 		if gerr := h.checkToolCallParams(c, &req); gerr != nil {
+			h.logToolCallAsync(c, serverName, &req, 0, 0, fmt.Errorf("guardrail: %s", gerr.Message), "guardrail")
 			if b, merr := json.Marshal(JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: gerr}); merr == nil {
 				h.observeMCPCall(c, serverName, &req, nil) // toolset: blocked attempt
 				c.Header("Content-Type", "text/event-stream")
@@ -282,9 +311,12 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 		}
 	}
 
+	start := time.Now()
 	resp, err := h.svc.ForwardRequest(c.Request.Context(), serverName, &req)
+	duration := time.Since(start).Milliseconds()
 	if err != nil {
 		slog.Error("MCP forward failed", "server", serverName, "method", req.Method, "error", err)
+		h.logToolCallAsync(c, serverName, &req, duration, 0, err, "")
 		h.observeMCPCall(c, serverName, &req, nil) // toolset: failed attempt
 		c.Header("Content-Type", "text/event-stream")
 		c.Status(http.StatusOK)
@@ -293,10 +325,18 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 		return
 	}
 
+	outputSize := 0
+	if resp.Result != nil {
+		if b, marshalErr := json.Marshal(resp.Result); marshalErr == nil {
+			outputSize = len(b)
+		}
+	}
+
 	// Content guardrail: inspect (and possibly mask) the tool result before
 	// it is returned to the client.
 	h.checkToolCallResult(c, &req, resp)
 
+	h.logToolCallAsync(c, serverName, &req, duration, outputSize, nil, "")
 	h.observeMCPCall(c, serverName, &req, resp) // toolset: declared (tools/list) / invoked (tools/call)
 
 	respBytes, _ := json.Marshal(resp)

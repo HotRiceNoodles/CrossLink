@@ -30,7 +30,7 @@ func seedToolRows(t *testing.T, db *gorm.DB) {
 	key8 := int64(8)
 	rows := []model.DataLensToolDailyMetric{
 		// exec_shell: LLM-side tool, events only (no mcp_* counters).
-		{OrgID: 1, DayBucket: day, APIKeyID: &key7, ToolName: "exec_shell", FirstSeenCount: 1, DefinitionChangedCount: 2},
+		{OrgID: 1, DayBucket: day, APIKeyID: &key7, ToolName: "exec_shell", FirstSeenCount: 1, DefinitionChangedCount: 2, DisappearedCount: 1},
 		// mcp tool, same key/day: calls + errors + duration.
 		{OrgID: 1, DayBucket: day, APIKeyID: &key7, ToolName: "mcp/fs/read_file", McpCalls: 10, McpErrors: 2, McpBlocked: 1, TotalDurationMs: 1000, DurationSamples: 8},
 		// Same tool next day — must not merge into the day-20 row.
@@ -61,7 +61,7 @@ func TestQueryToolMetrics_GroupingAndAggregates(t *testing.T) {
 	res, err := s.Query(context.Background(), QueryParams{
 		OrgID:       1,
 		Dimensions:  []string{"tool"},
-		Metrics:     []string{"mcp_calls", "mcp_avg_duration", "tool_first_seen", "tool_changed"},
+		Metrics:     []string{"mcp_calls", "mcp_avg_duration", "tool_first_seen", "tool_changed", "tool_disappeared"},
 		TimeRange:   toolTimeRange(),
 		Granularity: "day",
 		SortBy:      "mcp_calls",
@@ -87,6 +87,7 @@ func TestQueryToolMetrics_GroupingAndAggregates(t *testing.T) {
 	es := byTool["exec_shell"]
 	assert.EqualValues(t, 1, es["tool_first_seen"])
 	assert.EqualValues(t, 2, es["tool_changed"])
+	assert.EqualValues(t, 1, es["tool_disappeared"])
 	assert.EqualValues(t, 0, es["mcp_calls"])
 }
 
