@@ -207,6 +207,9 @@ func main() {
 				}
 				mcpGroup.Use(mcp.MCPRateLimit(mcp.NewRateLimiter(rpm)))
 			}
+			// Agent toolset profiling (Pro overlay seam); nil in Community —
+			// the handler then skips observation entirely.
+			mcpHandler.SetToolObserver(ext.ToolObserver)
 			mcpGroup.POST("/:server", mcpHandler.HandleJSONRPC)
 			mcpGroup.GET("/:server", mcpHandler.HandleSSE)
 		},
