@@ -337,6 +337,18 @@ func TestSQLiteRunMigrationsReturnsErrorWhenDiskFull(t *testing.T) {
 	}
 	// Freeze the database at its current page count: any transaction that
 	// needs a new page now fails with SQLITE_FULL (database or disk is full).
+	// VACUUM first — the 000015 table rebuilds leave a large freelist, and
+	// pages taken from it never trip SQLITE_FULL no matter how tight the cap.
+	if err := db.Exec("VACUUM").Error; err != nil {
+		t.Fatal(err)
+	}
+	var freelist int64
+	if err := db.Raw("PRAGMA freelist_count").Scan(&freelist).Error; err != nil {
+		t.Fatal(err)
+	}
+	if freelist != 0 {
+		t.Fatalf("VACUUM left %d free pages", freelist)
+	}
 	var pages int64
 	if err := db.Raw("PRAGMA page_count").Scan(&pages).Error; err != nil {
 		t.Fatal(err)

@@ -147,6 +147,20 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read sqlite migration %s: %w", name, err)
 		}
+		// A file that opens with "PRAGMA foreign_keys = OFF;" asks to run with
+		// FK enforcement suspended: table-rebuild migrations (drop + rename)
+		// cannot work otherwise — the runner wraps each file in one
+		// transaction, PRAGMA foreign_keys is a no-op inside one, and DROP
+		// TABLE's implicit delete of referenced parent rows trips the FK
+		// violation counter even when the replacement table takes the name
+		// and rows back before COMMIT. The pragma must run OUTSIDE the
+		// transaction; the in-file copies below are documentation (no-ops).
+		fkOff := strings.Contains(string(sqlBytes), "PRAGMA foreign_keys = OFF;")
+		if fkOff {
+			if err := s.db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+				return fmt.Errorf("%s disable foreign_keys: %w", name, err)
+			}
+		}
 		tx := s.db.Begin()
 		if err := tx.Error; err != nil {
 			return fmt.Errorf("begin %s: %w", name, err)
@@ -169,6 +183,11 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 		// honest outcome; ignoring it would report success on an empty schema.
 		if err := tx.Commit().Error; err != nil {
 			return fmt.Errorf("commit %s: %w", name, err)
+		}
+		if fkOff {
+			if err := s.db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+				return fmt.Errorf("%s re-enable foreign_keys: %w", name, err)
+			}
 		}
 		slog.Info("sqlite migration applied", "version", version)
 	}

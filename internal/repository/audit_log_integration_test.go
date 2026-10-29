@@ -17,7 +17,6 @@ import (
 	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/model"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestAuditLogRepo_ILike_Postgres(t *testing.T) {
@@ -27,7 +26,7 @@ func TestAuditLogRepo_ILike_Postgres(t *testing.T) {
 	repo := NewAuditLogRepo(db, dia)
 
 	now := time.Now()
-	rows := []model.AuditLog{
+	rows := []*model.AuditLog{
 		{UserID: 1, Username: "TestUser", Action: "create", ResourceType: "key", ResourceID: "1", ResourceName: "TestResource", Status: "success", CreatedAt: now},
 		{UserID: 2, Username: "admin", Action: "delete", ResourceType: "key", ResourceID: "2", ResourceName: "Production Key", Status: "success", CreatedAt: now},
 		{UserID: 3, Username: "viewer", Action: "list", ResourceType: "key", ResourceID: "3", ResourceName: "OLD_KEY", Status: "success", CreatedAt: now},
@@ -49,7 +48,7 @@ func TestAuditLogRepo_ILike_MySQL(t *testing.T) {
 	repo := NewAuditLogRepo(db, dia)
 
 	now := time.Now()
-	rows := []model.AuditLog{
+	rows := []*model.AuditLog{
 		{UserID: 1, Username: "TestUser", Action: "create", ResourceType: "key", ResourceID: "1", ResourceName: "TestResource", Status: "success", CreatedAt: now},
 		{UserID: 2, Username: "admin", Action: "delete", ResourceType: "key", ResourceID: "2", ResourceName: "Production Key", Status: "success", CreatedAt: now},
 	}
