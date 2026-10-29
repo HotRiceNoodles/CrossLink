@@ -4,13 +4,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/debug"
+	"github.com/crosslink/internal/middleware"
+	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/repository"
+	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func newReplayHandler(t *testing.T, port int, upstream *httptest.Server) *DebugHandler {
@@ -44,7 +52,7 @@ func newReplayHandler(t *testing.T, port int, upstream *httptest.Server) *DebugH
 			actualPort = p
 		}
 	}
-	return NewDebugHandler(store, nil, actualPort)
+	return NewDebugHandler(store, nil, nil, actualPort)
 }
 
 func fmtSscanf(s string, v *int) {
@@ -207,4 +215,145 @@ func TestDebug_Replay_HappyPath(t *testing.T) {
 func fmtFprintf(w http.ResponseWriter, format string, args ...any) {
 	// minimal: just write a fixed response for test
 	w.Write([]byte(`{"id":"replayed","model":"new-model","choices":[{"message":{"role":"assistant","content":"hello"}}]}`))
+}
+
+// --- Replay key org-scoping (external report 2026-10-28): the minted replay
+// token carries no org, so key ownership is enforced here at mint time.
+
+// newReplayKeySvc builds a sqlite-backed KeyService for ownership checks.
+func newReplayKeySvc(t *testing.T, keys ...model.APIKey) *service.KeyService {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&model.APIKey{}, &model.APIKeyHash{}))
+	for i := range keys {
+		require.NoError(t, gdb.Create(&keys[i]).Error)
+	}
+	cp, err := crypto.NewProvider("standard")
+	require.NoError(t, err)
+	return service.NewKeyService(repository.NewAPIKeyRepo(gdb), repository.NewAPIKeyHashRepo(gdb), gdb, cp, nil)
+}
+
+func upstreamPort(t *testing.T, url string) int {
+	t.Helper()
+	colon := strings.LastIndex(url, ":")
+	require.NotEqual(t, -1, colon, "upstream URL has no port: %s", url)
+	var p int
+	fmtSscanf(url[colon+1:], &p)
+	return p
+}
+
+// addOrgEntry seeds a debug entry owned by orgID (addEntry leaves OrgID 0,
+// which the entry-level org check rejects for org admins).
+func addOrgEntry(t *testing.T, store *debug.Store, orgID int64) int64 {
+	t.Helper()
+	store.Add(&debug.Entry{
+		Path:    "/v1/chat/completions",
+		Method:  "POST",
+		ReqBody: []byte(`{"model":"m","messages":[]}`),
+		OrgID:   orgID,
+	})
+	entries := store.List()
+	require.NotEmpty(t, entries)
+	return entries[len(entries)-1].Seq
+}
+
+func TestDebug_Replay_OrgAdminCannotReplayForeignOrgKey(t *testing.T) {
+	foreignOrg := int64(8)
+	keySvc := newReplayKeySvc(t, model.APIKey{
+		ID: 5, Name: "foreign-key", KeyHash: "hash-5", KeyPrefix: "sk-x", Status: 1, OrgID: &foreignOrg,
+	})
+
+	store := debug.NewStore(100, 1024*1024)
+	store.SetEnabled(true)
+	seq := addOrgEntry(t, store, 7)
+
+	h := NewDebugHandler(store, nil, keySvc, 8080)
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
+		"key_id": 5,
+	})
+	setAdminContext(c, 1, 1, "org_admin")
+	c.Set("org_id", int64(7)) // org admin of org 7, key belongs to org 8
+	setPathParams(c, gin.Params{{Key: "seq", Value: itoa(seq)}})
+	h.Replay(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "key_not_found")
+}
+
+func TestDebug_Replay_OrgAdminSameOrgKeyMintsTokenNotKeyID(t *testing.T) {
+	var gotReplayToken, gotLegacyKeyID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReplayToken = r.Header.Get("X-Replay-Token")
+		gotLegacyKeyID = r.Header.Get("X-Replay-KeyID")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"replayed","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	ownOrg := int64(7)
+	keySvc := newReplayKeySvc(t, model.APIKey{
+		ID: 5, Name: "own-key", KeyHash: "hash-5", KeyPrefix: "sk-x", Status: 1, OrgID: &ownOrg,
+	})
+
+	store := debug.NewStore(100, 1024*1024)
+	store.SetEnabled(true)
+	seq := addOrgEntry(t, store, 7)
+
+	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, upstream.URL))
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
+		"key_id": 5,
+	})
+	setAdminContext(c, 1, 1, "org_admin")
+	c.Set("org_id", int64(7))
+	setPathParams(c, gin.Params{{Key: "seq", Value: itoa(seq)}})
+	h.Replay(c)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.NotEmpty(t, gotReplayToken, "replay must carry a minted X-Replay-Token")
+	assert.Empty(t, gotLegacyKeyID, "the legacy guessable X-Replay-KeyID header must not be sent")
+}
+
+// End-to-end across both halves of the fix: Replay mints a token and
+// loopback-calls a production-shaped engine (SetTrustedProxies(nil), real
+// Auth middleware), which must redeem it and authenticate the request as the
+// minted key. Proves the admin replay feature still works AND that nothing
+// but the minted token gets through.
+func TestDebug_Replay_EndToEndThroughRealAuth(t *testing.T) {
+	keySvc := newReplayKeySvc(t, model.APIKey{
+		ID: 5, Name: "victim-key", KeyHash: "hash-5", KeyPrefix: "sk-x", Status: 1,
+	})
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	require.NoError(t, engine.SetTrustedProxies(nil)) // production default (app.go)
+	engine.Use(middleware.Auth("", keySvc, nil, service.NoopPolicy{}))
+	var gotKeyID int64
+	engine.POST("/v1/chat/completions", func(c *gin.Context) {
+		key := middleware.GetAPIKeyFromContext(c)
+		if key == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+			return
+		}
+		gotKeyID = key.ID
+		c.JSON(http.StatusOK, gin.H{"id": "replayed", "choices": []any{}})
+	})
+	srv := httptest.NewServer(engine)
+	defer srv.Close()
+
+	store := debug.NewStore(100, 1024*1024)
+	store.SetEnabled(true)
+	seq := addOrgEntry(t, store, 0) // platform-level entry; caller below is platform admin
+
+	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, srv.URL))
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
+		"key_id": 5,
+	})
+	setAdminContext(c, 1, 1, "admin") // platform admin: org_id unset
+	setPathParams(c, gin.Params{{Key: "seq", Value: itoa(seq)}})
+	h.Replay(c)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, int64(5), gotKeyID, "replayed request must authenticate as key 5")
 }

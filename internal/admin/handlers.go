@@ -108,6 +108,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Debug: NewDebugHandler(
 			deps.DebugStore,
 			deps.AuditSvc,
+			deps.Svcs.KeySvc,
 			deps.Config.Server.Port,
 		),
 		License:     NewLicenseHandler(deps.DB, deps.Config),

@@ -25,19 +25,22 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 		// middleware (mounted on the gateway group). Failure counting is done
 		// solely by RecordAuthFailure below on the failure path.
 
-		// Internal replay bypass: if X-Replay-KeyID is present AND request is from
-		// localhost, resolve the key by ID directly (no plaintext needed). This lets
-		// the admin replay Debug entries from the UI without pasting API keys.
-		if replayKeyID := c.GetHeader("X-Replay-KeyID"); replayKeyID != "" && isLocalhost(c.ClientIP()) && keySvc != nil {
-			var keyID int64
-			for _, ch := range replayKeyID {
-				if ch >= '0' && ch <= '9' {
-					keyID = keyID*10 + int64(ch-'0')
-				}
-			}
-			if keyID > 0 {
+		// Admin debug replay: the replay handler (internal/admin/debug.go)
+		// loopback-calls this same process with a single-use X-Replay-Token
+		// minted by MintReplayToken, re-running a logged request as its
+		// original key (keys are stored hashed; the plaintext is unrecoverable,
+		// so a by-ID path is the only option). The TOKEN is the security
+		// boundary — never the source address: behind a same-host reverse proxy
+		// (the documented nginx setup) every external client arrives with a
+		// loopback RemoteAddr while server.trusted_proxies is unset, so
+		// isLocalhost is kept as defense-in-depth only. Key ownership is
+		// org-checked at mint time; expiry and status are enforced here so the
+		// replay path matches Validate's semantics.
+		if token := c.GetHeader("X-Replay-Token"); token != "" && isLocalhost(c.ClientIP()) && keySvc != nil {
+			if keyID, ok := redeemReplayToken(token); ok {
 				key, err := keySvc.GetByID(c.Request.Context(), 0, keyID)
-				if err == nil && key != nil && key.Status == 1 {
+				if err == nil && key != nil && key.Status == 1 &&
+					(key.ExpiresAt == nil || key.ExpiresAt.After(time.Now())) {
 					c.Set("api_key", key)
 					c.Set("api_key_id", key.ID)
 					c.Set("team_id", key.TeamID)

@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/debug"
+	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -20,14 +22,16 @@ import (
 type DebugHandler struct {
 	store      *debug.Store
 	auditSvc   *service.AuditService
+	keySvc     *service.KeyService
 	port       int
 	httpClient *http.Client
 }
 
-func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, port int) *DebugHandler {
+func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, keySvc *service.KeyService, port int) *DebugHandler {
 	return &DebugHandler{
 		store:    store,
 		auditSvc: auditSvc,
+		keySvc:   keySvc,
 		port:     port,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -246,6 +250,22 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 		return
 	}
 
+	// Org scoping: an org admin may only replay as keys their own org holds
+	// (platform admins, orgID 0, are unrestricted). This is the enforcement
+	// point for key ownership — the minted replay token carries no org, so the
+	// gateway-side redeem cannot check it. Fail closed: no keySvc means an org
+	// admin cannot replay at all.
+	if orgID := GetOrgID(c); orgID != 0 {
+		if h.keySvc == nil {
+			internalErr(c, errors.New("key service unavailable"), "replay key ownership check unavailable")
+			return
+		}
+		if _, err := h.keySvc.GetByID(c.Request.Context(), orgID, input.KeyID); err != nil {
+			errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
+			return
+		}
+	}
+
 	// Parse original body and apply top-level overrides.
 	var body map[string]any
 	if err := json.Unmarshal(entry.ReqBody, &body); err != nil {
@@ -272,7 +292,16 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Replay-KeyID", strconv.FormatInt(input.KeyID, 10))
+	// Single-use, 60s-TTL token bound to this key ID — the gateway Auth
+	// middleware redeems it (see middleware/replay.go). Never send the raw
+	// key ID alone: it is a small sequential integer and would authorize
+	// anyone who can reach the app from a loopback source.
+	replayToken := middleware.MintReplayToken(input.KeyID)
+	if replayToken == "" {
+		internalErr(c, errors.New("replay token mint failed"), "replay token mint failed")
+		return
+	}
+	req.Header.Set("X-Replay-Token", replayToken)
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
