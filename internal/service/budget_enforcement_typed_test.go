@@ -65,7 +65,7 @@ func TestReserveE_ShortOutageConcurrentNoAdmission(t *testing.T) {
 	}
 	snap := map[string]string{}
 	for _, sc := range scopes {
-		v, _ := rdb.Get(context.Background(), "budget:"+sc.Scope+":"+sc.ID+":2026-10").Result()
+		v, _ := rdb.Get(context.Background(), "budget:"+sc.Scope+":"+sc.ID+":"+PeriodKey("monthly")).Result()
 		snap[sc.Scope] = v
 	}
 	// Short outage: 32 concurrent admission attempts ("replicas") —
@@ -94,7 +94,7 @@ func TestReserveE_ShortOutageConcurrentNoAdmission(t *testing.T) {
 		t.Fatalf("outage admissions: rejected=%d admitted=%d, want 32/0", rejected, admitted)
 	}
 	for _, sc := range scopes {
-		v, _ := rdb.Get(context.Background(), "budget:"+sc.Scope+":"+sc.ID+":2026-10").Result()
+		v, _ := rdb.Get(context.Background(), "budget:"+sc.Scope+":"+sc.ID+":"+PeriodKey("monthly")).Result()
 		if v != snap[sc.Scope] {
 			t.Fatalf("%s counter moved during outage: %v -> %v", sc.Scope, snap[sc.Scope], v)
 		}
@@ -103,7 +103,7 @@ func TestReserveE_ShortOutageConcurrentNoAdmission(t *testing.T) {
 	if _, exc, err := s.ReserveForRequestE(context.Background(), scopes, 3.0, "co-post"); exc != "" || err != nil {
 		t.Fatalf("post-recovery reserve: exc=%q err=%v", exc, err)
 	}
-	b, _ := rdb.Get(context.Background(), "budget:key:31:2026-10").Float64()
+	b, _ := rdb.Get(context.Background(), "budget:key:31:"+PeriodKey("monthly")).Float64()
 	if b != 5.0 {
 		t.Fatalf("post-recovery budget=%v want 5.0 (2+3, no outage leakage)", b)
 	}

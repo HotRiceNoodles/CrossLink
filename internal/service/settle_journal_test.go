@@ -53,7 +53,7 @@ func appendJournalLine(t *testing.T, path, scope, target, reqID string, cost flo
 		t.Fatalf("append: %v", err)
 	}
 	defer f.Close()
-	b, _ := json.Marshal(journalLine{Scope: scope, Target: target, Period: "monthly", Pk: "2026-10",
+	b, _ := json.Marshal(journalLine{Scope: scope, Target: target, Period: "monthly", Pk: PeriodKey("monthly"),
 		ReqID: reqID, Cost: cost, Ts: ts, Version: 1})
 	f.Write(append(b, '\n'))
 }
@@ -64,7 +64,7 @@ func TestSettleJournal_T17_StreamsPastTwentyThousand(t *testing.T) {
 	now := time.Now().Unix()
 	var sb strings.Builder
 	for i := 0; i < 25000; i++ {
-		b, _ := json.Marshal(journalLine{Scope: "key", Target: "7", Period: "monthly", Pk: "2026-10",
+		b, _ := json.Marshal(journalLine{Scope: "key", Target: "7", Period: "monthly", Pk: PeriodKey("monthly"),
 			ReqID: fmt.Sprintf("id-%05d", i), Cost: 0.001, Ts: now, Version: 1})
 		sb.Write(append(b, '\n'))
 	}
@@ -78,7 +78,7 @@ func TestSettleJournal_T17_StreamsPastTwentyThousand(t *testing.T) {
 	if st.Total != 25000 || st.Recovered != 25000 || st.KeptForRetry != 0 {
 		t.Fatalf("T17: total=%d recovered=%d kept=%d, want 25000/25000/0", st.Total, st.Recovered, st.KeptForRetry)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:7:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:7:"+PeriodKey("monthly")).Float64()
 	if d := settled - 25.0; d < -1e-6 || d > 1e-6 {
 		t.Fatalf("T17 settled=%v want 25.0 (25000x0.001)", settled)
 	}
@@ -101,7 +101,7 @@ func TestSettleJournal_T18_GuardWindowExpiry(t *testing.T) {
 	if st.Expired != 1 || st.Recovered != 1 {
 		t.Fatalf("T18: expired=%d recovered=%d, want 1/1", st.Expired, st.Recovered)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:8:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:8:"+PeriodKey("monthly")).Float64()
 	if d := settled - 2.0; d < -1e-9 || d > 1e-9 {
 		t.Fatalf("T18 settled=%v want exactly 2.0 (expired line NOT applied)", settled)
 	}
@@ -158,7 +158,7 @@ func TestSettleJournal_T21_NoDBDependency(t *testing.T) {
 	if err != nil || st.Recovered != 1 {
 		t.Fatalf("T21: %+v %v", st, err)
 	}
-	v, _ := rdb.Get(context.Background(), "budgetset:team:11:2026-10").Float64()
+	v, _ := rdb.Get(context.Background(), "budgetset:team:11:"+PeriodKey("monthly")).Float64()
 	if v != 3.0 {
 		t.Fatalf("T21 settled=%v want 3.0", v)
 	}
@@ -175,7 +175,7 @@ func TestSettleJournal_T22_Idempotent(t *testing.T) {
 		}
 		appendJournalLine(t, path, "org", "12", "idem-1", 0.5, time.Now().Unix())
 	}
-	v, _ := rdb.Get(context.Background(), "budgetset:org:12:2026-10").Float64()
+	v, _ := rdb.Get(context.Background(), "budgetset:org:12:"+PeriodKey("monthly")).Float64()
 	if v != 0.5 {
 		t.Fatalf("T22 settled=%v want 0.5 (exactly once)", v)
 	}
@@ -234,7 +234,7 @@ func countJournalLinesAll(t *testing.T, path string) int {
 func TestSettleJournal_T23_ConcurrentAppendDuringReplayNoLoss(t *testing.T) {
 	s, cal, rdb, _ := newJournalHarness(t)
 	for i := 0; i < 300; i++ {
-		if err := s.journal.append(settleRetryTask{scope: "key", targetID: "20", period: "monthly", pk: "2026-10", reqID: fmt.Sprintf("pre-%03d", i), cost: 0.001}); err != nil {
+		if err := s.journal.append(settleRetryTask{scope: "key", targetID: "20", period: "monthly", pk: PeriodKey("monthly"), reqID: fmt.Sprintf("pre-%03d", i), cost: 0.001}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -242,7 +242,7 @@ func TestSettleJournal_T23_ConcurrentAppendDuringReplayNoLoss(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 500; i++ {
-			_ = s.journal.append(settleRetryTask{scope: "key", targetID: "20", period: "monthly", pk: "2026-10", reqID: fmt.Sprintf("live-%03d", i), cost: 0.001})
+			_ = s.journal.append(settleRetryTask{scope: "key", targetID: "20", period: "monthly", pk: PeriodKey("monthly"), reqID: fmt.Sprintf("live-%03d", i), cost: 0.001})
 			time.Sleep(200 * time.Microsecond)
 		}
 	}()
@@ -256,7 +256,7 @@ func TestSettleJournal_T23_ConcurrentAppendDuringReplayNoLoss(t *testing.T) {
 	if n := countJournalLinesAll(t, s.journal.path); n != 0 {
 		t.Fatalf("T23 journal still holds %d lines (lost or undrained)", n)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:20:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:20:"+PeriodKey("monthly")).Float64()
 	if d := settled - 0.8; d < -1e-6 || d > 1e-6 {
 		t.Fatalf("T23 settled=%v want 0.8 (800 x 0.001, none lost none doubled)", settled)
 	}
@@ -289,7 +289,7 @@ func TestSettleJournal_T24_RaiseCertificationBlocksDoubleApply(t *testing.T) {
 	if rel24 == nil {
 		t.Fatal("T24 lock")
 	}
-	spent, cerr := cal.calibrateTarget(context.Background(), tok24, "team", 21, "2026-10", "monthly", start, end)
+	spent, cerr := cal.calibrateTarget(context.Background(), tok24, "team", 21, PeriodKey("monthly"), "monthly", start, end)
 	rel24() // release BEFORE the journal round needs the same lock
 	if cerr != nil {
 		t.Fatalf("T24 calibrateTarget: %v", cerr)
@@ -300,7 +300,7 @@ func TestSettleJournal_T24_RaiseCertificationBlocksDoubleApply(t *testing.T) {
 	if rdb.Exists(context.Background(), settledMarkKey("team", "21", "absorbed-1")).Val() != 1 {
 		t.Fatal("T24 atomic page did not certify the absorbed row")
 	}
-	budget, _ := rdb.Get(context.Background(), "budget:team:21:2026-10").Float64()
+	budget, _ := rdb.Get(context.Background(), "budget:team:21:"+PeriodKey("monthly")).Float64()
 	if budget != 2.0 {
 		t.Fatalf("T24 budget=%v want 2.0 (raise and mark in one invocation)", budget)
 	}
@@ -318,7 +318,7 @@ func TestSettleJournal_T24_RaiseCertificationBlocksDoubleApply(t *testing.T) {
 	if st.AlreadyMarked != 1 || st.Recovered != 0 {
 		t.Fatalf("T24 stats=%+v, want already=1 recovered=0 (certified row NOT re-applied)", st)
 	}
-	budget2, _ := rdb.Get(context.Background(), "budget:team:21:2026-10").Float64()
+	budget2, _ := rdb.Get(context.Background(), "budget:team:21:"+PeriodKey("monthly")).Float64()
 	if budget2 != 2.0 {
 		t.Fatalf("T24 budget after replay=%v want 2.0 (replay added nothing)", budget2)
 	}
@@ -353,7 +353,7 @@ func TestSettleJournal_T25_LeaseLostAbortsKept(t *testing.T) {
 	if _, err := s.SettleJournalRound(context.Background(), cal, 5*time.Second); err != nil {
 		t.Fatalf("T25 second round: %v", err)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:22:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:22:"+PeriodKey("monthly")).Float64()
 	if settled != 3.0 {
 		t.Fatalf("T25 settled=%v want 3.0 after retry", settled)
 	}

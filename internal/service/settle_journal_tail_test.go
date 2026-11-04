@@ -43,7 +43,7 @@ func TestSettleJournal_T27_TornTailLine(t *testing.T) {
 	if st.Total != 2 || st.Recovered != 2 || st.Expired != 0 {
 		t.Fatalf("T27 total=%d recovered=%d expired=%d, want 2/2/0 (torn line is NOT a recovered intent)", st.Total, st.Recovered, st.Expired)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:71:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:71:"+PeriodKey("monthly")).Float64()
 	if settled != 5.0 {
 		t.Fatalf("T27 settled=%v want 5.0 (complete lines only)", settled)
 	}
@@ -72,7 +72,7 @@ func TestSettleJournal_T28_MidFileGarbage(t *testing.T) {
 	if st.Total != 2 || st.Recovered != 2 {
 		t.Fatalf("T28 total=%d recovered=%d, want 2/2 (garbage lines dropped)", st.Total, st.Recovered)
 	}
-	settled, _ := rdb.Get(context.Background(), "budgetset:key:72:2026-10").Float64()
+	settled, _ := rdb.Get(context.Background(), "budgetset:key:72:"+PeriodKey("monthly")).Float64()
 	if settled != 5.0 {
 		t.Fatalf("T28 settled=%v want 5.0", settled)
 	}
@@ -114,7 +114,7 @@ func TestSettleJournal_T29_UnwrittenTailHealsViaCalibration(t *testing.T) {
 	if _, err := s.SettleJournalRound(context.Background(), cal, 5*time.Second); err != nil {
 		t.Fatalf("T29 empty round: %v", err)
 	}
-	b0, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:2026-10", tid)).Float64()
+	b0, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:"+PeriodKey("monthly"), tid)).Float64()
 	if b0 != 0 {
 		t.Fatalf("T29 pre-calibration budget=%v want 0 (journal never had the line)", b0)
 	}
@@ -124,11 +124,11 @@ func TestSettleJournal_T29_UnwrittenTailHealsViaCalibration(t *testing.T) {
 		t.Fatal("T29 lock")
 	}
 	start, end := periodBoundaries("monthly")
-	if _, err := cal.calibrateTarget(context.Background(), token, "team", tid, "2026-10", "monthly", start, end); err != nil {
+	if _, err := cal.calibrateTarget(context.Background(), token, "team", tid, PeriodKey("monthly"), "monthly", start, end); err != nil {
 		t.Fatalf("T29 calibrate: %v", err)
 	}
 	rel()
-	b1, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:2026-10", tid)).Float64()
+	b1, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:"+PeriodKey("monthly"), tid)).Float64()
 	if b1 != 6.0 {
 		t.Fatalf("T29 post-calibration budget=%v want 6.0 (unwritten tail heals via DB, exactly once)", b1)
 	}
@@ -144,7 +144,7 @@ func TestSettleJournal_T29_UnwrittenTailHealsViaCalibration(t *testing.T) {
 	if st.Recovered != 0 {
 		t.Fatalf("T29 late round recovered=%d want 0 (mark shields the re-found line)", st.Recovered)
 	}
-	b2, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:2026-10", tid)).Float64()
+	b2, _ := rdb.Get(context.Background(), fmt.Sprintf("budget:team:%d:"+PeriodKey("monthly"), tid)).Float64()
 	if b2 != 6.0 {
 		t.Fatalf("T29 final budget=%v want 6.0", b2)
 	}
