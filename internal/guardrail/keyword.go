@@ -67,54 +67,81 @@ func NewKeywordEngineFromConfig(raw json.RawMessage) (GuardrailEngine, error) {
 func (e *KeywordEngine) Name() string { return e.name }
 
 func (e *KeywordEngine) Check(_ context.Context, content string, _ Direction, _ string) (*GuardrailResult, error) {
-	checkContent := content
-	if !e.caseSensitive {
-		checkContent = strings.ToLower(content)
-	}
-
-	if e.useRegex {
-		for i, re := range e.compiledRegex {
-			pattern := e.blocklist[i]
-			matched := re.FindString(content)
-			if matched == "" {
-				continue
-			}
-			lookupKey := matched
-			if !e.caseSensitive {
-				lookupKey = strings.ToLower(matched)
-			}
-			if e.allowlist[lookupKey] {
-				continue
-			}
-			return &GuardrailResult{
-				Blocked:  true,
-				RuleName: e.name,
-				Reason:   fmt.Sprintf("matched keyword pattern: %s", pattern),
-				Severity: "medium",
-			}, nil
-		}
+	spans, reason := e.matchSpans(content)
+	if len(spans) == 0 {
 		return &GuardrailResult{Blocked: false}, nil
 	}
+	return &GuardrailResult{Blocked: true, RuleName: e.name, Reason: reason, Severity: "medium",
+		MaskedSpans: spans, MaskedContent: applySpans(content, spans)}, nil
+}
 
-	for _, word := range e.blocklist {
-		checkWord := word
-		if !e.caseSensitive {
-			checkWord = strings.ToLower(word)
-		}
-		if e.allowlist[checkWord] {
-			continue
-		}
-		if strings.Contains(checkContent, checkWord) {
-			return &GuardrailResult{
-				Blocked:  true,
-				RuleName: e.name,
-				Reason:   fmt.Sprintf("matched keyword: %s", word),
-				Severity: "medium",
-			}, nil
+// 大小写归一化可能改变 UTF-8 字节长度，映射必须指回未经归一化的原文。
+func (e *KeywordEngine) normalizedText(content string) (string, []int) {
+	if e.caseSensitive {
+		return content, nil
+	}
+	var text strings.Builder
+	positions := make([]int, 0, len(content)+1)
+	for offset, r := range content {
+		lower := strings.ToLower(string(r))
+		text.WriteString(lower)
+		for range len(lower) {
+			positions = append(positions, offset)
 		}
 	}
+	return text.String(), append(positions, len(content))
+}
 
-	return &GuardrailResult{Blocked: false}, nil
+func (e *KeywordEngine) matchSpans(content string) ([]Span, string) {
+	var spans []Span
+	var reason string
+	if e.useRegex {
+		for i, re := range e.compiledRegex {
+			for _, loc := range re.FindAllStringIndex(content, -1) {
+				if loc[0] == loc[1] {
+					continue
+				}
+				key := content[loc[0]:loc[1]]
+				if !e.caseSensitive {
+					key = strings.ToLower(key)
+				}
+				if e.allowlist[key] {
+					continue
+				}
+				spans = append(spans, Span{Start: loc[0], End: loc[1], Replacement: "[REDACTED]"})
+				if reason == "" {
+					reason = fmt.Sprintf("matched keyword pattern: %s", e.blocklist[i])
+				}
+			}
+		}
+	} else {
+		text, positions := e.normalizedText(content)
+		for _, word := range e.blocklist {
+			key := word
+			if !e.caseSensitive {
+				key = strings.ToLower(key)
+			}
+			if key == "" || e.allowlist[key] {
+				continue
+			}
+			for cursor := 0; cursor < len(text); {
+				index := strings.Index(text[cursor:], key)
+				if index < 0 {
+					break
+				}
+				start, end := cursor+index, cursor+index+len(key)
+				cursor = start + 1 // 重叠命中也必须覆盖。
+				if positions != nil {
+					start, end = positions[start], positions[end]
+				}
+				spans = append(spans, Span{Start: start, End: end, Replacement: "[REDACTED]"})
+				if reason == "" {
+					reason = fmt.Sprintf("matched keyword: %s", word)
+				}
+			}
+		}
+	}
+	return composeSpans(spans), reason
 }
 
 func init() {

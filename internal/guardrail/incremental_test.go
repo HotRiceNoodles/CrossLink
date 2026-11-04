@@ -163,7 +163,11 @@ func TestIncrementalSplitPrefixDropsCandidateOnBlockOrEOF(t *testing.T) {
 			} else if w.Close() == nil {
 				t.Fatal("异常 EOF 放行候选前缀")
 			}
-			if strings.Contains(out.String(), "SE") || strings.Contains(out.String(), "后文") || !strings.Contains(out.String(), "guardrail_blocked") {
+			kind := "guardrail_blocked"
+			if ending == "eof" {
+				kind = "guardrail_error"
+			}
+			if strings.Contains(out.String(), "SE") || strings.Contains(out.String(), "后文") || !strings.Contains(out.String(), kind) {
 				t.Fatal(out.String())
 			}
 		})
@@ -302,7 +306,7 @@ func TestIncrementalResponsesTerminalOnlyContentBlocked(t *testing.T) {
 	}
 }
 
-func TestIncrementalFallsBackForUnsupportedPolicies(t *testing.T) {
+func TestIncrementalAdaptsCompletePoliciesWithoutActionFallback(t *testing.T) {
 	RegisterEngine("incremental_legacy_test", func(raw json.RawMessage) (GuardrailEngine, error) {
 		engine, err := NewLengthEngineFromConfig(raw)
 		return struct{ GuardrailEngine }{engine}, err
@@ -324,8 +328,11 @@ func TestIncrementalFallsBackForUnsupportedPolicies(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.Close()
-			if !r.Fallback {
-				t.Fatal("unsupported policy treated as incremental")
+			if r.Fallback {
+				t.Fatal("规则未接入增量审核链")
+			}
+			if kind != "mask" && !r.hasConservative() {
+				t.Fatal("完整检查范围未保守暂留")
 			}
 		})
 	}

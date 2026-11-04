@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/gin-gonic/gin"
@@ -106,7 +104,7 @@ func TestIncrementalMiddlewareLocalEngines(t *testing.T) {
 }
 
 func TestIncrementalMiddlewareGuardsAllSSEPaths(t *testing.T) {
-	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/admin/api/playground/chat", "/admin/api/playground/responses"} {
+	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/admin/api/playground/stream", "/admin/api/playground/responses"} {
 		t.Run(path, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			svc := incrementalMiddlewareService(t, false)
@@ -137,27 +135,25 @@ func TestIncrementalMiddlewareGuardsAllSSEPaths(t *testing.T) {
 	}
 }
 
-func TestIncrementalMiddlewareSelectsStrictFallback(t *testing.T) {
+func TestIncrementalMiddlewareAdaptsWholeResponseRule(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := incrementalMiddlewareService(t, true)
 	r := gin.New()
 	r.Use(GuardrailsRequest(svc, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
-		ch := make(chan domain.SSEChunk, 2)
-		ch <- domain.SSEChunk{Chunk: &domain.OpenAIChunk{Choices: []domain.OpenAIChunkChoice{{Index: 0, Delta: domain.OpenAIChunkDelta{Content: "SECRET"}}}}}
-		ch <- domain.SSEChunk{Done: true}
-		close(ch)
-		wrapper := guardrail.NewStreamGuardrailWrapper(ch, svc, "test", 0, 0, 0, c.Request.Context())
-		if !wrapper.Strict() || wrapper.Next(c.Request.Context()).Blocked == nil {
-			t.Fatal("unsupported rule bypassed strict check")
+		c.Header("Content-Type", "text/event-stream")
+		if _, err := c.Writer.WriteString("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"SECRET\"}}]}\n\n"); err != nil {
+			t.Fatal(err)
 		}
-		c.Status(http.StatusNoContent)
+		if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err == nil {
+			t.Fatal("完整响应规则未阻断")
+		}
 	})
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"test","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNoContent || w.Header().Get("X-Guardrail-Stream-Mode") != "strict" || w.Header().Get("X-Guardrail-Stream-Fallback") == "" {
+	if w.Header().Get("X-Guardrail-Stream-Mode") != "incremental" || w.Header().Get("X-Guardrail-Stream-Fallback") != "" || strings.Contains(w.Body.String(), "SECRET") || !strings.Contains(w.Body.String(), "guardrail_blocked") {
 		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body.String())
 	}
 }

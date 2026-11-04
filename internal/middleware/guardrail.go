@@ -82,7 +82,14 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 			c.Next()
 			return
 		}
+		switch c.Request.URL.Path {
+		case "/admin/api/playground/stream":
+			probe.Stream = true
+		case "/admin/api/playground/chat":
+			probe.Stream = false
+		}
 
+		originalPrompt := originalTurnPrompt(bodyBytes)
 		ex := guardrail.ExtractContent(bodyBytes, c.Request.URL.Path)
 		streamContent := ""
 		if ex != nil {
@@ -110,7 +117,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 			// Response engines are opened only after request-side approval;
 			// contextual engines receive the transformed request when masked.
 			if probe.Stream && svc.StreamMode() == "incremental" {
-				meta := guardrail.CheckRequest{Content: streamContent, Model: probe.Model, Direction: guardrail.DirectionResponse, OrgID: c.GetInt64("org_id")}
+				meta := guardrail.CheckRequest{Content: streamContent, Prompt: originalPrompt, Model: probe.Model, Direction: guardrail.DirectionResponse, OrgID: c.GetInt64("org_id")}
 				if key := GetAPIKeyFromContext(c); key != nil {
 					meta.APIKeyID = key.ID
 					if key.TeamID != nil {

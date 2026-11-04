@@ -94,3 +94,38 @@ func TestPlaygroundOrganizationResponseRules(t *testing.T) {
 		}
 	}
 }
+
+func TestPlaygroundChatAppliesNonBlockingMaskResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, gs := pgRespGuardSetup(t, "incremental")
+	for _, statement := range []string{
+		"ALTER TABLE guardrail_rules ADD COLUMN org_id INTEGER",
+		`UPDATE guardrail_rules SET action='mask', config='{"blocklist":["1[3-9][0-9]{9}"],"use_regex":true}'`,
+		"CREATE TABLE provider_models (model_name TEXT, extra_config TEXT)",
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := provider.NewRegistry()
+	registry.Register("fake", &pgOrgPhoneProvider{})
+	resolver := router.NewResolver(registry, &pgModelRepo{}, nil, map[router.StrategyName]router.RoutingStrategy{router.StrategyWeightedRandom: &router.WeightedRandomStrategy{}}, nil, nil, nil, nil)
+	h := NewPlaygroundHandler(resolver, service.NewUsageService(repository.NewUsageLogRepo(db)), nil, nil, nil, gs, nil)
+	out := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(out)
+	c.Set("org_id", int64(7))
+	c.Request = httptest.NewRequest(http.MethodPost, "/admin/api/playground/chat", strings.NewReader(`{"model":"test-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Chat(c)
+	if out.Code != 200 || strings.Contains(out.Body.String(), "13800138000") || !strings.Contains(out.Body.String(), "[REDACTED]") || !c.GetBool("guardrail_triggered") {
+		t.Fatalf("非阻断脱敏结果未应用: %d %s", out.Code, out.Body.String())
+	}
+	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); {
+		var count int64
+		db.Model(&model.UsageLog{}).Count(&count)
+		if count > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}

@@ -22,13 +22,16 @@ func installIncrementalStream(c *gin.Context, svc *guardrail.GuardrailService, m
 		c.Header("X-Guardrail-Stream-Fallback", "unsupported_engine")
 		return func() {}, nil
 	}
-	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), guardrail.CtxKeyIncremental, true))
+	ctx, cancel := context.WithCancel(context.WithValue(c.Request.Context(), guardrail.CtxKeyIncremental, true))
+	c.Request = c.Request.WithContext(ctx)
 	c.Header("X-Guardrail-Stream-Mode", "incremental")
+	c.Header("X-Guardrail-Stream-Hold", strings.Join(stream.HoldReasons(), ","))
 	original := c.Writer
-	w := &incrementalResponseWriter{ResponseWriter: original, c: c}
+	w := &incrementalResponseWriter{ResponseWriter: original, c: c, cancel: cancel}
 	w.gate = guardrail.NewIncrementalSSEWriter(c.Request.Context(), stream, original, original.Flush)
 	c.Writer = w
 	return func() {
+		defer cancel()
 		if w.active {
 			_ = w.gate.Close()
 			w.observe()
@@ -44,6 +47,7 @@ type incrementalResponseWriter struct {
 	c      *gin.Context
 	gate   *guardrail.IncrementalSSEWriter
 	active bool
+	cancel context.CancelFunc
 }
 
 func (w *incrementalResponseWriter) Write(p []byte) (int, error) {
@@ -53,6 +57,9 @@ func (w *incrementalResponseWriter) Write(p []byte) (int, error) {
 	w.active = true
 	n, err := w.gate.Write(p)
 	w.observe()
+	if err != nil && w.cancel != nil {
+		w.cancel()
+	}
 	return n, err
 }
 func (w *incrementalResponseWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }

@@ -116,8 +116,13 @@ func TestGatewayWiringEnforcesOrganizationResponseRules(t *testing.T) {
 				if !strings.Contains(w.Body.String(), "guardrail_blocked") || strings.Contains(w.Body.String(), "后文") {
 					t.Fatalf("正式处理器未执行响应阻断：%d %s", w.Code, w.Body.String())
 				}
-				if stream && w.Header().Get("X-Guardrail-Stream-Mode") != "strict" {
-					t.Fatal("不支持增量的强制规则未回退严格审核")
+				if stream {
+					if w.Header().Get("X-Guardrail-Stream-Mode") != "incremental" {
+						t.Fatal("正则规则未使用共享增量审核适配器")
+					}
+					if !strings.Contains(w.Header().Get("X-Guardrail-Stream-Hold"), "whole_response_required") {
+						t.Fatal("正则规则未声明完整响应暂留")
+					}
 				}
 			})
 		}

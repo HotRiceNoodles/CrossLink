@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,6 +17,9 @@ type sseField struct {
 	text                     strings.Builder
 	release                  int
 	tool, final, emptyObject bool
+	rewritten                *string
+	maskSpans                []Span
+	barrier                  bool
 }
 type sseRequirement struct {
 	key      string
@@ -22,6 +27,8 @@ type sseRequirement struct {
 	end      int
 	target   map[string]any
 	property string
+	snapshot bool
+	value    *string
 }
 type pendingSSE struct {
 	raw     string
@@ -52,6 +59,9 @@ type IncrementalSSEWriter struct {
 	err              error
 	protocol         string
 	sequenceOffset   int64
+	snapshotGroup    int
+	replacements     map[string]string
+	nativeBlock      bool
 }
 
 func NewIncrementalSSEWriter(ctx context.Context, stream *ResponseStream, out io.Writer, flush func()) *IncrementalSSEWriter {
@@ -81,6 +91,12 @@ func (w *IncrementalSSEWriter) Write(p []byte) (int, error) {
 		raw := w.buffer[:end+n]
 		w.buffer = w.buffer[end+n:]
 		if err := w.frame(raw); err != nil {
+			if errors.Is(err, ErrStreamBlocked) && w.current != nil && w.nativeBlock {
+				_ = w.release()
+				if len(w.pending) == 0 {
+					_ = w.releaseTextPrefix(w.current)
+				}
+			}
 			return 0, w.fail(err)
 		}
 	}
@@ -88,6 +104,9 @@ func (w *IncrementalSSEWriter) Write(p []byte) (int, error) {
 }
 
 func (w *IncrementalSSEWriter) frame(raw string) error {
+	w.snapshotGroup++
+	w.replacements = map[string]string{}
+	w.nativeBlock = false
 	if w.terminal {
 		if strings.TrimSpace(raw) == "data: [DONE]" {
 			_, err := io.WriteString(w.out, raw)
@@ -168,11 +187,27 @@ func (w *IncrementalSSEWriter) frame(raw string) error {
 		if err := w.finishFields(ctx); err != nil {
 			return err
 		}
+	}
+	if len(w.replacements) > 0 {
+		if result, err := w.stream.checkReplacements(ctx, w.replacements); err != nil {
+			return err
+		} else if result != nil && result.Blocked {
+			w.Result = result
+			return ErrStreamBlocked
+		}
+	}
+	if terminal {
 		if result, err := w.stream.Finish(ctx); err != nil {
 			return err
 		} else if result != nil && result.Blocked {
 			w.Result = result
 			return ErrStreamBlocked
+		}
+		for key, field := range w.fields {
+			field.release = w.stream.released[key]
+		}
+		if err := w.finalizeToolMasks(); err != nil {
+			return err
 		}
 	}
 	w.pending = append(w.pending, ev)
@@ -208,25 +243,44 @@ func (w *IncrementalSSEWriter) add(ctx context.Context, key, text string, tool b
 	if err != nil {
 		return err
 	}
-	if result != nil && result.Blocked {
-		w.Result = result
-		return ErrStreamBlocked
-	}
 	f.text.WriteString(text)
 	f.release = release
 	w.current.refs = append(w.current.refs, sseRequirement{key: key, start: f.text.Len() - len(text), end: f.text.Len()})
+	if result != nil && result.Blocked {
+		w.Result = result
+		w.nativeBlock = true
+		return ErrStreamBlocked
+	}
 	return nil
 }
 
 // 纯文本 delta 可以在审核水位处拆分，避免同一帧末尾的候选前缀扣住安全前文。
 // 工具、快照和复合事件仍以整帧为放行单位。
 func (w *IncrementalSSEWriter) addText(ctx context.Context, key string, target map[string]any, property string) error {
-	if err := w.add(ctx, key, str(target[property]), false); err != nil {
+	err := w.add(ctx, key, str(target[property]), false)
+	if err != nil && !errors.Is(err, ErrStreamBlocked) {
 		return err
 	}
 	ref := &w.current.refs[len(w.current.refs)-1]
 	ref.target, ref.property = target, property
-	return nil
+	return err
+}
+
+func (w *IncrementalSSEWriter) addBound(ctx context.Context, key, text string, tool bool, target map[string]any, property string) error {
+	if property == "name" {
+		tool = false
+	}
+	err := w.add(ctx, key, text, tool)
+	if err != nil && !errors.Is(err, ErrStreamBlocked) {
+		return err
+	}
+	ref := &w.current.refs[len(w.current.refs)-1]
+	if property == "name" {
+		w.fields[key].barrier = true
+	}
+	ref.target = target
+	ref.property = property
+	return err
 }
 
 func (w *IncrementalSSEWriter) complete(ctx context.Context, key string) error {
@@ -241,30 +295,58 @@ func (w *IncrementalSSEWriter) complete(ctx context.Context, key string) error {
 			}
 		}
 		var args any
-		if json.Unmarshal([]byte(f.text.String()), &args) != nil {
+		decoder := json.NewDecoder(strings.NewReader(f.text.String()))
+		decoder.UseNumber()
+		if decoder.Decode(&args) != nil {
 			return errors.New("incomplete or invalid tool arguments")
 		}
 		canonical, _ := json.Marshal(args)
-		if result, err := w.stream.CheckReplacement(ctx, key, string(canonical)); err != nil {
+		result, err := w.stream.CheckComplete(ctx, string(canonical))
+		if err != nil {
 			return err
 		} else if result != nil && result.Blocked {
 			w.Result = result
 			return ErrStreamBlocked
 		}
+		masked := string(canonical)
+		if result != nil && result.Action == "mask" {
+			f.maskSpans = result.MaskedSpans
+			masked, err = maskJSONDocument(string(canonical), f.maskSpans)
+			if err != nil {
+				return err
+			}
+		}
+		f.rewritten = &masked
+		if w.stream.completed == nil {
+			w.stream.completed = map[string]string{}
+		}
+		w.stream.completed[key] = string(canonical)
+		w.replacements[key] = string(canonical)
 	}
 	release, result, err := w.stream.Push(ctx, StreamFragment{Key: key, Final: true})
 	if err != nil {
 		return err
 	}
+	f.release = release
 	if result != nil && result.Blocked {
 		w.Result = result
+		w.nativeBlock = true
 		return ErrStreamBlocked
 	}
-	if release != f.text.Len() {
+	if release != f.text.Len() && !w.stream.hasConservative() {
 		return errors.New("incomplete final moderation coverage")
 	}
 	f.final = true
 	f.release = release
+	if strings.HasSuffix(key, "/name") {
+		masked, err := w.stream.Render(key, 0, f.text.Len())
+		if err != nil {
+			return err
+		}
+		if masked != f.text.String() {
+			return errors.New("tool name cannot be masked safely")
+		}
+	}
 	return nil
 }
 
@@ -285,42 +367,48 @@ func (w *IncrementalSSEWriter) finishFields(ctx context.Context) error {
 func (w *IncrementalSSEWriter) snapshot(ctx context.Context, v any) error {
 	// Covers terminal-only content and future text-bearing event variants.
 	// Structured data is decoded before scanning escaped JSON string leaves.
-	var texts []string
-	var walk func(any)
-	walk = func(v any) {
+	var walk func(any) error
+	walk = func(v any) error {
 		switch x := v.(type) {
 		case map[string]any:
-			for key, val := range x {
+			keys := make([]string, 0, len(x))
+			for key := range x {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				val := x[key]
 				switch key {
 				case "text", "content", "arguments", "thinking", "reasoning_content", "name", "refusal":
 					if s, ok := val.(string); ok {
-						texts = append(texts, s)
+						field := fmt.Sprintf("snapshot%d/%s", len(w.fields), key)
+						if err := w.addBound(ctx, field, s, key == "arguments", x, key); err != nil {
+							return err
+						}
+						if err := w.complete(ctx, field); err != nil {
+							return err
+						}
 					} else {
-						walk(val)
+						if err := walk(val); err != nil {
+							return err
+						}
 					}
 				default:
-					walk(val)
+					if err := walk(val); err != nil {
+						return err
+					}
 				}
 			}
 		case []any:
 			for _, val := range x {
-				walk(val)
+				if err := walk(val); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	walk(v)
-	if len(texts) == 0 {
 		return nil
 	}
-	result, err := w.stream.CheckComplete(ctx, strings.Join(texts, "\n"))
-	if err != nil {
-		return err
-	}
-	if result != nil && result.Blocked {
-		w.Result = result
-		return ErrStreamBlocked
-	}
-	return nil
+	return walk(v)
 }
 
 func (w *IncrementalSSEWriter) release() error {
@@ -329,7 +417,7 @@ func (w *IncrementalSSEWriter) release() error {
 		ready := true
 		for _, ref := range ev.refs {
 			f := w.fields[ref.key]
-			if f.release < ref.end || (f.tool && !f.final) {
+			if f.release < ref.end || ((f.tool || f.barrier) && !f.final) {
 				ready = false
 				break
 			}
@@ -363,10 +451,10 @@ func (w *IncrementalSSEWriter) releaseTextPrefix(ev *pendingSSE) error {
 	if f.tool || f.release <= ref.start || f.release >= ref.end {
 		return nil
 	}
-	text := str(ref.target[ref.property])
-	n := f.release - ref.start
-	ref.target[ref.property] = text[:n]
+	end := ref.end
+	ref.end = f.release
 	raw := w.eventRaw(ev, true)
+	ref.end = end
 	if _, err := io.WriteString(w.out, raw); err != nil {
 		return err
 	}
@@ -374,8 +462,8 @@ func (w *IncrementalSSEWriter) releaseTextPrefix(ev *pendingSSE) error {
 	if _, ok := ev.obj["sequence_number"].(json.Number); ok {
 		w.sequenceOffset++
 	}
-	ref.target[ref.property] = text[n:]
-	ref.start += n
+	ref.start = f.release
+	ref.target[ref.property] = f.text.String()[ref.start:ref.end]
 	ev.split = true
 	oldBytes := len(ev.raw)
 	ev.raw = encodeSSEObject(ev.raw, ev.obj, false)
@@ -387,8 +475,47 @@ func (w *IncrementalSSEWriter) releaseTextPrefix(ev *pendingSSE) error {
 }
 
 func (w *IncrementalSSEWriter) eventRaw(ev *pendingSSE, prefix bool) string {
+	changed := false
+	for _, ref := range ev.refs {
+		if ref.target == nil {
+			continue
+		}
+		text, err := w.stream.Render(ref.key, ref.start, ref.end)
+		if ref.value != nil {
+			text = *ref.value
+			err = nil
+		}
+		if f := w.fields[ref.key]; f != nil && f.tool && f.rewritten != nil {
+			if ref.property == "input" {
+				if ref.end > 0 {
+					var value any
+					decoder := json.NewDecoder(strings.NewReader(*f.rewritten))
+					decoder.UseNumber()
+					_ = decoder.Decode(&value)
+					ref.target[ref.property] = value
+					changed = true
+				}
+				continue
+			}
+			text = ""
+			if ref.start == 0 && ref.end > 0 || ref.snapshot {
+				text = *f.rewritten
+			}
+			err = nil
+		}
+		if err != nil {
+			continue
+		} // 所有引用在入队时已校验边界。
+		if str(ref.target[ref.property]) != text {
+			changed = true
+			ref.target[ref.property] = text
+		}
+	}
+	if changed {
+		stripOriginalTokenMetadata(ev.obj)
+	}
 	originalSequence, hasSequence := ev.obj["sequence_number"].(json.Number)
-	if !prefix && !ev.split && (!hasSequence || w.sequenceOffset == 0) {
+	if !prefix && !changed && !ev.split && (!hasSequence || w.sequenceOffset == 0) {
 		return ev.raw
 	}
 	if hasSequence {
@@ -412,6 +539,20 @@ func splittableTextEvent(obj map[string]any) bool {
 		return str(choice["finish_reason"]) == "" && choice["logprobs"] == nil
 	}
 	return true
+}
+
+func stripOriginalTokenMetadata(value any) {
+	switch x := value.(type) {
+	case map[string]any:
+		delete(x, "logprobs")
+		for _, v := range x {
+			stripOriginalTokenMetadata(v)
+		}
+	case []any:
+		for _, v := range x {
+			stripOriginalTokenMetadata(v)
+		}
+	}
 }
 
 func encodeSSEObject(raw string, obj map[string]any, prefix bool) string {
@@ -445,18 +586,12 @@ func (w *IncrementalSSEWriter) fail(err error) error {
 	w.buffer = ""
 	w.current = nil
 	w.bytes = 0
+	reason := streamErrorReason(err, w.Result != nil && w.Result.RuleName != "guardrail_stream_error")
 	if w.Result == nil {
-		w.Result = &CheckResponse{Blocked: true, Action: "block", RuleName: "guardrail_stream_error", Reason: "incremental stream could not be approved"}
+		w.Result = &CheckResponse{Blocked: true, Action: "block", RuleName: "guardrail_stream_error", Reason: reason}
 	}
 	if w.ctx.Err() == nil {
-		switch w.protocol {
-		case "anthropic":
-			io.WriteString(w.out, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"guardrail_blocked\",\"message\":\"blocked by guardrail\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
-		case "responses":
-			io.WriteString(w.out, "event: error\ndata: {\"type\":\"error\",\"code\":\"guardrail_blocked\",\"message\":\"blocked by guardrail\"}\n\n")
-		default:
-			io.WriteString(w.out, "data: {\"error\":{\"type\":\"guardrail_blocked\",\"message\":\"blocked by guardrail\"}}\n\ndata: [DONE]\n\n")
-		}
+		io.WriteString(w.out, streamFailureFrame(w.protocol, reason))
 		if w.flush != nil {
 			w.flush()
 		}

@@ -183,6 +183,10 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "cannot roll back to a delete snapshot")
 		return
 	}
+	if err := guardrail.ValidateRuleAction(hist.Type, hist.Action); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
+		return
+	}
 	// validate the historical config before publishing it
 	if _, err := guardrail.CreateEngine(hist.Type, json.RawMessage(hist.Config)); err != nil {
 		errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("historical config no longer valid: %v", err))

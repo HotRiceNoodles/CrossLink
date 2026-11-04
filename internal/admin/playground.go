@@ -236,8 +236,8 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 			if grResult != nil && grResult.Truncated {
 				c.Set("guardrail_truncated", true)
 			}
-			if grErr == nil && grResult != nil && grResult.Blocked {
-				if grResult.Action == "block" {
+			if grErr == nil && grResult != nil {
+				if grResult.Blocked && (grResult.Action == "block" || grResult.Action == "review") {
 					// Upstream tokens were already consumed — record usage before returning.
 					go h.logUsage(c.GetHeader("X-Session-ID"), orgID, openaiReq,
 						resp.Usage.PromptTokens, resp.Usage.CompletionTokens,

@@ -49,6 +49,8 @@ func (s *lengthStream) Push(ctx context.Context, f StreamFragment) (StreamVerdic
 	if !exists {
 		field.tool = f.Tool
 	}
+	before := s.runes
+	previousBytes := field.bytes
 	added := utf8.RuneCountInString(f.Text)
 	if field.tool {
 		added = 0 // 完整 JSON 的规范文本由 CheckReplacement 一次性计入。
@@ -59,26 +61,49 @@ func (s *lengthStream) Push(ctx context.Context, f StreamFragment) (StreamVerdic
 	field.final = f.Final
 	s.fields[f.Key] = field
 	if result := s.check(); result != nil {
-		return StreamVerdict{CheckedThrough: field.bytes, Result: result}, nil
+		// 原文计数达到 N 仍合法；只截断第 N+1 个字符及其后文。
+		remaining := max(s.engine.maxOutputChars-before, 0)
+		start := previousBytes
+		if !field.tool {
+			for offset := range f.Text {
+				if remaining == 0 {
+					break
+				}
+				_, size := utf8.DecodeRuneInString(f.Text[offset:])
+				start = previousBytes + offset + size
+				remaining--
+			}
+		}
+		return StreamVerdict{CheckedThrough: field.bytes, ReleaseThrough: start, BlockStart: &start, Result: result}, nil
 	}
 	return StreamVerdict{CheckedThrough: field.bytes, ReleaseThrough: field.bytes}, nil
 }
 
 func (s *lengthStream) CheckReplacement(ctx context.Context, key, text string) (*GuardrailResult, error) {
+	return s.CheckReplacements(ctx, map[string]string{key: text})
+}
+
+func (s *lengthStream) CheckReplacements(ctx context.Context, texts map[string]string) (*GuardrailResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if s.closed {
 		return nil, errors.New("length stream already closed")
 	}
-	field, exists := s.fields[key]
-	if !exists || !utf8.ValidString(text) {
-		return nil, errors.New("invalid length snapshot replacement")
+	delta := 0
+	for key, text := range texts {
+		field, exists := s.fields[key]
+		if !exists || !utf8.ValidString(text) {
+			return nil, errors.New("invalid length snapshot replacement")
+		}
+		delta += utf8.RuneCountInString(text) - field.runes
 	}
-	count := utf8.RuneCountInString(text)
-	s.runes += count - field.runes
-	field.runes = count
-	s.fields[key] = field
+	for key, text := range texts {
+		field := s.fields[key]
+		field.runes = utf8.RuneCountInString(text)
+		s.fields[key] = field
+	}
+	s.runes += delta
 	return s.check(), nil
 }
 

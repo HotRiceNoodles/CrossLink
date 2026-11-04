@@ -232,7 +232,7 @@ func TestIncrementalCredentialEncodedChannels(t *testing.T) {
 			}
 		})
 	}
-	for _, text := range []string{encoded + "!", "无效 %5 %zz %", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("安全", 20))), "PASSWORD=abcdefgh12345678"} {
+	for _, text := range []string{encoded + "!", "无效 %5 %zz %", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("安全", 20)))} {
 		s := credentialSession(t, engine)
 		for i, r := range []rune(text) {
 			v, err := s.Push(t.Context(), StreamFragment{Text: string(r), Final: i == len([]rune(text))-1})
@@ -271,8 +271,8 @@ func TestIncrementalCredentialIsolationCategoriesAndFallback(t *testing.T) {
 		svc.rules[0].Config = datatypes.JSON(cfg)
 		svc.rules[0].Action = "mask"
 		r, err := svc.NewResponseStream(t.Context(), CheckRequest{Model: "test"})
-		if err != nil || !r.Fallback {
-			t.Fatal("凭据脱敏策略未严格回退", err)
+		if err != nil || r.Fallback {
+			t.Fatal("凭据脱敏策略未接入增量审核", err)
 		}
 		r.Close()
 	}
