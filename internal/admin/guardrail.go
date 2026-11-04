@@ -112,6 +112,10 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		}
 		action = input.Action
 	}
+	if err := guardrail.ValidateRuleAction(input.Type, action); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
+		return
+	}
 
 	rule := &guardrail.GuardrailRule{
 		Name:        input.Name,
@@ -231,6 +235,13 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.ModelFilter != nil {
 		rule.ModelFilter = input.ModelFilter
+	}
+	// 历史无效规则只允许单独停用，或将合并后的动作修正为合法值。
+	onlyDisable := input.Enabled != nil && !*input.Enabled && input.Name == nil && input.Type == nil &&
+		input.Direction == nil && input.Config == nil && input.Severity == nil && input.Action == nil && input.ModelFilter == nil
+	if err := guardrail.ValidateRuleAction(rule.Type, rule.Action); err != nil && !onlyDisable {
+		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
+		return
 	}
 
 	if err := versionedUpdate(c, h.db, &rule, nil); err == errVersionConflict {
@@ -546,7 +557,7 @@ func sanitizeMap(m map[string]any) bool {
 			m[key] = "********"
 			changed = true
 		} else if sub, ok := val.(map[string]any); ok {
-			if sanitizeMap(sub) {
+			if !sanitizeMap(sub) {
 				changed = true
 			}
 		}
@@ -565,14 +576,15 @@ func isSensitiveKey(key string) bool {
 }
 
 // sanitizeRule returns a sanitized copy of the rule for API responses.
-func sanitizeRule(r guardrail.GuardrailRule) guardrail.GuardrailRule {
+func sanitizeRule(r guardrail.GuardrailRule) guardrailRuleResponse {
+	capability := describeGuardrailStreamCapability(r)
 	r.Config = sanitizeRuleConfig(r.Config)
-	return r
+	return guardrailRuleResponse{GuardrailRule: r, StreamCapability: capability}
 }
 
 // sanitizeRules sanitizes a slice of rules.
-func sanitizeRules(rules []guardrail.GuardrailRule) []guardrail.GuardrailRule {
-	out := make([]guardrail.GuardrailRule, len(rules))
+func sanitizeRules(rules []guardrail.GuardrailRule) []guardrailRuleResponse {
+	out := make([]guardrailRuleResponse, len(rules))
 	for i := range rules {
 		out[i] = sanitizeRule(rules[i])
 	}
