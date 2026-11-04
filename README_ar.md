@@ -12,9 +12,9 @@
 <br/>
 
 <img src="https://img.shields.io/github/stars/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Stars">
-<img src="https://img.shields.io/github/issues/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Issues">
+<img src="https://github.com/HotRiceNoodles/CrossLink/actions/workflows/ci.yml/badge.svg?style=for-the-badge" alt="CI">
+<img src="https://img.shields.io/github/v/release/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Latest Release">
 <img src="https://img.shields.io/github/discussions/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Discussions">
-<img src="https://img.shields.io/github/last-commit/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Last Commit">
 
 <br/>
 <br/>
@@ -25,7 +25,7 @@
 
 **بوابة واجهة برمجة تطبيقات متوافقة مع OpenAI و Anthropic**
 
-[English](README.md) | [中文](README_zh.md) | [العربية](#البدء-السريع)
+[English](README.md) | [中文](README_zh.md) | [العربية](README_ar.md)
 
 وكيل (Proxy) موحّد بترجمة حقيقية ثنائية الاتجاه بين البروتوكولات، و failover
 يصنّف الأخطاء، وبوابة MCP بتحكم وصول لكل أداة، وحواجز وقائية (guardrails) قابلة
@@ -62,29 +62,27 @@ CrossLink هو **محوّل عام** بين تطبيقك وأي مزوّد نم�
 
 ## أبرز المزايا
 
-ما يميّز CrossLink — كل ميزة مدعومة بالكود لا بالتسويق.
-
-- 🔁 **ترجمة تدفق ثنائية الاتجاه** — OpenAI ↔ Anthropic ↔ Responses API في الاتجاهات
+- **ترجمة تدفق ثنائية الاتجاه** — OpenAI ↔ Anthropic ↔ Responses API في الاتجاهات
   الثلاثة، عبر آلة حالة حقيقية (لا إعادة كتابة على مستوى الطلب). تتعامل مع كتل التفكير،
   ووسائط الأدوات بـ JSON الجزئي، وعدّ التوكنات أثناء التدفق. → [البنية](docs/architecture.md)
-- 🛡️ **Failover مصنّف للأخطاء** — جدول قواعد في قاعدة البيانات يميّز الأخطاء الدائمة عن
+- **Failover مصنّف للأخطاء** — جدول قواعد في قاعدة البيانات يميّز الأخطاء الدائمة عن
   العابرة؛ فحص half-open أحادي (single-flight) يمنع الاندفاع عند عودة مزوّد غير مستقر.
   → [التوجيه و Failover](docs/routing-and-failover.md)
-- 🔌 **بوابة MCP بتحكم وصول لكل أداة** — ليست وكيلاً رقيقاً. تجريد نقل، واكتشاف أدوات
+- **بوابة MCP بتحكم وصول لكل أداة** — ليست وكيلاً رقيقاً. تجريد نقل، واكتشاف أدوات
   مع تخزين مؤقت singleflight، وبيانات اعتماد مُشفّرة، وقوائم سماح/منع لكل مفتاح أو فريق
   أو دور. → [بوابة MCP](docs/mcp-gateway.md)
-- 🚧 **حواجز وقائية كسجلّ إضافات** — أضف أي محرّك (تعبيرات منتظمة، API خارجي، ML مستقبلاً)
+- **حواجز وقائية كسجلّ إضافات** — أضف أي محرّك (تعبيرات منتظمة، API خارجي، ML مستقبلاً)
   عبر `RegisterEngine`. الإجراءات: block / log / mask. إعداد لكل نموذج، fail-open أو
   fail-closed. → [البنية](docs/architecture.md)
-- 📊 **شفافية التوجيه** — ترويسات `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
+- **شفافية التوجيه** — ترويسات `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
   على كل استجابة، بالإضافة إلى واجهة توزيع التوجيه التي تُظهر الوزن المُهيّأ مقابل الفعلي،
   والانحراف، ومعدل الخطأ، والكمون لكل مزوّد.
-- ❤️‍🩹 **عدّادات إرسال ذاتية الاستشفاء** — حدود التزامن/RPM لكل (مزوّد، نموذج) عبر Redis Lua
+- **عدّادات إرسال ذاتية الاستشفاء** — حدود التزامن/RPM لكل (مزوّد، نموذج) عبر Redis Lua
   مع نبضة TTL؛ عملية تحطّمة لا يمكنها ترك مزوّد عالقاً في حالة "مشغول".
-- 🇨🇳 **تشفير صيني وطني (GM) وجاهز للعزل** — وضع SM2/SM3/SM4 (يشمل توقيع JWT بـ HMAC-SM3)
+- **تشفير صيني وطني (GM) وجاهز للعزل** — وضع SM2/SM3/SM4 (يشمل توقيع JWT بـ HMAC-SM3)
   و CAPTCHA منزلق مُستضاف ذاتياً. بلا اعتماد على reCAPTCHA/hCaptcha — يُنشر دون اتصال
   بالكامل لتوافق 信创 (الابتكار التكنولوجي المحلي الصيني). → [النشر](docs/deployment.md)
-- 🎁 **نواة مفتوحة المصدر سخيّة** — إصدار Community (Apache 2.0) يضم 47 إجراءً يشمل MCP
+- **نواة مفتوحة المصدر سخيّة** — إصدار Community (Apache 2.0) يضم 47 إجراءً يشمل MCP
   و RBAC وإحصاءات التوجيه وقواعد الأخطاء، وإدارة قواعد الحواجز (كلمات مفتاحية / طول /
   كشف بيانات الاعتماد)، و Playground التفاعلي، وقوالب الأوامر، ورموز PAT محددة النطاق.
   Pro يضيف إدارة الأسرار وتنبيهات الحواجز وإعادة تشغيل التصحيح و DataLens ودرع الوكيل؛
@@ -221,12 +219,15 @@ make build
 ./bin/crosslink
 ```
 
+> عند التشغيل من المصدر، تستمع البوابة على `:8080` — استبدل العنوان في الأمثلة
+> أدناه بـ `http://localhost:8080`.
+
 ### أرسل أول طلب
 
-أنشئ مفتاح API عبر لوحة التحكم (`http://localhost:8080`)، ثم جرّبه خلال 30 ثانية:
+أنشئ مفتاح API عبر لوحة التحكم (`http://localhost`)، ثم أرسل أول طلب:
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost/v1/chat/completions \
   -H "Authorization: Bearer cl-your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -245,7 +246,7 @@ curl http://localhost:8080/v1/chat/completions \
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost/v1",
     api_key="cl-your-api-key"
 )
 
@@ -256,18 +257,19 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-**Anthropic SDK (Python)**
+**Anthropic SDK (Python)** — لاحظ استخدام `deepseek-chat` على نقطة نهاية
+Anthropic: تقوم CrossLink بالترجمة خلف الكواليس (Anthropic → OpenAI → DeepSeek).
 
 ```python
 import anthropic
 
 client = anthropic.Anthropic(
-    base_url="http://localhost:8080",
+    base_url="http://localhost",
     api_key="cl-your-api-key"
 )
 
 message = client.messages.create(
-    model="claude-sonnet-4-20250514",
+    model="deepseek-chat",
     max_tokens=1024,
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -336,50 +338,14 @@ providers:
 
 ---
 
-## نقاط النهاية (API)
+## API
 
-### البوابة (تتطلب مفتاح API)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/chat/completions` | محادثة متوافقة مع OpenAI (تدفق وغير تدفق) |
-| `POST` | `/v1/messages` | رسائل متوافقة مع Anthropic (تدفق وغير تدفق) |
-| `GET` | `/v1/models` | سرد النماذج المتاحة |
-| `POST` | `/v1/videos` | توليد فيديو (استعلام عبر `GET /v1/videos/:id`، تنزيل عبر `/:id/content`) |
-| `GET` | `/v1/usage` | استعلام ذاتي للحصة والاستخدام لحاملي المفاتيح |
-| `GET` | `/v1/templates` | كتالوج قوالب الأوامر (بيانات وصفية + أمثلة curl) |
-| `GET` | `/openapi.json` | مواصفة OpenAPI مدمجة — استوردها في Postman أو ولّد SDK |
-
-### بوابة MCP
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/mcp/:server` | تمرير JSON-RPC لـ MCP |
-| `GET` | `/mcp/:server` | نقل SSE لـ MCP |
-
-### الإدارة (تتطلب JWT)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/admin/api/auth/login` | تسجيل الدخول |
-| `CRUD` | `/admin/api/providers` | إدارة المزوّدين (اختبار عبر `POST /:id/test`) |
-| `CRUD` | `/admin/api/models` | إدارة تخطيط النماذج |
-| `CRUD` | `/admin/api/keys` | إدارة مفاتيح API (إعادة توليد عبر `POST /:id/regenerate`) |
-| `GET` | `/admin/api/usage` | سجلات الاستخدام بتصفية متعددة الأبعاد |
-| `GET` | `/admin/api/usage/stats` | إحصاءات الاستخدام (تشمل مقاييس الصور) + تصدير التسوية |
-| `GET` | `/admin/api/routing/stats` | توزيع التوجيه: المُهيّأ مقابل الفعلي لكل مزوّد |
-| `CRUD` | `/admin/api/error-rules` | قواعد تصنيف أخطاء الـ Failover |
-| `CRUD` | `/admin/api/guardrails` | قواعد الحواجز (اختبار عبر `POST /:id/test`، بالإضافة إلى `/stats` و `/config`) |
-| `CRUD` | `/admin/api/templates` | قوالب الأوامر (معاينة عبر `POST /:id/preview`) |
-| `CRUD` | `/admin/api/pats` | رموز الوصول الشخصية |
-| `POST` | `/admin/api/playground/*` | Playground: chat و stream و image و tts و transcribe و translate و video و responses |
-| `GET/PUT` | `/admin/api/system/content-log` | تبديل فوري لتسجيل أجسام الطلب/الاستجابة |
-| `CRUD` | `/admin/api/mcp/servers` | إدارة خوادم MCP |
-| `GET` | `/admin/api/mcp/servers/:id/tools` | سرد الأدوات على خادم MCP |
-
-الجداول تعرض أبرز النقاط لا كل شيء. تخدم البوابة مواصفة OpenAPI قابلة للاستيراد على
-`/openapi.json`، ومرجع الـ API الكامل — بما يشمل أشكال الطلب/الاستجابة وأكواد الأخطاء
-وترويسات `x-crosslink-fallback-*` — في [docs/api-reference.md](docs/api-reference.md).
+تُعرّض البوابة نقاط نهاية متوافقة مع OpenAI (`/v1/chat/completions` و `/v1/models`)
+وأخرى متوافقة مع Anthropic (`/v1/messages`)، وتوليد فيديو على `/v1/videos`، وبوابة MCP
+على `/mcp/:server`. كما تُقدَّم مواصفة OpenAPI قابلة للاستيراد على `/openapi.json` —
+استوردها في Postman أو ولّد منها SDK. المرجع الكامل، بما يشمل أشكال الطلب/الاستجابة
+وأكواد الأخطاء وترويسات `x-crosslink-fallback-*`، في
+[docs/api-reference.md](docs/api-reference.md).
 
 ---
 

@@ -11,10 +11,10 @@
 
 <br/>
 
+<img src="https://github.com/HotRiceNoodles/CrossLink/actions/workflows/ci.yml/badge.svg?style=for-the-badge" alt="CI">
+<img src="https://img.shields.io/github/v/release/HotRiceNoodles/CrossLink?style=for-the-badge" alt="最新版本">
 <img src="https://img.shields.io/github/stars/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Stars">
-<img src="https://img.shields.io/github/issues/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Issues">
 <img src="https://img.shields.io/github/discussions/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Discussions">
-<img src="https://img.shields.io/github/last-commit/HotRiceNoodles/CrossLink?style=for-the-badge" alt="最近提交">
 
 <br/>
 <br/>
@@ -25,13 +25,13 @@
 
 **OpenAI & Anthropic 兼容 LLM API 网关**
 
-[English](README.md) | [中文](#快速开始) | [العربية](README_ar.md)
+[English](README.md) | [中文](README_zh.md) | [العربية](README_ar.md)
 
 真·双向协议翻译、错误分类容灾、带 per-tool RBAC 的 MCP 网关、可插拔护栏、内置
 管理后台——覆盖 OpenAI、Anthropic、Azure、DeepSeek、通义千问、Ollama 及任意
 OpenAI 兼容供应商。
 
-[快速开始](#快速开始) · [核心亮点](#核心亮点) · [功能特性](#功能特性) · [架构](#架构) · [文档](docs/README.md) · [参与贡献](CONTRIBUTING.md)
+[快速开始](#快速开始) · [核心亮点](#核心亮点) · [架构](#架构) · [文档](docs/README.md) · [赞助](#赞助)
 
 </div>
 
@@ -58,29 +58,149 @@ CrossLink 充当你应用与任意 LLM 供应商之间的**万能转接头**：
 
 ## 核心亮点
 
-CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
-
-- 🔁 **双向流式翻译** — OpenAI ↔ Anthropic ↔ Responses API 三个方向，由真正的状态
+- **双向流式翻译** — OpenAI ↔ Anthropic ↔ Responses API 三个方向，由真正的状态
   机实现（非请求级重写）。处理 thinking 块、流式 JSON 工具参数、token 计数。
   → [架构](docs/architecture.md)
-- 🛡️ **错误分类容灾** — DB 规则表区分持久性 vs 瞬时性失败；半开单飞探测
+- **错误分类容灾** — DB 规则表区分持久性 vs 瞬时性失败；半开单飞探测
   （half-open single-flight）防止供应商恢复时的惊群。→ [路由与容灾](docs/routing-and-failover.md)
-- 🔌 **带 per-tool RBAC 的 MCP 网关** — 不是简单代理。传输抽象、singleflight 缓存的
+- **带 per-tool RBAC 的 MCP 网关** — 不是简单代理。传输抽象、singleflight 缓存的
   工具发现、加密凭据、按 Key/团队/角色的 allow/deny 名单。→ [MCP 网关](docs/mcp-gateway.md)
-- 🚧 **护栏即插件注册表** — 通过 `RegisterEngine` 接入任意引擎（正则、外部 API、
+- **护栏即插件注册表** — 通过 `RegisterEngine` 接入任意引擎（正则、外部 API、
   未来 ML 引擎）。动作：block / log / mask。按模型配置，可 fail-open 或 fail-closed。
   → [架构](docs/architecture.md)
-- 📊 **路由透明** — 每个响应带 `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
+- **路由透明** — 每个响应带 `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
   头，外加路由分布 API，按供应商展示配置 vs 实际权重、偏差、错误率、延迟。
-- ❤️‍🩹 **自愈分发计数器** — 按 (供应商, 模型) 的并发/RPM 限制基于 Redis Lua + TTL
+- **自愈分发计数器** — 按 (供应商, 模型) 的并发/RPM 限制基于 Redis Lua + TTL
   心跳；进程崩溃不会让某个供应商永久卡在"忙碌"状态。
-- 🇨🇳 **国密 + 可离线部署** — SM2/SM3/SM4 模式（含 HMAC-SM3 JWT 签名）与自托管滑块
+- **国密 + 可离线部署** — SM2/SM3/SM4 模式（含 HMAC-SM3 JWT 签名）与自托管滑块
   验证码。无 reCAPTCHA/hCaptcha 依赖——可完全离线部署，满足信创合规。
   → [部署](docs/deployment.md)
-- 🎁 **慷慨的开源核心** — Community 版（Apache 2.0）含 47 项动作，覆盖 MCP、RBAC、
-  路由统计、错误规则、护栏 CRUD（关键词 / 长度 / 凭据检测）、交互式 Playground、
-  Prompt 模板与作用域 PAT。Pro 增加密钥管理、护栏告警、调试回放、DataLens 与
-  Agent 防护；Enterprise 增加多组织、审计与预算管理。
+
+---
+
+## 后台预览
+
+<p align="center">
+  <img src="imgs/Dashboard_zh.png" alt="管理总览" width="720">
+</p>
+<p align="center"><em>管理总览：请求量、成本、Token 用量、延迟、错误率与模型分布一目了然。</em></p>
+
+<p align="center">
+  <img src="imgs/MCP_zh.png" alt="MCP 服务管理" width="720">
+</p>
+<p align="center"><em>MCP 服务管理：注册表、传输类型（HTTP/SSE/stdio）、健康状态与按服务配置。</em></p>
+
+<p align="center">
+  <img src="imgs/Provider_zh.png" alt="供应商与模型配置" width="720">
+</p>
+<p align="center"><em>供应商与模型配置：按模型设置权重、优先级、定价与路由策略。</em></p>
+
+---
+
+## 快速开始
+
+### 前置要求
+
+- Docker 与 Docker Compose；或 Go 1.22+ 源码编译
+- Compose 之外运行时需要 PostgreSQL 14+（或 KingbaseES）与 Redis 7+
+
+> **数据库支持等级**：PostgreSQL 14+ 与 KingbaseES 为一级支持（迁移完整）。
+> MySQL 和 SQLite 为**实验性**支持——迁移只到初始 schema，仅供评估使用。
+
+### Docker Compose（推荐）
+
+前端（[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）和后端自动从 GitHub 拉取并构建，一条命令启动全部服务：
+
+```bash
+git clone https://github.com/HotRiceNoodles/CrossLink.git
+cd CrossLink
+docker compose -f deployments/docker-compose.dev.yaml up --build
+```
+
+管理后台与 API 网关统一入口：`http://localhost`（端口 80）——下文示例可直接照抄。
+
+> **国内网络？** 使用 `docker compose -f deployments/docker-compose.cn.yaml up --build`，已预配置 Go 和 npm 国内镜像。
+
+### 源码编译
+
+```bash
+git clone https://github.com/HotRiceNoodles/CrossLink.git
+cd CrossLink
+cp configs/config.example.yaml configs/config.yaml
+# 编辑 config.yaml，填入数据库和 Redis 连接信息
+make build
+./bin/crosslink
+```
+
+> 源码运行时网关监听 `:8080`——请把下文示例中的地址换成 `http://localhost:8080`。
+
+### 发起第一次请求
+
+在管理后台（`http://localhost`）创建 API Key，然后发起第一个请求：
+
+```bash
+curl http://localhost/v1/chat/completions \
+  -H "Authorization: Bearer cl-your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-chat",
+    "messages": [{"role": "user", "content": "你好！"}]
+  }'
+```
+
+> **还没有供应商 Key？** 开启零成本 Demo 模式（`config.yaml` 中 `demo.enabled: true`）——
+> mock 供应商 + 内置 Demo Key 会驱动公开的 `/demo` 体验页，无需任何上游账号即可体验网关。
+
+**OpenAI SDK（Python）**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost/v1",
+    api_key="cl-your-api-key"
+)
+
+response = client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[{"role": "user", "content": "你好！"}]
+)
+print(response.choices[0].message.content)
+```
+
+**Anthropic SDK（Python）**——注意这里在 Anthropic 端点上用了 `deepseek-chat`：
+CrossLink 在背后完成了 Anthropic → OpenAI → DeepSeek 的翻译链路。
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost",
+    api_key="cl-your-api-key"
+)
+
+message = client.messages.create(
+    model="deepseek-chat",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "你好！"}]
+)
+print(message.content[0].text)
+```
+
+---
+
+## 架构
+
+<p align="center">
+  <img src="imgs/Architecture_zh.png" alt="CrossLink 架构" width="720">
+</p>
+
+```
+客户端 → 认证/RBAC/限流 → 路由解析 → FallbackEngine → Provider 适配器 → 上游 LLM
+```
+
+请求流、流式翻译状态机、FallbackEngine 超时预算与 5 阶段优雅退出，详见
+[架构文档](docs/architecture.md)。
 
 ---
 
@@ -139,169 +259,42 @@ CrossLink 的差异化——每一条都有代码支撑，不是营销话术。
 
 ---
 
-## 架构
+## API
 
-<p align="center">
-  <img src="imgs/Architecture_zh.png" alt="CrossLink 架构" width="720">
-</p>
-
-请求流、流式翻译状态机、FallbackEngine 超时预算与 5 阶段优雅退出，详见
-[架构文档](docs/architecture.md)。
-
----
-
-## 后台预览
-
-<p align="center">
-  <img src="imgs/Dashboard_zh.png" alt="管理总览" width="720">
-</p>
-<p align="center"><em>管理总览：请求量、成本、Token 用量、延迟、错误率与模型分布一目了然。</em></p>
-
-<p align="center">
-  <img src="imgs/MCP_zh.png" alt="MCP 服务管理" width="720">
-</p>
-<p align="center"><em>MCP 服务管理：注册表、传输类型（HTTP/SSE/stdio）、健康状态与按服务配置。</em></p>
-
-<p align="center">
-  <img src="imgs/Provider_zh.png" alt="供应商与模型配置" width="720">
-</p>
-<p align="center"><em>供应商与模型配置：按模型设置权重、优先级、定价与路由策略。</em></p>
-
----
-
-## 快速开始
-
-### 前置要求
-
-- Go 1.22+（源码编译）
-- PostgreSQL 14+（或 KingbaseES）
-- Redis 7+
-
-> **数据库支持等级**：PostgreSQL 14+ 与 KingbaseES 为一级支持（迁移完整）。
-> MySQL 和 SQLite 为**实验性**支持——迁移只到初始 schema，仅供评估使用。
-
-### Docker Compose（推荐）
-
-前端（[CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard)）和后端自动从 GitHub 拉取并构建，一条命令启动全部服务：
-
-```bash
-git clone https://github.com/HotRiceNoodles/CrossLink.git
-cd CrossLink
-docker compose -f deployments/docker-compose.dev.yaml up --build
-```
-
-前端管理后台和 API 网关统一入口：`http://localhost`（端口 80）。
-
-> **国内网络？** 使用 `docker compose -f deployments/docker-compose.cn.yaml up --build`，已预配置 Go 和 npm 国内镜像。
-
-### 源码编译
-
-```bash
-git clone https://github.com/HotRiceNoodles/CrossLink.git
-cd CrossLink
-cp configs/config.example.yaml configs/config.yaml
-# 编辑 config.yaml，填入数据库和 Redis 连接信息
-make build
-./bin/crosslink
-```
-
-### 发起第一次请求
-
-通过管理后台（`http://localhost:8080`）创建 API Key，然后 30 秒体验：
-
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer cl-your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "你好！"}]
-  }'
-```
-
-> **还没有供应商 Key？** 开启零成本 Demo 模式（`config.yaml` 中 `demo.enabled: true`）——
-> mock 供应商 + 内置 Demo Key 会驱动公开的 `/demo` 体验页，无需任何上游账号即可体验网关。
-
-**OpenAI SDK（Python）**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="cl-your-api-key"
-)
-
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[{"role": "user", "content": "你好！"}]
-)
-print(response.choices[0].message.content)
-```
-
-**Anthropic SDK（Python）**
-
-```python
-import anthropic
-
-client = anthropic.Anthropic(
-    base_url="http://localhost:8080",
-    api_key="cl-your-api-key"
-)
-
-message = client.messages.create(
-    model="claude-sonnet-4-20250514",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "你好！"}]
-)
-print(message.content[0].text)
-```
+网关暴露 OpenAI 兼容端点（`/v1/chat/completions`、`/v1/models`）、Anthropic 兼容
+端点（`/v1/messages`）、视频生成（`/v1/videos`）与 MCP 网关（`/mcp/:server`），
+并开箱即用提供可导入的 OpenAPI 文档（`/openapi.json`）——可直接导入 Postman
+或生成 SDK。完整 API 参考——含请求/响应结构、错误码与
+`x-crosslink-fallback-*` 响应头——见 [docs/api-reference.md](docs/api-reference.md)。
 
 ---
 
 ## 配置
 
-所有配置位于 `configs/config.yaml`，每项均可通过 `CL_` 前缀的环境变量覆盖（如 `CL_DATABASE_HOST`、`CL_REDIS_PORT`）。
+所有配置位于 `configs/config.yaml`（全部配置项见
+[`configs/config.example.yaml`](configs/config.example.yaml)），每项均可通过 `CL_`
+前缀的环境变量覆盖（如 `CL_DATABASE_HOST`、`CL_REDIS_PORT`）。核心项：
 
 ```yaml
-server:
-  port: 8080
-  read_timeout: 30s
-  write_timeout: 120s
-
-database:
+database:            # PostgreSQL / KingbaseES
   host: localhost
   port: 5432
   user: crosslink
   password: crosslink
   dbname: crosslink
-  sslmode: disable
 
 redis:
   host: localhost
   port: 6379
-
-gateway:
-  auth_key: "cl-change-me"
 
 admin:
   username: admin
   password: changeme
   jwt_secret: "change-me-to-a-random-secret"
 
-cache:
-  enabled: true
-  default_ttl: 5m
-
-mcp:
-  enabled: true
-  health_check_interval: 30s
-
 crypto:
   mode: standard    # standard (SHA-256/RSA/AES) 或 gm (SM3/SM2/SM4)
 ```
-
-### 供应商初始化
 
 首次启动时从 `configs/providers.yaml` 加载供应商配置：
 
@@ -318,74 +311,16 @@ providers:
 
 ---
 
-## API 端点
-
-### 网关接口（需 API Key）
-
-| 方法 | 路径 | 说明 |
-|--------|------|-------------|
-| `POST` | `/v1/chat/completions` | OpenAI 兼容对话（流式 & 非流式） |
-| `POST` | `/v1/messages` | Anthropic 兼容消息（流式 & 非流式） |
-| `GET` | `/v1/models` | 获取可用模型列表 |
-| `POST` | `/v1/videos` | 视频生成（`GET /v1/videos/:id` 轮询，`/:id/content` 下载） |
-| `GET` | `/v1/usage` | Key 持有者自查配额与用量 |
-| `GET` | `/v1/templates` | Prompt 模板目录（元数据 + curl 示例） |
-| `GET` | `/openapi.json` | 内置 OpenAPI 文档 — 导入 Postman 或生成 SDK |
-
-### MCP 网关
-
-| 方法 | 路径 | 说明 |
-|--------|------|-------------|
-| `POST` | `/mcp/:server` | MCP JSON-RPC 转发 |
-| `GET` | `/mcp/:server` | MCP SSE 传输 |
-
-### 管理接口（需 JWT）
-
-| 方法 | 路径 | 说明 |
-|--------|------|-------------|
-| `POST` | `/admin/api/auth/login` | 登录 |
-| `CRUD` | `/admin/api/providers` | 供应商管理（通过 `POST /:id/test` 测试连通性） |
-| `CRUD` | `/admin/api/models` | 模型映射管理 |
-| `CRUD` | `/admin/api/keys` | API Key 管理（通过 `POST /:id/regenerate` 重新生成） |
-| `GET` | `/admin/api/usage` | 用量日志，支持多维度筛选 |
-| `GET` | `/admin/api/usage/stats` | 用量统计（含图像指标）与对账导出 |
-| `GET` | `/admin/api/routing/stats` | 路由分布：按供应商对比配置与实际权重 |
-| `CRUD` | `/admin/api/error-rules` | 容灾错误分类规则 |
-| `CRUD` | `/admin/api/guardrails` | 护栏规则（`POST /:id/test` 测试，另有 `/stats`、`/config`） |
-| `CRUD` | `/admin/api/templates` | Prompt 模板（`POST /:id/preview` 预览） |
-| `CRUD` | `/admin/api/pats` | 个人访问令牌 |
-| `POST` | `/admin/api/playground/*` | Playground：chat、stream、image、tts、transcribe、translate、video、responses |
-| `GET/PUT` | `/admin/api/system/content-log` | 热切换请求/响应体日志开关 |
-| `CRUD` | `/admin/api/mcp/servers` | MCP 服务管理 |
-| `GET` | `/admin/api/mcp/servers/:id/tools` | MCP 服务工具列表 |
-
-表格只列重点，并非全部。网关开箱即用提供可导入的 OpenAPI 文档（`/openapi.json`）；
-完整 API 文档——含请求/响应结构、错误码与 `x-crosslink-fallback-*` 响应头——见
-[docs/api-reference.md](docs/api-reference.md)。
-
----
-
 ## 部署
 
-### 生产环境 Docker Compose
-
 ```bash
-docker compose -f deployments/docker-compose.prod.yaml up -d --build
+docker compose -f deployments/docker-compose.prod.yaml up -d --build   # 生产环境
+docker compose -f deployments/docker-compose.cn.yaml up --build        # 国内网络加速（Go/npm 镜像）
 ```
 
-### 国内网络加速
-
-使用 CN 变体，已配置 Go 代理（`goproxy.cn`）和 npm 镜像（`registry.npmmirror.com`）：
-
-```bash
-docker compose -f deployments/docker-compose.cn.yaml up --build
-```
-
-### Nginx · Caddy · Systemd · 国密
-
-生产就绪的 Nginx 配置（TLS、安全头、SSE 流式支持）位于 `deployments/nginx/`，
-Caddyfile 提供 HTTPS 自动签发，systemd unit 用于裸机部署，国密（SM2/SM3/SM4）
-专用部署含 GmSSL/Nginx + TLCP 位于 `deployments/gm/`。
+同时内置：生产就绪的 Nginx 配置（TLS、安全头、SSE 流式支持）位于
+`deployments/nginx/`，Caddyfile 提供 HTTPS 自动签发，systemd unit 用于裸机部署，
+国密（SM2/SM3/SM4）专用部署含 GmSSL/Nginx + TLCP 位于 `deployments/gm/`。
 
 → 全部部署方式与多实例扩展说明见 [部署文档](docs/deployment.md)。
 
@@ -398,6 +333,7 @@ Caddyfile 提供 HTTPS 自动签发，systemd unit 用于裸机部署，国密�
 - [MCP 网关](docs/mcp-gateway.md) — 传输、per-tool RBAC、加密凭据
 - [API 参考](docs/api-reference.md) — 完整端点参考
 - [部署](docs/deployment.md) — 全部部署变体
+- [更新日志](CHANGELOG.md) — 版本发布历史
 
 ---
 
@@ -428,7 +364,25 @@ CrossLink 正在快速迭代，当前重点：
 - 💬 **提问与想法** — [GitHub Discussions](https://github.com/HotRiceNoodles/CrossLink/discussions)
 - 🐛 **Bug 反馈** — [提交 issue](https://github.com/HotRiceNoodles/CrossLink/issues/new/choose)（用 bug-report 模板）
 - 🔒 **安全漏洞** — 见 [SECURITY.md](SECURITY.md) 私密披露流程
+- **行为准则** — 见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - ⭐ **喜欢这个项目？** 给个 Star，帮助更多人发现 CrossLink。
+
+---
+
+## 赞助
+
+CrossLink 是一个独立、由志愿者维护的开源项目。赞助费用用于 CI 资源、公共 Demo
+实例、文档多语言翻译与安全审计。
+
+<p align="center">
+  <a href="https://github.com/sponsors/HotRiceNoodles">
+    <img src="https://img.shields.io/badge/赞助-%E2%9D%A4-ea4aaa?style=for-the-badge&logo=githubsponsors" alt="在 GitHub 赞助">
+  </a>
+</p>
+
+**在生产环境使用 CrossLink？** 你的公司 Logo 可以展示在这里，并获得维护者的
+优先支持。欢迎通过 [Discussions](https://github.com/HotRiceNoodles/CrossLink/discussions)
+联系或直接赞助——所有赞助方都会列在本节。
 
 ---
 
@@ -438,7 +392,7 @@ CrossLink 正在快速迭代，当前重点：
   <a href="https://star-history.com/#HotRiceNoodles/CrossLink&Date">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date" width="720">
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" width="720">
     </picture>
   </a>
 </p>

@@ -11,10 +11,10 @@
 
 <br/>
 
+<img src="https://github.com/HotRiceNoodles/CrossLink/actions/workflows/ci.yml/badge.svg?style=for-the-badge" alt="CI">
+<img src="https://img.shields.io/github/v/release/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Latest Release">
 <img src="https://img.shields.io/github/stars/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Stars">
-<img src="https://img.shields.io/github/issues/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Issues">
 <img src="https://img.shields.io/github/discussions/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Discussions">
-<img src="https://img.shields.io/github/last-commit/HotRiceNoodles/CrossLink?style=for-the-badge" alt="Last Commit">
 
 <br/>
 <br/>
@@ -25,14 +25,14 @@
 
 **OpenAI & Anthropic Compatible LLM API Gateway**
 
-[English](#quick-start) | [中文](README_zh.md) | [العربية](README_ar.md)
+[English](README.md) | [中文](README_zh.md) | [العربية](README_ar.md)
 
-A unified proxy with true bidirectional protocol translation, error-classified
+A unified proxy with bidirectional protocol translation, error-classified
 failover, an MCP gateway with per-tool RBAC, pluggable guardrails, and a built-in
-admin dashboard — for OpenAI, Anthropic, Azure, DeepSeek, Qwen, Ollama, and any
+admin dashboard, for OpenAI, Anthropic, Azure, DeepSeek, Qwen, Ollama, and any
 OpenAI-compatible provider.
 
-[Get Started](#quick-start) · [Highlights](#highlights) · [Features](#features) · [Architecture](#architecture) · [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md)
+[Get Started](#quick-start) · [Highlights](#highlights) · [Architecture](#architecture) · [Docs](docs/README.md) · [Sponsor](#sponsors)
 
 </div>
 
@@ -45,124 +45,41 @@ Adapting your code for each one is tedious, error-prone, and locks you in.
 
 CrossLink is a **universal adapter** between your application and any LLM provider:
 
-- **One endpoint** — Your code talks to a single API in either OpenAI or Anthropic format
-- **Any provider** — Requests are routed to OpenAI, Anthropic, Azure, DeepSeek, Qwen,
+- **One endpoint**: Your code talks to a single API in either OpenAI or Anthropic format
+- **Any provider**: Requests are routed to OpenAI, Anthropic, Azure, DeepSeek, Qwen,
   Ollama, or any OpenAI-compatible service
-- **True bidirectional translation** — Full streaming SSE conversion between OpenAI,
+- **Bidirectional translation**: Full streaming SSE conversion between OpenAI,
   Anthropic, and the OpenAI Responses API, including tool use and extended thinking
-- **Resilient by classification** — Failover isn't blind retry. Errors are classified as
+- **Resilient by classification**: Failover isn't blind retry. Errors are classified as
   persistent (quota/billing — one strike, long cooldown) or transient (rate limit —
   threshold-based), so retries go where they can actually succeed
-- **Observable routing** — Every response carries `x-crosslink-fallback-*` headers, and a
+- **Observable routing**: Every response carries `x-crosslink-fallback-*` headers, and a
   routing-stats API shows configured-vs-actual traffic distribution so you can see drift
 
 ---
 
 ## Highlights
 
-What makes CrossLink different — each backed by code, not marketing.
-
-- 🔁 **Bidirectional streaming translation** — OpenAI ↔ Anthropic ↔ Responses API, all three
+- **Bidirectional streaming translation** — OpenAI ↔ Anthropic ↔ Responses API, all three
   directions, via a real state machine (not request-level rewrites). Handles thinking blocks,
   partial-JSON tool args, and token counting mid-stream. → [Architecture](docs/architecture.md)
-- 🛡️ **Error-classified failover** — DB-backed rule table distinguishes persistent vs.
+- **Error-classified failover** — DB-backed rule table distinguishes persistent vs.
   transient failures; half-open single-flight probing prevents stampedes when a flaky
   provider returns. → [Routing & Failover](docs/routing-and-failover.md)
-- 🔌 **MCP gateway with per-tool RBAC** — Not a thin proxy. Transport abstraction, tool
+- **MCP gateway with per-tool RBAC** — Not a thin proxy. Transport abstraction, tool
   discovery with singleflight caching, encrypted credentials, and allow/deny lists scoped
   by key, team, or role. → [MCP Gateway](docs/mcp-gateway.md)
-- 🚧 **Guardrails as a plugin registry** — Plug in any engine (regex, external API, future
+- **Guardrails as a plugin registry** — Plug in any engine (regex, external API, future
   ML) via `RegisterEngine`. Actions: block / log / mask. Per-model config, fail-open or
   fail-closed. → [Architecture](docs/architecture.md)
-- 📊 **Routing transparency** — `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
+- **Routing transparency** — `x-crosslink-fallback-model` / `x-crosslink-fallback-count`
   headers on every response, plus a routing-distribution API showing configured-vs-actual
   weight, deviation, error rate, and latency per provider.
-- ❤️‍🩹 **Self-healing dispatch counters** — Per-(provider, model) concurrency/RPM limits via
+- **Self-healing dispatch counters** — Per-(provider, model) concurrency/RPM limits via
   Redis Lua with a TTL heartbeat; a crashed process can't leave a provider stuck "busy".
-- 🇨🇳 **GM national crypto + air-gapped ready** — SM2/SM3/SM4 mode (including HMAC-SM3 JWT
+- **GM national crypto + air-gapped ready** — SM2/SM3/SM4 mode (including HMAC-SM3 JWT
   signing) and a self-hosted slider CAPTCHA. No reCAPTCHA/hCaptcha dependency — deploys
   fully offline for 信创 compliance. → [Deployment](docs/deployment.md)
-- 🎁 **Generous open core** — The Community edition (Apache 2.0) ships 47 actions including
-  MCP, RBAC, routing stats, error rules, guardrail CRUD (keyword / length / credential
-  detection), the interactive playground, prompt templates, and scoped PATs. Pro adds
-  secrets, guardrail alerts, debug replay, DataLens, and agent shielding; Enterprise adds
-  multi-org, audit, and budget management.
-
----
-
-## Features
-
-### Core Gateway
-
-- **Dual Protocol** — `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) with
-  automatic bidirectional translation, streaming included
-- **Multi-Provider** — OpenAI, Anthropic, Azure OpenAI, DeepSeek, Qwen, Moonshot, Ollama,
-  and any OpenAI-compatible provider
-- **Intelligent Routing** — 6 strategies: weighted random, round-robin, least latency,
-  least cost, least busy, and canary deployment
-- **Automatic Failover** — Multi-provider fallback chains with circuit breakers, configurable
-  retry policies (exponential/fixed/linear backoff), and error classification
-- **Response Caching** — Redis-based caching with per-model TTL, gzip compression, and
-  cache key isolation per user
-- **Video Generation** — `POST /v1/videos` with status polling and content download,
-  routed through the same fallback chain as chat
-- **Prompt Templates** — Curated template catalog managed at `/admin/api/templates`;
-  key holders discover them via `GET /v1/templates` (metadata + ready-to-use curl examples)
-
-### Security & Control
-
-- **Rate Limiting** — Per-key RPM/TPM limits with global concurrency control (2000)
-- **RBAC** — Role-based access control for providers, models, API keys, and MCP
-- **Budget Enforcement** — Per-key and per-team budget limits enforced at the gateway with
-  automatic circuit breaking (budget management console: Enterprise)
-- **Guardrails** — Built-in engines (keyword filter, content length, credential-leak
-  detection with an auto-seeded default rule) plus a pluggable `RegisterEngine` registry;
-  block / log / mask actions, admin CRUD, per-model config
-- **Scoped PATs** — Personal access tokens for CI / machine access with read-only usage,
-  budget, and health APIs
-- **SSRF Protection** — Dialer- and redirect-level guards on outbound provider calls
-- **Crypto Flexibility** — Standard (SHA-256/RSA/AES) or Chinese national cryptography (SM3/SM2/SM4)
-
-### Observability
-
-- **Usage Analytics** — Token usage, cost tracking (including tiered image pricing and
-  per-key price multipliers), latency metrics, cache hit rates, and fallback/retry counts
-  per request
-- **Prometheus Metrics** — Built-in metrics endpoint for monitoring
-- **OpenTelemetry** — Distributed tracing support
-- **Structured Logging** — JSON logging with request context
-- **Bundled OpenAPI Spec** — `/openapi.json` served out of the box for Postman import and
-  SDK codegen
-
-### MCP Gateway
-
-- **Model Context Protocol** — HTTP/SSE transport, tool discovery with caching, health checks
-- **Permission Management** — Per-principal tool access control (allow/deny by key, team, or role)
-- **Call Logging** — Comprehensive tool call logging with monthly partitioning and auto-cleanup
-
-### Operations
-
-- **Vue 3 Admin Dashboard** — Built-in web UI for providers, models, keys, usage, and MCP
-  management ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard))
-- **Admin Playground** — Test chat, streaming, image generation, TTS / transcription,
-  video, and the Responses API from the dashboard, through the real fallback chain
-- **Zero-Cost Demo Mode** — Optional mock provider + embedded demo key power a public
-  `/demo` try page with no upstream spend
-- **Multi-Instance** — Redis Pub/Sub for provider registry sync and distributed round-robin
-- **Graceful Shutdown** — 5-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
-  background goroutine cancellation → DB cleanup
-- **One-Command Deploy** — Docker Compose spins up gateway, frontend, PostgreSQL, and Redis in one command
-
----
-
-## Architecture
-
-<p align="center">
-  <img src="imgs/Architecture.png" alt="CrossLink Architecture" width="720">
-</p>
-
-See [Architecture](docs/architecture.md) for the request flow, the streaming translator
-state machine, the fallback engine's timeout budgeting, and the 5-phase graceful shutdown.
 
 ---
 
@@ -189,9 +106,8 @@ state machine, the fallback engine's timeout budgeting, and the 5-phase graceful
 
 ### Prerequisites
 
-- Go 1.22+ (building from source)
-- PostgreSQL 14+ (or KingbaseES)
-- Redis 7+
+- Docker and Docker Compose, **or** Go 1.22+ to build from source
+- PostgreSQL 14+ (or KingbaseES) and Redis 7+ when running outside Compose
 
 > **Database support:** PostgreSQL 14+ and KingbaseES are first-class, fully
 > migrated backends. MySQL and SQLite are **experimental** — their migration
@@ -207,7 +123,8 @@ cd CrossLink
 docker compose -f deployments/docker-compose.dev.yaml up --build
 ```
 
-Frontend dashboard and API gateway are available at `http://localhost` (port 80).
+The dashboard and the API gateway share one entry point at `http://localhost`
+(port 80) — all examples below use it as-is.
 
 > **China network?** Use `docker compose -f deployments/docker-compose.cn.yaml up --build` with Go and npm mirrors pre-configured.
 
@@ -222,12 +139,15 @@ make build
 ./bin/crosslink
 ```
 
+> Running from source, the gateway listens on `:8080` — swap
+> `http://localhost:8080` into the examples below.
+
 ### Make Your First Request
 
-Create an API key via the admin dashboard (`http://localhost:8080`), then try it in 30 seconds:
+Create an API key in the admin dashboard (`http://localhost`), then:
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost/v1/chat/completions \
   -H "Authorization: Bearer cl-your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -246,7 +166,7 @@ curl http://localhost:8080/v1/chat/completions \
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost/v1",
     api_key="cl-your-api-key"
 )
 
@@ -257,18 +177,19 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-**Anthropic SDK (Python)**
+**Anthropic SDK (Python)** — note the `deepseek-chat` model on the Anthropic endpoint:
+that's CrossLink translating Anthropic → OpenAI → DeepSeek behind the scenes.
 
 ```python
 import anthropic
 
 client = anthropic.Anthropic(
-    base_url="http://localhost:8080",
+    base_url="http://localhost",
     api_key="cl-your-api-key"
 )
 
 message = client.messages.create(
-    model="claude-sonnet-4-20250514",
+    model="deepseek-chat",
     max_tokens=1024,
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -277,50 +198,125 @@ print(message.content[0].text)
 
 ---
 
+## Architecture
+
+<p align="center">
+  <img src="imgs/Architecture.png" alt="CrossLink Architecture" width="720">
+</p>
+
+```
+Client → Auth/RBAC/RateLimit → Route Resolver → FallbackEngine → Provider Adapter → Upstream LLM
+```
+
+See [Architecture](docs/architecture.md) for the request flow, the streaming translator
+state machine, the fallback engine's timeout budgeting, and the 5-phase graceful shutdown.
+
+---
+
+## Features
+
+### Core Gateway
+
+- **Dual Protocol**: `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) with
+  automatic bidirectional translation, streaming included
+- **Multi-Provider**: OpenAI, Anthropic, Azure OpenAI, DeepSeek, Qwen, Moonshot, Ollama,
+  and any OpenAI-compatible provider
+- **Intelligent Routing**: 6 strategies: weighted random, round-robin, least latency,
+  least cost, least busy, and canary deployment
+- **Automatic Failover**: Multi-provider fallback chains with circuit breakers, configurable
+  retry policies (exponential/fixed/linear backoff), and error classification
+- **Response Caching**: Redis-based caching with per-model TTL, gzip compression, and
+  cache key isolation per user
+- **Video Generation**: `POST /v1/videos` with status polling and content download,
+  routed through the same fallback chain as chat
+- **Prompt Templates**: Curated template catalog managed at `/admin/api/templates`;
+  key holders discover them via `GET /v1/templates` (metadata + ready-to-use curl examples)
+
+### Security & Control
+
+- **Rate Limiting**: Per-key RPM/TPM limits with global concurrency control (2000)
+- **RBAC**: Role-based access control for providers, models, API keys, and MCP
+- **Budget Enforcement**: Per-key and per-team budget limits enforced at the gateway with
+  automatic circuit breaking (budget management console: Enterprise)
+- **Guardrails**: Built-in engines (keyword filter, content length, credential-leak
+  detection with an auto-seeded default rule) plus a pluggable `RegisterEngine` registry;
+  block / log / mask actions, admin CRUD, per-model config
+- **Scoped PATs**: Personal access tokens for CI / machine access with read-only usage,
+  budget, and health APIs
+- **SSRF Protection**: Dialer- and redirect-level guards on outbound provider calls
+- **Crypto Flexibility**: Standard (SHA-256/RSA/AES) or Chinese national cryptography (SM3/SM2/SM4)
+
+### Observability
+
+- **Usage Analytics**: Token usage, cost tracking (including tiered image pricing and
+  per-key price multipliers), latency metrics, cache hit rates, and fallback/retry counts
+  per request
+- **Prometheus Metrics**: Built-in metrics endpoint for monitoring
+- **OpenTelemetry**: Distributed tracing support
+- **Structured Logging**: JSON logging with request context
+- **Bundled OpenAPI Spec**: `/openapi.json` served out of the box for Postman import and
+  SDK codegen
+
+### MCP Gateway
+
+- **Model Context Protocol**: HTTP/SSE transport, tool discovery with caching, health checks
+- **Permission Management**: Per-principal tool access control (allow/deny by key, team, or role)
+- **Call Logging**: Comprehensive tool call logging with monthly partitioning and auto-cleanup
+
+### Operations
+
+- **Vue 3 Admin Dashboard**: Built-in web UI for providers, models, keys, usage, and MCP
+  management ([CrossLink-UI-Standard](https://github.com/HotRiceNoodles/CrossLink-UI-Standard))
+- **Admin Playground**: Test chat, streaming, image generation, TTS / transcription,
+  video, and the Responses API from the dashboard, through the real fallback chain
+- **Zero-Cost Demo Mode**: Optional mock provider + embedded demo key power a public
+  `/demo` try page with no upstream spend
+- **Multi-Instance**: Redis Pub/Sub for provider registry sync and distributed round-robin
+- **Graceful Shutdown**: 5-phase drain: in-flight SSE streams → HTTP shutdown → worker flush →
+  background goroutine cancellation → DB cleanup
+- **One-Command Deploy**: Docker Compose spins up gateway, frontend, PostgreSQL, and Redis in one command
+
+---
+
+## API
+
+The gateway exposes OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) and
+Anthropic-compatible (`/v1/messages`) endpoints, video generation at
+`/v1/videos`, and the MCP gateway at `/mcp/:server`. A bundled, importable
+OpenAPI spec is served at `/openapi.json` — import it into Postman or generate
+an SDK from it. The full reference, including request/response shapes, error
+codes, and the `x-crosslink-fallback-*` response headers, is in
+[docs/api-reference.md](docs/api-reference.md).
+
+---
+
 ## Configuration
 
-All configuration lives in `configs/config.yaml`. Every value can be overridden with
-environment variables using the `CL_` prefix (e.g., `CL_DATABASE_HOST`, `CL_REDIS_PORT`).
+All configuration lives in `configs/config.yaml` (see
+[`configs/config.example.yaml`](configs/config.example.yaml) for every key).
+Every value can be overridden with environment variables using the `CL_` prefix
+(e.g., `CL_DATABASE_HOST`, `CL_REDIS_PORT`). The essentials:
 
 ```yaml
-server:
-  port: 8080
-  read_timeout: 30s
-  write_timeout: 120s
-
-database:
+database:            # PostgreSQL / KingbaseES
   host: localhost
   port: 5432
   user: crosslink
   password: crosslink
   dbname: crosslink
-  sslmode: disable
 
 redis:
   host: localhost
   port: 6379
-
-gateway:
-  auth_key: "cl-change-me"
 
 admin:
   username: admin
   password: changeme
   jwt_secret: "change-me-to-a-random-secret"
 
-cache:
-  enabled: true
-  default_ttl: 5m
-
-mcp:
-  enabled: true
-  health_check_interval: 30s
-
 crypto:
   mode: standard    # standard (SHA-256/RSA/AES) or gm (SM3/SM2/SM4)
 ```
-
-### Provider Seeding
 
 Providers are seeded from `configs/providers.yaml` on first run:
 
@@ -337,75 +333,16 @@ providers:
 
 ---
 
-## API Endpoints
-
-### Gateway (API Key Required)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat (stream & non-stream) |
-| `POST` | `/v1/messages` | Anthropic-compatible messages (stream & non-stream) |
-| `GET` | `/v1/models` | List available models |
-| `POST` | `/v1/videos` | Video generation (poll via `GET /v1/videos/:id`, fetch via `/:id/content`) |
-| `GET` | `/v1/usage` | Self-service quota & usage for key holders |
-| `GET` | `/v1/templates` | Prompt-template catalog (metadata + curl examples) |
-| `GET` | `/openapi.json` | Bundled OpenAPI spec — import into Postman or generate an SDK |
-
-### MCP Gateway
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/mcp/:server` | MCP JSON-RPC forwarding |
-| `GET` | `/mcp/:server` | MCP SSE transport |
-
-### Admin (JWT Required)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/admin/api/auth/login` | Login |
-| `CRUD` | `/admin/api/providers` | Provider management (test via `POST /:id/test`) |
-| `CRUD` | `/admin/api/models` | Model mapping management |
-| `CRUD` | `/admin/api/keys` | API key management (regenerate via `POST /:id/regenerate`) |
-| `GET` | `/admin/api/usage` | Usage logs with multi-dimensional filtering |
-| `GET` | `/admin/api/usage/stats` | Usage stats (incl. image metrics) + reconciliation export |
-| `GET` | `/admin/api/routing/stats` | Routing distribution: configured vs. actual per provider |
-| `CRUD` | `/admin/api/error-rules` | Error-classification rules for failover |
-| `CRUD` | `/admin/api/guardrails` | Guardrail rules (test via `POST /:id/test`, plus `/stats`, `/config`) |
-| `CRUD` | `/admin/api/templates` | Prompt templates (preview via `POST /:id/preview`) |
-| `CRUD` | `/admin/api/pats` | Personal access tokens |
-| `POST` | `/admin/api/playground/*` | Playground: chat, stream, image, tts, transcribe, translate, video, responses |
-| `GET/PUT` | `/admin/api/system/content-log` | Hot-toggle request/response body logging |
-| `CRUD` | `/admin/api/mcp/servers` | MCP server management |
-| `GET` | `/admin/api/mcp/servers/:id/tools` | List tools on MCP server |
-
-Tables list the highlights, not everything. The gateway serves a bundled, importable
-OpenAPI spec at [`/openapi.json`](#api-endpoints), and the full API reference — including
-request/response shapes, error codes, and the `x-crosslink-fallback-*` response headers —
-is in [docs/api-reference.md](docs/api-reference.md).
-
----
-
 ## Deployment
 
-### Production Docker Compose
-
 ```bash
-docker compose -f deployments/docker-compose.prod.yaml up -d --build
+docker compose -f deployments/docker-compose.prod.yaml up -d --build   # Production
+docker compose -f deployments/docker-compose.cn.yaml up --build        # China network (Go/npm mirrors)
 ```
 
-### China Network
-
-Use the CN variant with Go proxy (`goproxy.cn`) and npm mirror (`registry.npmmirror.com`):
-
-```bash
-docker compose -f deployments/docker-compose.cn.yaml up --build
-```
-
-### Nginx · Caddy · Systemd · GM
-
-Production-ready Nginx config (TLS, security headers, SSE streaming) at
-`deployments/nginx/`, a Caddyfile for automatic HTTPS, a systemd unit, and a dedicated
-GM (SM2/SM3/SM4) deployment with GmSSL/Nginx + TLCP at `deployments/gm/`.
+Also included: production-ready Nginx config (TLS, security headers, SSE streaming)
+at `deployments/nginx/`, a Caddyfile for automatic HTTPS, a systemd unit, and a
+dedicated GM (SM2/SM3/SM4) deployment with GmSSL/Nginx + TLCP at `deployments/gm/`.
 
 → See [Deployment](docs/deployment.md) for all options and multi-instance scaling notes.
 
@@ -418,6 +355,7 @@ GM (SM2/SM3/SM4) deployment with GmSSL/Nginx + TLCP at `deployments/gm/`.
 - [MCP Gateway](docs/mcp-gateway.md) — transport, per-tool RBAC, encrypted credentials
 - [API Reference](docs/api-reference.md) — full endpoint reference
 - [Deployment](docs/deployment.md) — all deployment variants
+- [Changelog](CHANGELOG.md) — release history
 
 ---
 
@@ -448,7 +386,27 @@ Have a request? Open a [Discussion](https://github.com/HotRiceNoodles/CrossLink/
 - 💬 **Questions & ideas** — [GitHub Discussions](https://github.com/HotRiceNoodles/CrossLink/discussions)
 - 🐛 **Bug reports** — [open an issue](https://github.com/HotRiceNoodles/CrossLink/issues/new/choose) (use the bug-report template)
 - 🔒 **Security reports** — see [SECURITY.md](SECURITY.md) for private disclosure
+- **Conduct** — see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - ⭐ **Like the project?** Give it a star — it helps others find CrossLink.
+
+---
+
+## Sponsors
+
+CrossLink is an independent, volunteer-built open-source project. Sponsorships
+fund CI runner time, a public demo instance, documentation translations, and
+security reviews.
+
+<p align="center">
+  <a href="https://github.com/sponsors/HotRiceNoodles">
+    <img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?style=for-the-badge&logo=githubsponsors" alt="Sponsor on GitHub">
+  </a>
+</p>
+
+**Using CrossLink in production?** Your company logo can appear here, alongside
+priority access to the maintainers. Reach out via
+[Discussions](https://github.com/HotRiceNoodles/CrossLink/discussions) or sponsor
+directly — every sponsor is listed in this section.
 
 ---
 
@@ -458,7 +416,7 @@ Have a request? Open a [Discussion](https://github.com/HotRiceNoodles/CrossLink/
   <a href="https://star-history.com/#HotRiceNoodles/CrossLink&Date">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date" width="720">
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HotRiceNoodles/CrossLink&type=Date&color=orange" width="720">
     </picture>
   </a>
 </p>
