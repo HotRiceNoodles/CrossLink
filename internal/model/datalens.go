@@ -59,7 +59,7 @@ type DataLensHourlyMetric struct {
 	CtxUtilBucket5080     int       `gorm:"column:ctx_util_bucket_50_80;not null;default:0" json:"ctx_util_bucket_50_80"`
 	CtxUtilBucket8095     int       `gorm:"column:ctx_util_bucket_80_95;not null;default:0" json:"ctx_util_bucket_80_95"`
 	CtxUtilBucketGt95     int       `gorm:"not null;default:0" json:"ctx_util_bucket_gt95"`
-	CreatedAt             time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt             time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
 }
 
 func (DataLensHourlyMetric) TableName() string { return "datalens_hourly_metrics" }
@@ -117,7 +117,7 @@ type DataLensDailyMetric struct {
 	CtxUtilBucket5080     int       `gorm:"column:ctx_util_bucket_50_80;not null;default:0" json:"ctx_util_bucket_50_80"`
 	CtxUtilBucket8095     int       `gorm:"column:ctx_util_bucket_80_95;not null;default:0" json:"ctx_util_bucket_80_95"`
 	CtxUtilBucketGt95     int       `gorm:"not null;default:0" json:"ctx_util_bucket_gt95"`
-	CreatedAt             time.Time `gorm:"not null;default:now()" json:"created_at"`
+	CreatedAt             time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
 }
 
 func (DataLensDailyMetric) TableName() string { return "datalens_daily_metrics" }
@@ -142,7 +142,7 @@ type DataLensToolDailyMetric struct {
 	DefinitionChangedCount int       `gorm:"not null;default:0" json:"definition_changed_count"`
 	// DisappearedCount counts event_type='disappeared' rows (tool gone from
 	// the server's last complete MCP inventory). pg migration 000091.
-	DisappearedCount int       `gorm:"not null;default:0" json:"disappeared_count"`
+	DisappearedCount int `gorm:"not null;default:0" json:"disappeared_count"`
 	// CURRENT_TIMESTAMP (not now()) so AutoMigrate DDL parses on SQLite in
 	// unit tests; the authoritative schema is migration 000089.
 	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
@@ -159,7 +159,7 @@ type DataLensAggStatus struct {
 	LastDurationMs int       `gorm:"not null;default:0" json:"last_duration_ms"`
 	RowsAffected   int       `gorm:"not null;default:0" json:"rows_affected"`
 	ErrorMessage   *string   `gorm:"type:text" json:"error_message,omitempty"`
-	UpdatedAt      time.Time `gorm:"not null;default:now()" json:"updated_at"`
+	UpdatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
 
 func (DataLensAggStatus) TableName() string { return "datalens_agg_status" }

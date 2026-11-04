@@ -162,35 +162,91 @@ var dimMapping = map[string]dimInfo{
 	"provider_id":     {selectExpr: "provider_id", insertCol: "provider_id", groupCol: "provider_id"},
 }
 
-// aggregateHourly runs the hourly UPSERT for all levels.
+// aggregateHourly runs the hourly window replacement for all levels.
 func (s *DataLensAggregatorService) aggregateHourly(ctx context.Context) error {
 	now := time.Now().UTC()
-	start := now.Add(-s.lookback)
+	// Hour-align the start: the insert groups rows by date_trunc('hour', ·),
+	// so its oldest bucket is the bucket CONTAINING start — truncating start
+	// (a) makes that bucket recomputed from its full hour of data, and
+	// (b) makes the delete below cover every bucket the insert produces
+	// (otherwise the boundary bucket survives the delete and the insert hits
+	// PG's expression unique index).
+	start := now.Add(-s.lookback).Truncate(time.Hour)
+
+	// Upper bound stays raw "now" (bucketBound gran ""): the in-progress
+	// bucket must stay in scope even though it only holds partial-hour data.
+	delSQL := "DELETE FROM datalens_hourly_metrics WHERE agg_level = ? AND " +
+		s.bucketBound("hour_bucket", ">=", "hour") + " AND " +
+		s.bucketBound("hour_bucket", "<", "")
 
 	var firstErr error
 	for _, level := range s.levels {
 		t0 := time.Now()
-		sql, args := s.buildHourlySQL(level, start, now)
-		result := s.db.WithContext(ctx).Exec(sql, args...)
+		rows, err := s.replaceWindow(ctx, level.Name,
+			delSQL,
+			[]any{level.Name, start, now},
+			func(tx *gorm.DB) (int64, error) {
+				sql, args := s.buildHourlySQL(level, start, now)
+				result := tx.Exec(sql, args...)
+				return result.RowsAffected, result.Error
+			})
 		elapsed := time.Since(t0)
-		rows := 0
-		if result.RowsAffected >= 0 {
-			rows = int(result.RowsAffected)
-		}
-		if result.Error != nil {
+		if err != nil {
 			slog.Warn("datalens aggregator: hourly level failed",
-				"level", level.Name, "error", result.Error, "elapsed_ms", elapsed.Milliseconds())
-			s.updateAggStatus(ctx, level.Name, "hourly", int(elapsed.Milliseconds()), rows, result.Error)
+				"level", level.Name, "error", err, "elapsed_ms", elapsed.Milliseconds())
+			s.updateAggStatus(ctx, level.Name, "hourly", int(elapsed.Milliseconds()), int(rows), err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("hourly %s: %w", level.Name, result.Error)
+				firstErr = fmt.Errorf("hourly %s: %w", level.Name, err)
 			}
 			continue
 		}
 		slog.Info("datalens aggregator: hourly level done",
 			"level", level.Name, "rows", rows, "elapsed_ms", elapsed.Milliseconds())
-		s.updateAggStatus(ctx, level.Name, "hourly", int(elapsed.Milliseconds()), rows, nil)
+		s.updateAggStatus(ctx, level.Name, "hourly", int(elapsed.Milliseconds()), int(rows), nil)
 	}
 	return firstErr
+}
+
+// replaceWindow atomically refreshes one aggregation window: DELETE the
+// window's pre-agg rows, then INSERT the recomputed set, in a single
+// transaction. This is the portable replacement for the old PG-only
+// INSERT ... ON CONFLICT (expression targets) DO UPDATE SET col = EXCLUDED.col
+// — which was whole-row overwrite of the recomputed window, i.e. exactly
+// delete+insert semantics. mysql/sqlite carry no expression unique index on
+// these tables, so no upsert target exists there; the delete+insert form
+// works identically on all dialects. One caveat: unlike PG's upsert (whose
+// expression unique index made concurrent cycles converge), two aggregator
+// processes racing on MySQL (no unique key) could in principle duplicate
+// window rows — single-node deployments (the norm) are unaffected, and PG
+// keeps its unique index as the backstop.
+func (s *DataLensAggregatorService) replaceWindow(ctx context.Context, level string, delSQL string, delArgs []any, insert func(tx *gorm.DB) (int64, error)) (int64, error) {
+	var rows int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(delSQL, delArgs...).Error; err != nil {
+			return err
+		}
+		n, err := insert(tx)
+		rows = n
+		return err
+	})
+	return rows, err
+}
+
+// bucketBound renders "<col> <op> ?" for comparing a truncated bucket column
+// against a driver-bound time. SQLite stores buckets as TEXT written by the
+// trunc expression ('2026-11-02 14:00:00', no zone) while driver-bound times
+// carry a zone suffix ('2026-11-02 14:00:00+00:00'); a direct text comparison
+// between the two forms flips at exact bucket boundaries (string-prefix
+// rules), so the bound goes through the same trunc expression to keep both
+// sides canonical. PG/MySQL compare server-side against typed values — the
+// raw bound is exact there, and gran "" forces it (needed when the window
+// edge deliberately falls INSIDE a bucket, e.g. "now" as the rolling-hourly
+// upper bound so the in-progress bucket stays in scope).
+func (s *DataLensAggregatorService) bucketBound(col, op, gran string) string {
+	if gran != "" && s.d.Name() == "sqlite" {
+		return fmt.Sprintf("%s %s %s", col, op, s.d.DateTrunc(gran, "?"))
+	}
+	return fmt.Sprintf("%s %s ?", col, op)
 }
 
 func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, end time.Time) (string, []any) {
@@ -273,8 +329,8 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 		s.d.ConditionalSumCol("tool_output_tokens", ctxAnalyzedCond)+" AS ctx_tool_output_tokens",
 		s.d.ConditionalSumCol("context_window", ctxAnalyzedCond)+" AS ctx_total_window",
 		s.d.ConditionalCountWhere(ctxAnalyzedCond)+" AS ctx_analyzed_count",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 1 != 0")+" AS ctx_overflow_count",
-		s.d.ConditionalSum(ctxAnalyzedCond+" AND analysis_flags & 8 != 0")+" AS ctx_window_unknown_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND (analysis_flags & 1) != 0")+" AS ctx_overflow_count",
+		s.d.ConditionalSum(ctxAnalyzedCond+" AND (analysis_flags & 8) != 0")+" AS ctx_window_unknown_count",
 		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 0 AND context_utilization_bp < 5000")+" AS ctx_util_bucket_lt50",
 		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 5000 AND context_utilization_bp < 8000")+" AS ctx_util_bucket_50_80",
 		s.d.ConditionalSum(ctxAnalyzedCond+" AND context_utilization_bp >= 8000 AND context_utilization_bp < 9500")+" AS ctx_util_bucket_80_95",
@@ -286,41 +342,11 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 	groupBy = append(groupBy, dimGroups...)
 	groupBy = append(groupBy, statusGroupCASE(), hourTrunc, "currency")
 
-	// ON CONFLICT target
-	conflictCols := []string{
-		"org_id", "agg_level",
-		"COALESCE(team_id, -1)", "COALESCE(api_key_id, -1)",
-		"COALESCE(provider_id, -1)", "COALESCE(model_name, '')",
-		"COALESCE(route_type, '')", "status_group", "hour_bucket", "currency",
-	}
-
-	// DO UPDATE SET clause — all metric columns
-	updateCols := []string{
-		"request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
-		"total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples",
-		"total_first_token_ms", "first_token_samples",
-		"error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits",
-		"distinct_sessions", "distinct_keys",
-		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
-		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
-		"latency_bucket_5000", "latency_bucket_slow",
-		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
-		"ctx_tool_output_tokens", "ctx_total_window",
-		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
-		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
-	}
-	var setParts []string
-	for _, col := range updateCols {
-		setParts = append(setParts, col+" = EXCLUDED."+col)
-	}
-
 	sql := fmt.Sprintf(
-		"INSERT INTO datalens_hourly_metrics (%s)\nSELECT %s\nFROM usage_logs\nWHERE created_at >= $1 AND created_at < $2 AND org_id IS NOT NULL\nGROUP BY %s\nON CONFLICT (%s) DO UPDATE SET %s",
+		"INSERT INTO datalens_hourly_metrics (%s)\nSELECT %s\nFROM usage_logs\nWHERE created_at >= ? AND created_at < ? AND org_id IS NOT NULL\nGROUP BY %s",
 		strings.Join(insertCols, ", "),
 		strings.Join(selectExprs, ",\n"),
 		strings.Join(groupBy, ", "),
-		strings.Join(conflictCols, ", "),
-		strings.Join(setParts, ", "),
 	)
 
 	return sql, []any{start, end}
@@ -400,53 +426,31 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 		dayTrunc, "currency",
 	}
 
-	// ON CONFLICT
-	conflictCols := []string{
-		"org_id", "agg_level",
-		"COALESCE(team_id, -1)", "COALESCE(api_key_id, -1)",
-		"COALESCE(provider_id, -1)", "COALESCE(model_name, '')",
-		"COALESCE(route_type, '')", "status_group", "day_bucket", "currency",
-	}
-
-	// DO UPDATE SET: same as hourly but using daily column names.
-	updateCols := []string{
-		"request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
-		"total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples",
-		"total_first_token_ms", "first_token_samples",
-		"error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits",
-		"distinct_sessions", "distinct_keys",
-		"latency_bucket_50", "latency_bucket_100", "latency_bucket_200",
-		"latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000",
-		"latency_bucket_5000", "latency_bucket_slow",
-		"ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens",
-		"ctx_tool_output_tokens", "ctx_total_window",
-		"ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count",
-		"ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95",
-	}
-	var setParts []string
-	for _, col := range updateCols {
-		setParts = append(setParts, col+" = EXCLUDED."+col)
-	}
-
 	sql := fmt.Sprintf(
-		"INSERT INTO datalens_daily_metrics (%s)\nSELECT %s\nFROM datalens_hourly_metrics\nWHERE hour_bucket >= $1 AND hour_bucket < $2\nGROUP BY %s\nON CONFLICT (%s) DO UPDATE SET %s",
+		"INSERT INTO datalens_daily_metrics (%s)\nSELECT %s\nFROM datalens_hourly_metrics\nWHERE %s AND %s\nGROUP BY %s",
 		strings.Join(insertCols, ", "),
 		strings.Join(selectExprs, ",\n"),
+		s.bucketBound("hour_bucket", ">=", "day"),
+		s.bucketBound("hour_bucket", "<", "day"),
 		strings.Join(groupBy, ", "),
-		strings.Join(conflictCols, ", "),
-		strings.Join(setParts, ", "),
 	)
 
 	t0 := time.Now()
-	result := s.db.WithContext(ctx).Exec(sql, dayStart, dayEnd)
+	// One statement covers every agg_level (GROUP BY includes agg_level), so
+	// the delete clears the window for all levels at once.
+	rows, err := s.replaceWindow(ctx, "",
+		"DELETE FROM datalens_daily_metrics WHERE "+
+			s.bucketBound("day_bucket", ">=", "day")+" AND "+
+			s.bucketBound("day_bucket", "<", "day"),
+		[]any{dayStart, dayEnd},
+		func(tx *gorm.DB) (int64, error) {
+			result := tx.Exec(sql, dayStart, dayEnd)
+			return result.RowsAffected, result.Error
+		})
 	elapsed := time.Since(t0)
-	rows := 0
-	if result.RowsAffected >= 0 {
-		rows = int(result.RowsAffected)
-	}
-	if result.Error != nil {
-		slog.Warn("datalens aggregator: daily from hourly failed", "error", result.Error, "elapsed_ms", elapsed.Milliseconds())
-		return result.Error
+	if err != nil {
+		slog.Warn("datalens aggregator: daily from hourly failed", "error", err, "elapsed_ms", elapsed.Milliseconds())
+		return err
 	}
 	slog.Info("datalens aggregator: daily from hourly done", "rows", rows, "elapsed_ms", elapsed.Milliseconds())
 	return nil
@@ -466,6 +470,18 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 	}
 
 	var firstErr error
+	// MySQL family: UPDATE ... JOIN (sub) ON ... SET with the target aliased
+	// "d". PG/SQLite: UPDATE ... FROM (sub) ... WHERE — SQLite takes no alias
+	// on the UPDATE target and SET columns must be bare, so both spell the
+	// target by full table name.
+	isMySQL := false
+	if n := s.d.Name(); n == "mysql" || n == "oceanbase" {
+		isMySQL = true
+	}
+	tq := "datalens_daily_metrics"
+	if isMySQL {
+		tq = "d"
+	}
 	for _, level := range s.levels {
 		t0 := time.Now()
 
@@ -476,7 +492,7 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 
 		selectCols = append(selectCols, "sub.org_id")
 		groupByCols = append(groupByCols, "sub.org_id")
-		joinConds = append(joinConds, "d.org_id = sub.org_id")
+		joinConds = append(joinConds, tq+".org_id = sub.org_id")
 
 		for _, dim := range level.Dimensions {
 			col := dimensionColumnMap[dim]
@@ -485,19 +501,19 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 			}
 			selectCols = append(selectCols, "sub."+col)
 			groupByCols = append(groupByCols, "sub."+col)
-			joinConds = append(joinConds, fmt.Sprintf("d.%s = sub.%s", col, col))
+			joinConds = append(joinConds, fmt.Sprintf("%s.%s = sub.%s", tq, col, col))
 			whereExtras = append(whereExtras, dim+" IS NOT NULL")
 		}
 
 		groupByCols = append(groupByCols, "sub.day_bucket", "sub.currency", "sub.status_group")
 		joinConds = append(joinConds,
-			"d.day_bucket = sub.day_bucket",
-			"d.currency = sub.currency",
-			"d.status_group = sub.status_group",
-			fmt.Sprintf("d.agg_level = '%s'", level.Name),
+			tq+".day_bucket = sub.day_bucket",
+			tq+".currency = sub.currency",
+			tq+".status_group = sub.status_group",
+			fmt.Sprintf("%s.agg_level = '%s'", tq, level.Name),
 		)
 
-		whereClause := "created_at >= $1 AND created_at < $2 AND org_id IS NOT NULL"
+		whereClause := "created_at >= ? AND created_at < ? AND org_id IS NOT NULL"
 		if len(whereExtras) > 0 {
 			whereClause += " AND " + strings.Join(whereExtras, " AND ")
 		}
@@ -519,7 +535,9 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 			"currency",
 			statusGroupCASE()+" AS status_group",
 			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) AS sessions",
-			"COUNT(DISTINCT api_key_id) AS keys",
+			// "keys" would collide with MySQL's KEYS keyword (1064 even after
+			// AS / a dot), so the alias is key_count.
+			"COUNT(DISTINCT api_key_id) AS key_count",
 		)
 
 		// Build GROUP BY for subquery with proper column references.
@@ -535,13 +553,24 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 		}
 		subGroupBy = append(subGroupBy, dayTrunc, "currency", statusGroupCASE())
 
-		sql := fmt.Sprintf(
-			"UPDATE datalens_daily_metrics d\nSET distinct_sessions = sub.sessions, distinct_keys = sub.keys\nFROM (\n  SELECT %s\n  FROM usage_logs\n  WHERE %s\n  GROUP BY %s\n) sub\nWHERE %s",
-			strings.Join(subSelectParts, ", "),
-			whereClause,
-			strings.Join(subGroupBy, ", "),
-			strings.Join(joinConds, " AND "),
-		)
+		var sql string
+		if isMySQL {
+			sql = fmt.Sprintf(
+				"UPDATE datalens_daily_metrics d\nJOIN (\n  SELECT %s\n  FROM usage_logs\n  WHERE %s\n  GROUP BY %s\n) sub ON %s\nSET d.distinct_sessions = sub.sessions, d.distinct_keys = sub.key_count",
+				strings.Join(subSelectParts, ", "),
+				whereClause,
+				strings.Join(subGroupBy, ", "),
+				strings.Join(joinConds, " AND "),
+			)
+		} else {
+			sql = fmt.Sprintf(
+				"UPDATE datalens_daily_metrics\nSET distinct_sessions = sub.sessions, distinct_keys = sub.key_count\nFROM (\n  SELECT %s\n  FROM usage_logs\n  WHERE %s\n  GROUP BY %s\n) sub\nWHERE %s",
+				strings.Join(subSelectParts, ", "),
+				whereClause,
+				strings.Join(subGroupBy, ", "),
+				strings.Join(joinConds, " AND "),
+			)
+		}
 
 		result := s.db.WithContext(ctx).Exec(sql, dayStart, dayEnd)
 		elapsed := time.Since(t0)
@@ -565,9 +594,9 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 
 // aggregateToolDaily rolls up per-tool daily counters (M3b DataLens tool
 // dimension). Both sources are folded into one INSERT..SELECT via UNION ALL
-// so a (org, day, key, tool) row written by either source is upserted exactly
-// once per cycle — two separate statements would zero each other's columns
-// under DO UPDATE SET. Idempotent whole-row replacement, same 3-day self-heal
+// so a (org, day, key, tool) row written by either source is written exactly
+// once per cycle — two separate statements would zero each other's columns.
+// Idempotent whole-window replacement (replaceWindow), same 3-day self-heal
 // window as aggregateDaily.
 func (s *DataLensAggregatorService) aggregateToolDaily(ctx context.Context) error {
 	now := time.Now().UTC()
@@ -577,29 +606,34 @@ func (s *DataLensAggregatorService) aggregateToolDaily(ctx context.Context) erro
 
 	sql, args := s.buildToolDailySQL(dayStart, dayEnd)
 	t0 := time.Now()
-	result := s.db.WithContext(ctx).Exec(sql, args...)
+	rows, err := s.replaceWindow(ctx, "tool",
+		"DELETE FROM datalens_tool_daily_metrics WHERE "+
+			s.bucketBound("day_bucket", ">=", "day")+" AND "+
+			s.bucketBound("day_bucket", "<", "day"),
+		[]any{dayStart, dayEnd},
+		func(tx *gorm.DB) (int64, error) {
+			result := tx.Exec(sql, args...)
+			return result.RowsAffected, result.Error
+		})
 	elapsed := time.Since(t0)
-	rows := 0
-	if result.RowsAffected >= 0 {
-		rows = int(result.RowsAffected)
-	}
-	if result.Error != nil {
-		slog.Warn("datalens aggregator: tool daily failed", "error", result.Error, "elapsed_ms", elapsed.Milliseconds())
-		s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), rows, result.Error)
-		return result.Error
+	if err != nil {
+		slog.Warn("datalens aggregator: tool daily failed", "error", err, "elapsed_ms", elapsed.Milliseconds())
+		s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), int(rows), err)
+		return err
 	}
 	slog.Info("datalens aggregator: tool daily done", "rows", rows, "elapsed_ms", elapsed.Milliseconds())
-	s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), rows, nil)
+	s.updateAggStatus(ctx, "tool", "daily", int(elapsed.Milliseconds()), int(rows), nil)
 	return nil
 }
 
-// buildToolDailySQL builds the tool rollup UPSERT.
+// buildToolDailySQL builds the tool rollup INSERT (the caller's
+// replaceWindow deletes the window first — the old PG-only
+// ON CONFLICT expression-target upsert is gone, see replaceWindow).
 // Source 1: mcp_tool_call_logs (per-call truth; only tools/call counts as a
 // tool call, tools/list is discovery traffic). Tool names get the mcp/
 // {server}/{tool} prefix to match agent_toolset_profiles (M4 naming).
 // Source 2: agent_toolset_events (first_seen / definition_changed history).
-// api_key_id 0 (config-auth MCP traffic) normalizes to NULL; the upsert
-// index uses COALESCE(api_key_id, -1), same pattern as the sibling tables.
+// api_key_id 0 (config-auth MCP traffic) normalizes to NULL.
 func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (string, []any) {
 	mcpDay := s.d.DateTrunc("day", "l.created_at")
 	evDay := s.d.DateTrunc("day", "e.created_at")
@@ -609,15 +643,6 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 		"mcp_calls", "mcp_errors", "mcp_blocked",
 		"total_duration_ms", "duration_samples",
 		"first_seen_count", "definition_changed_count", "disappeared_count",
-	}
-	updateCols := []string{
-		"mcp_calls", "mcp_errors", "mcp_blocked",
-		"total_duration_ms", "duration_samples",
-		"first_seen_count", "definition_changed_count", "disappeared_count",
-	}
-	var setParts []string
-	for _, col := range updateCols {
-		setParts = append(setParts, col+" = EXCLUDED."+col)
 	}
 
 	sql := fmt.Sprintf(
@@ -629,7 +654,7 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 			"  SUM(disappeared_count) AS disappeared_count\n"+
 			"FROM (\n"+
 			"  SELECT l.org_id AS org_id, %s AS day_bucket, NULLIF(l.api_key_id, 0) AS api_key_id,\n"+
-			"    'mcp/' || l.server_name || '/' || l.tool_name AS tool_name,\n"+
+			"    %s AS tool_name,\n"+
 			"    COUNT(*) AS mcp_calls,\n"+
 			"    %s AS mcp_errors,\n"+
 			"    %s AS mcp_blocked,\n"+
@@ -637,36 +662,60 @@ func (s *DataLensAggregatorService) buildToolDailySQL(start, end time.Time) (str
 			"    %s AS duration_samples,\n"+
 			"    0 AS first_seen_count, 0 AS definition_changed_count, 0 AS disappeared_count\n"+
 			"  FROM mcp_tool_call_logs l\n"+
-			"  WHERE l.created_at >= $1 AND l.created_at < $2 AND l.method = 'tools/call' AND l.org_id IS NOT NULL\n"+
+			"  WHERE l.created_at >= ? AND l.created_at < ? AND l.method = 'tools/call' AND l.org_id IS NOT NULL\n"+
 			"  GROUP BY l.org_id, %s, NULLIF(l.api_key_id, 0), l.server_name, l.tool_name\n"+
 			"  UNION ALL\n"+
 			"  SELECT e.org_id AS org_id, %s AS day_bucket, NULLIF(e.api_key_id, 0) AS api_key_id,\n"+
-			"    e.tool_name AS tool_name,\n"+
+			"    %s,\n"+ // eventToolExpr carries its own " AS tool_name"
 			"    0 AS mcp_calls, 0 AS mcp_errors, 0 AS mcp_blocked, 0 AS total_duration_ms, 0 AS duration_samples,\n"+
 			"    %s AS first_seen_count,\n"+
 			"    %s AS definition_changed_count,\n"+
 			"    %s AS disappeared_count\n"+
 			"  FROM agent_toolset_events e\n"+
-			"  WHERE e.created_at >= $1 AND e.created_at < $2 AND e.org_id IS NOT NULL\n"+
+			"  WHERE e.created_at >= ? AND e.created_at < ? AND e.org_id IS NOT NULL\n"+
 			"  GROUP BY e.org_id, %s, NULLIF(e.api_key_id, 0), e.tool_name\n"+
 			") src\n"+
-			"GROUP BY org_id, day_bucket, api_key_id, tool_name\n"+
-			"ON CONFLICT (org_id, COALESCE(api_key_id, -1), day_bucket, tool_name) DO UPDATE SET %s",
+			"GROUP BY org_id, day_bucket, api_key_id, tool_name",
 		strings.Join(insertCols, ", "),
 		mcpDay,
+		s.toolNameExpr("l.server_name", "l.tool_name"),
 		s.d.ConditionalSum("l.status = 0"),
 		s.d.ConditionalSum("l.status = -1"),
 		s.d.ConditionalSumCol("l.duration", "l.status = 1"),
 		s.d.ConditionalSum("l.status = 1"),
 		mcpDay,
 		evDay,
+		s.eventToolExpr(),
 		s.d.ConditionalSum("e.event_type = 'first_seen'"),
 		s.d.ConditionalSum("e.event_type = 'definition_changed'"),
 		s.d.ConditionalSum("e.event_type = 'disappeared'"),
 		evDay,
-		strings.Join(setParts, ", "),
 	)
-	return sql, []any{start, end}
+	// Each source binds its own window placeholders (no shared $1/$2).
+	return sql, []any{start, end, start, end}
+}
+
+// toolNameExpr builds 'mcp/' + server + '/' + tool: `||` concatenation on
+// PG-family/SQLite, CONCAT() on the MySQL family (`||` is logical OR there).
+// The MySQL form is wrapped in CONVERT(... USING utf8mb4): the CONCAT result
+// carries the connection-default collation while the event-source UNION arm
+// carries the table collation — MySQL 8 rejects that mix (error 1271), and
+// CONVERT resets both arms to the charset's default collation.
+func (s *DataLensAggregatorService) toolNameExpr(serverCol, toolCol string) string {
+	if n := s.d.Name(); n == "mysql" || n == "oceanbase" {
+		return fmt.Sprintf("CONVERT(CONCAT('mcp/', %s, '/', %s) USING utf8mb4)", serverCol, toolCol)
+	}
+	return fmt.Sprintf("'mcp/' || %s || '/' || %s", serverCol, toolCol)
+}
+
+// eventToolExpr is the event-source arm of the tool rollup's UNION. Same
+// CONVERT normalization as toolNameExpr on MySQL, so both arms agree on one
+// collation (see toolNameExpr).
+func (s *DataLensAggregatorService) eventToolExpr() string {
+	if n := s.d.Name(); n == "mysql" || n == "oceanbase" {
+		return "CONVERT(e.tool_name USING utf8mb4) AS tool_name"
+	}
+	return "e.tool_name AS tool_name"
 }
 
 // backfill aggregates historical data for the last backfillDays days.
@@ -693,12 +742,21 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 		// Hourly aggregation for this day — track rows affected.
 		totalRows := 0
 		for _, level := range s.levels {
-			sql, args := s.buildHourlySQL(level, dayStart, dayEnd)
-			if result := s.db.WithContext(ctx).Exec(sql, args...); result.Error != nil {
+			rows, err := s.replaceWindow(ctx, level.Name,
+				"DELETE FROM datalens_hourly_metrics WHERE agg_level = ? AND "+
+					s.bucketBound("hour_bucket", ">=", "hour")+" AND "+
+					s.bucketBound("hour_bucket", "<", "hour"),
+				[]any{level.Name, dayStart, dayEnd},
+				func(tx *gorm.DB) (int64, error) {
+					sql, args := s.buildHourlySQL(level, dayStart, dayEnd)
+					result := tx.Exec(sql, args...)
+					return result.RowsAffected, result.Error
+				})
+			if err != nil {
 				slog.Warn("datalens aggregator: backfill hourly failed",
-					"level", level.Name, "day", dayStart.Format("2006-01-02"), "error", result.Error)
+					"level", level.Name, "day", dayStart.Format("2006-01-02"), "error", err)
 			} else {
-				totalRows += int(result.RowsAffected)
+				totalRows += int(rows)
 			}
 		}
 
@@ -709,9 +767,17 @@ func (s *DataLensAggregatorService) backfill(ctx context.Context) {
 		}
 		// Tool rollup for this day (M3b).
 		toolSQL, toolArgs := s.buildToolDailySQL(dayStart, dayEnd)
-		if result := s.db.WithContext(ctx).Exec(toolSQL, toolArgs...); result.Error != nil {
+		if _, err := s.replaceWindow(ctx, "tool",
+			"DELETE FROM datalens_tool_daily_metrics WHERE "+
+				s.bucketBound("day_bucket", ">=", "day")+" AND "+
+				s.bucketBound("day_bucket", "<", "day"),
+			[]any{dayStart, dayEnd},
+			func(tx *gorm.DB) (int64, error) {
+				result := tx.Exec(toolSQL, toolArgs...)
+				return result.RowsAffected, result.Error
+			}); err != nil {
 			slog.Warn("datalens aggregator: backfill tool daily failed",
-				"day", dayStart.Format("2006-01-02"), "error", result.Error)
+				"day", dayStart.Format("2006-01-02"), "error", err)
 		}
 		if err := s.updateDailyDistinctCounts(ctx, dayStart, dayEnd); err != nil {
 			slog.Warn("datalens aggregator: backfill daily distinct failed",
@@ -751,7 +817,7 @@ func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) 
 	if hourlyDays > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -hourlyDays)
 		result := s.db.WithContext(ctx).Exec(
-			"DELETE FROM datalens_hourly_metrics WHERE hour_bucket < $1", cutoff,
+			"DELETE FROM datalens_hourly_metrics WHERE hour_bucket < ?", cutoff,
 		)
 		if result.Error != nil {
 			slog.Warn("datalens aggregator: hourly cleanup failed", "error", result.Error)
@@ -765,7 +831,7 @@ func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) 
 	if dailyDays > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -dailyDays)
 		result := s.db.WithContext(ctx).Exec(
-			"DELETE FROM datalens_daily_metrics WHERE day_bucket < $1", cutoff,
+			"DELETE FROM datalens_daily_metrics WHERE day_bucket < ?", cutoff,
 		)
 		if result.Error != nil {
 			slog.Warn("datalens aggregator: daily cleanup failed", "error", result.Error)
@@ -777,7 +843,7 @@ func (s *DataLensAggregatorService) cleanupRetentionPolicy(ctx context.Context) 
 		}
 		// Tool rollup shares the daily retention window (M3b).
 		result = s.db.WithContext(ctx).Exec(
-			"DELETE FROM datalens_tool_daily_metrics WHERE day_bucket < $1", cutoff,
+			"DELETE FROM datalens_tool_daily_metrics WHERE day_bucket < ?", cutoff,
 		)
 		if result.Error != nil {
 			slog.Warn("datalens aggregator: tool daily cleanup failed", "error", result.Error)

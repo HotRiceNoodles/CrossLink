@@ -44,9 +44,10 @@ func TestMySQLE2E_FullServerPath(t *testing.T) {
 		assert.Equal(t, int64(1), count, "table %q should exist", table)
 	}
 
-	// Verify capabilities
+	// Verify capabilities (MySQL has no partial indexes — the dialect declares
+	// false and the test must assert that, not the PG expectation)
 	cap := d.Capabilities()
-	assert.True(t, cap.PartialIndex)
+	assert.False(t, cap.PartialIndex)
 	assert.True(t, cap.AdvisoryLock)
 	assert.True(t, cap.ConcurrentWrites > 1)
 

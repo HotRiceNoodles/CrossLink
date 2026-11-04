@@ -48,7 +48,11 @@ func openParityDBs(t *testing.T) []parityDB {
 		db.Exec("DROP SCHEMA public CASCADE")
 		db.Exec("CREATE SCHEMA public")
 		sqlDB, _ := db.DB()
-		out = append(out, parityDB{name: "postgres", db: db, chainDir: "migrations/postgres", prevTail: 78, newTail: []string{"000079_usage_guardrail_truncated"},
+		// newTail tracks the chain's usage_logs-relevant tail: the full-field
+		// model write needs event_id (000082) — update this window whenever
+		// the chain grows past it (usage-model-relevant: 79-83, plus 93's
+		// fallback index; 92 is the commercial overlay's reserved slot).
+		out = append(out, parityDB{name: "postgres", db: db, chainDir: "migrations/postgres", prevTail: 78, newTail: []string{"000079_usage_guardrail_truncated", "000080_rule_versions", "000081_ssrf_allowlist_config", "000082_usage_event_id", "000083_usage_admin_indexes", "000093_usage_fallback_index"},
 			cleanup: func() { sqlDB.Close() }})
 	} else {
 		t.Logf("postgres test instance unreachable (%v) — postgres subtests will skip", err)
@@ -61,7 +65,17 @@ func openParityDBs(t *testing.T) []parityDB {
 	if db, err := gorm.Open(mysql.Open(myDSN), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)}); err == nil {
 		dropAllTablesMySQL(t, db)
 		sqlDB, _ := db.DB()
-		out = append(out, parityDB{name: "mysql", db: db, chainDir: "migrations/mysql", prevTail: 2, newTail: []string{"000003_usage_guardrail_truncated", "000004_usage_model_parity"},
+		// newTail was frozen at the 000004 era and silently skipped (no MySQL
+		// at 3307); it now spans the whole tail so the deployed-upgrade path
+		// exercises every later up/down (event_id is 000007; community mysql
+		// has no 000015 — that number belongs to the commercial overlay).
+		out = append(out, parityDB{name: "mysql", db: db, chainDir: "migrations/mysql", prevTail: 2, newTail: []string{
+			"000003_usage_guardrail_truncated", "000004_usage_model_parity", "000005_rule_versions",
+			"000006_ssrf_allowlist_config", "000007_usage_event_id", "000008_usage_admin_indexes",
+			"000009_compliance_incidents", "000010_guard_tables", "000011_agent_toolset",
+			"000012_schema_parity", "000013_agent_toolset_alert", "000014_toolset_present",
+			"000016_datalens_tool_daily",
+		},
 			cleanup: func() { sqlDB.Close() }})
 	} else {
 		t.Logf("mysql test instance unreachable (%v) — mysql subtests will skip", err)
