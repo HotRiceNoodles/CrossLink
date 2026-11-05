@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crosslink-guard 控制台</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+  .card{max-width:640px;padding:40px 48px;border:1px solid #1e293b;border-radius:12px;background:#111827}
+  h1{margin:0 0 12px;font-size:20px}
+  p{margin:8px 0;color:#94a3b8;line-height:1.7;font-size:14px}
+  code{background:#1e293b;padding:2px 6px;border-radius:4px;font-size:13px;color:#7dd3fc}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>crosslink-guard 控制台未打包</h1>
+  <p>当前二进制内嵌的是占位页。单进程交付需要在构建期用控制台产物替换本目录后重新编译：</p>
+  <p><code>crosslink-guard-console/scripts/embed-into-guard.sh|ps1</code></p>
+  <p>或使用独立静态部署模式：控制台 dist/ 由 nginx 等静态服务托管，Admin API 反代至 guard 的 <code>/admin/api</code>。</p>
+  <p>管理与检测 API 不受影响：<code>/admin/api/*</code>、<code>/api/v1/*</code>、<code>/mirror/*</code>、<code>/metrics</code>。</p>
+</div>
+</body>
+</html>
