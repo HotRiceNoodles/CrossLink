@@ -87,6 +87,33 @@ type DBConfig struct {
 	ConnMaxIdleTime time.Duration
 }
 
+// gormRuntimeConfig is the shared GORM runtime configuration for every
+// dialect's InitDB:
+//
+//   - SkipDefaultTransaction: GORM's implicit BEGIN/COMMIT wrapper around
+//     single writes buys nothing here (each write is one statement and stays
+//     atomic on its own) and adds two round trips per write. Explicit
+//     Transaction() calls are unaffected.
+//   - PrepareStmt: the hot paths (usage-log insert, budget/rate-limit reads,
+//     aggregator SQL) run a bounded set of fixed-shape statements; caching
+//     their prepared statements removes a parse/plan round trip each.
+//
+// PrepareStmt safety: migrations run through golang-migrate's own connection,
+// not this handle, so they never populate or invalidate the statement cache.
+// The only in-process DDL — the daily EnsureMonthlyPartitions renewal
+// (app.go) — runs CREATE TABLE IF NOT EXISTS ... PARTITION OF / REORGANIZE
+// PARTITION, which never changes a cached statement's result type (PG's
+// "cached plan must not change result type" fires only on column changes;
+// MySQL re-prepares invalidated statements transparently). Shape cardinality
+// is bounded: the variable-arity IN lists in the DataLens filter builder key
+// the cache by arity, not per request.
+func gormRuntimeConfig() *gorm.Config {
+	return &gorm.Config{
+		SkipDefaultTransaction: true,
+		PrepareStmt:            true,
+	}
+}
+
 // applyPoolOverrides copies non-zero config pool settings over the dialect's
 // recommended PoolConfig.
 func applyPoolOverrides(pool PoolConfig, cfg DBConfig) PoolConfig {

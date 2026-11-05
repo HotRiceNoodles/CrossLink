@@ -65,7 +65,7 @@ func (k *KingbaseDialect) InitDB() (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
 
-	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), gormRuntimeConfig())
 	if err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("open kingbase gorm: %w", err)

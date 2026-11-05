@@ -108,9 +108,16 @@ func kingbaseTestDSN() string {
 // dropAllTablesMySQL drops all tables in the current MySQL database.
 func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	db.Exec("SET FOREIGN_KEY_CHECKS = 0")
-	db.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	db.Exec(`CREATE PROCEDURE drop_all_tables()
+	// Execute via the raw *sql.DB (text protocol): CREATE/DROP PROCEDURE
+	// cannot be run as prepared statements (MySQL error 1295), and handles
+	// from InitDB now run with PrepareStmt.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get raw sql.DB: %v", err)
+	}
+	sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 0")
+	sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
+	sqlDB.Exec(`CREATE PROCEDURE drop_all_tables()
 	BEGIN
 		DECLARE done INT DEFAULT FALSE;
 		DECLARE tname VARCHAR(128);
@@ -125,7 +132,7 @@ func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
 		END LOOP;
 		CLOSE cur;
 	END`)
-	db.Exec("CALL drop_all_tables()")
-	db.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	db.Exec("SET FOREIGN_KEY_CHECKS = 1")
+	sqlDB.Exec("CALL drop_all_tables()")
+	sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
+	sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 1")
 }

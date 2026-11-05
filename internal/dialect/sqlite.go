@@ -66,7 +66,7 @@ func (s *SQLiteDialect) InitDB() (*gorm.DB, error) {
 	// 2. glebarez/sqlite pure Go driver with PRAGMA via DSN
 	// busy_timeout is hardcoded to 5000ms by the driver itself
 	dsn := s.cfg.SQLitePath + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), gormRuntimeConfig())
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

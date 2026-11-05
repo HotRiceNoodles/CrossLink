@@ -55,7 +55,7 @@ func (m *MySQLDialect) PartitionSupport() PartitionSupport { return PartitionNat
 
 // InitDB opens a GORM connection to MySQL with pool settings.
 func (m *MySQLDialect) InitDB() (*gorm.DB, error) {
-	db, err := gorm.Open(mysql.Open(m.dsn()), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(m.dsn()), gormRuntimeConfig())
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
 	}

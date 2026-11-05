@@ -13,6 +13,7 @@ import (
 // TestMySQLE2E_FullServerPath validates the complete MySQL dialect+migration lifecycle:
 // InitDB → clean slate → RunMigrations → verify tables → insert → Shutdown → re-open → re-migrate (idempotent).
 func TestMySQLE2E_FullServerPath(t *testing.T) {
+	t.Chdir("../..") // RunMigrations resolves migrations/mysql relative to repo root
 	cfg := mysqlTestDBConfig()
 	d := NewMySQLDialect(cfg)
 

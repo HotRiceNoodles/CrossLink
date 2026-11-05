@@ -64,7 +64,7 @@ func (p *PostgresDialect) PartitionSupport() PartitionSupport {
 
 // InitDB opens a GORM connection to PostgreSQL with pool settings.
 func (p *PostgresDialect) InitDB() (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(p.dsn()), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(p.dsn()), gormRuntimeConfig())
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
