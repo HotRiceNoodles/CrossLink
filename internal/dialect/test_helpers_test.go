@@ -115,9 +115,9 @@ func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
 	if err != nil {
 		t.Fatalf("get raw sql.DB: %v", err)
 	}
-	sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 0")
-	sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	sqlDB.Exec(`CREATE PROCEDURE drop_all_tables()
+	_, _ = sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 0") // best-effort teardown
+	_, _ = sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
+	if _, err := sqlDB.Exec(`CREATE PROCEDURE drop_all_tables()
 	BEGIN
 		DECLARE done INT DEFAULT FALSE;
 		DECLARE tname VARCHAR(128);
@@ -131,8 +131,12 @@ func dropAllTablesMySQL(t *testing.T, db *gorm.DB) {
 			PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 		END LOOP;
 		CLOSE cur;
-	END`)
-	sqlDB.Exec("CALL drop_all_tables()")
-	sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables")
-	sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 1")
+	END`); err != nil {
+		t.Fatalf("create drop_all_tables procedure: %v", err)
+	}
+	if _, err := sqlDB.Exec("CALL drop_all_tables()"); err != nil {
+		t.Fatalf("drop all tables: %v", err)
+	}
+	_, _ = sqlDB.Exec("DROP PROCEDURE IF EXISTS drop_all_tables") // best-effort cleanup
+	_, _ = sqlDB.Exec("SET FOREIGN_KEY_CHECKS = 1")
 }

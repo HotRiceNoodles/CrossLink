@@ -43,7 +43,7 @@ func safeStreamPreview(result *GuardrailResult) string {
 		if strings.HasPrefix(value, "[CREDENTIAL:") && strings.HasSuffix(value, "]") {
 			safe := true
 			for _, r := range value[len("[CREDENTIAL:") : len(value)-1] {
-				if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+				if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
 					safe = false
 				}
 			}
