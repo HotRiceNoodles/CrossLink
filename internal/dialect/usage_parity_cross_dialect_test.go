@@ -52,7 +52,7 @@ func openParityDBs(t *testing.T) []parityDB {
 		// model write needs event_id (000082) — update this window whenever
 		// the chain grows past it (usage-model-relevant: 79-83, plus 93's
 		// fallback index; 92 is the commercial overlay's reserved slot).
-		out = append(out, parityDB{name: "postgres", db: db, chainDir: "migrations/postgres", prevTail: 78, newTail: []string{"000079_usage_guardrail_truncated", "000080_rule_versions", "000081_ssrf_allowlist_config", "000082_usage_event_id", "000083_usage_admin_indexes", "000093_usage_fallback_index"},
+		out = append(out, parityDB{name: "postgres", db: db, chainDir: "migrations/postgres", prevTail: 78, newTail: []string{"000079_usage_guardrail_truncated", "000080_rule_versions", "000081_ssrf_allowlist_config", "000082_usage_event_id", "000083_usage_admin_indexes", "000092_usage_fallback_index"},
 			cleanup: func() { sqlDB.Close() }})
 	} else {
 		t.Logf("postgres test instance unreachable (%v) — postgres subtests will skip", err)
