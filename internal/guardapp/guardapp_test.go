@@ -109,15 +109,25 @@ func TestBootstrapSeedsIdempotently(t *testing.T) {
 		t.Fatalf("seed counts: roles=%d users=%d orgs=%d", roleCount, userCount, orgCount)
 	}
 
-	// admin 权限齐备（ValidActions 全量）
+	// admin 权限齐备（ValidActions 全量）。迁移链也会为 admin 种
+	// ValidActions 之外的动作位（如 toolset:list——Pro 档动作刻意不进
+	// ValidActions），因此断言为超集而非精确计数。
 	adminRoleID, err := roleIDByName(db, model.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var permCount int64
-	db.Model(&model.RolePermission{}).Where("role_id = ?", adminRoleID).Count(&permCount)
-	if permCount != int64(len(model.ValidActions)) {
-		t.Fatalf("admin permissions: got %d want %d", permCount, len(model.ValidActions))
+	var adminPerms []model.RolePermission
+	if err := db.Where("role_id = ?", adminRoleID).Find(&adminPerms).Error; err != nil {
+		t.Fatal(err)
+	}
+	have := make(map[string]bool, len(adminPerms))
+	for _, p := range adminPerms {
+		have[p.Action] = true
+	}
+	for action := range model.ValidActions {
+		if !have[action] {
+			t.Fatalf("admin missing action %q (got %d permissions)", action, len(adminPerms))
+		}
 	}
 
 	// 幂等：重复 Bootstrap 不再创建
