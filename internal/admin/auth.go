@@ -100,13 +100,14 @@ func resolveLoginResponse(c *gin.Context, user *model.User,
 }
 
 type Claims struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	RoleID   int64  `json:"role_id"`
-	RoleName string `json:"role_name"`
-	TeamID   int64  `json:"team_id,omitempty"`
-	OrgID    int64  `json:"org_id,omitempty"`
-	OrgRole  string `json:"org_role,omitempty"`
+	UserID      int64  `json:"user_id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name,omitempty"` // 刷新后 /auth/permissions 不含用户信息，前端从 JWT 恢复展示名（2026-11-09）
+	RoleID      int64  `json:"role_id"`
+	RoleName    string `json:"role_name"`
+	TeamID      int64  `json:"team_id,omitempty"`
+	OrgID       int64  `json:"org_id,omitempty"`
+	OrgRole     string `json:"org_role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -132,13 +133,14 @@ func GenerateToken(user *model.User, roleName string, teamID int64, orgID int64,
 func generateTokenWithSessionID(user *model.User, roleName string, teamID int64, orgID int64, orgRole string, sessionID string, cfg config.AdminConfig, cp crypto.CryptoProvider) (string, error) {
 	expiry := time.Duration(cfg.TokenExpiry) * time.Hour
 	claims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		RoleID:   user.RoleID,
-		RoleName: roleName,
-		TeamID:   teamID,
-		OrgID:    orgID,
-		OrgRole:  orgRole,
+		UserID:      user.ID,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		RoleID:      user.RoleID,
+		RoleName:    roleName,
+		TeamID:      teamID,
+		OrgID:       orgID,
+		OrgRole:     orgRole,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        sessionID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
