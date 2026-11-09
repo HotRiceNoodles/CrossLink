@@ -11,6 +11,7 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/guardrail"
+	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
@@ -25,8 +26,14 @@ const bootstrapPassword = "not-default"
 
 // newTestAdminAPI 组管理面测试服务：真实迁移链 + Bootstrap 种子 + 权限缓存。
 // 登录节流是包级全局，测试间复位避免串扰。
+// 档位：guard 的规则 CRUD 是其核心流程，测试以 Pro 档运行（2026-11-09 产品
+// 决策将护栏 CRUD 上移 Pro；社区档对 guardrail:* 的 403 由 middleware 包的
+// TestRequireAction_TierBlocked 钉住），测毕恢复社区门。
 func newTestAdminAPI(t *testing.T) (*gin.Engine, *App, *gorm.DB) {
 	t.Helper()
+	prev := license.G()
+	license.SetGlobalForTest(license.NewGate(&license.VerifiedToken{Tier: license.TierPro}))
+	t.Cleanup(func() { license.SetGlobalForTest(prev) })
 	db, tokenRepo, cache, tokens := newTestApp(t)
 	t.Cleanup(func() {
 		logins.mu.Lock()

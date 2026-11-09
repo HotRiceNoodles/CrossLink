@@ -139,7 +139,9 @@ func TestRequireAction_TierBlocked(t *testing.T) {
 		expected int
 	}{
 		{"community allows provider:list", "provider:list", 200},
-		{"community allows guardrail:list", "guardrail:list", 200},
+		// 2026-11-09 产品决策：护栏 CRUD 上移 Pro——社区版（tier gate 为空=社区）
+		// 对 guardrail:list 403，与 error_rule:* 同待遇。
+		{"community blocks guardrail:list (Pro since 2026-11-09)", "guardrail:list", 403},
 		{"db missing blocks audit:list", "audit:list", 403},
 	}
 
