@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"image"
 	"sync"
 	"time"
 )
@@ -29,18 +30,24 @@ func DefaultSliderConfig() SliderConfig {
 
 // SliderProvider is the self-hosted default CAPTCHA: server-generated puzzle
 // images + trajectory-based Verify. Works in any environment (no external
-// network).
+// network). Backgrounds come from backgroundsDir photos when configured,
+// otherwise from procedural scenes.
 type SliderProvider struct {
-	mu    sync.RWMutex
-	store Store
-	cfg   SliderConfig
+	mu     sync.RWMutex
+	store  Store
+	cfg    SliderConfig
+	photos *photoLibrary
 }
 
-func NewSliderProvider(store Store, cfg SliderConfig) *SliderProvider {
+func NewSliderProvider(store Store, cfg SliderConfig, backgroundsDir string) *SliderProvider {
 	if cfg.BGWidth == 0 {
 		cfg = DefaultSliderConfig()
 	}
-	return &SliderProvider{store: store, cfg: cfg}
+	return &SliderProvider{
+		store:  store,
+		cfg:    cfg,
+		photos: loadPhotoLibrary(backgroundsDir, cfg.BGWidth, cfg.BGHeight),
+	}
 }
 
 // ApplySliderConfig hot-swaps the puzzle geometry (runtime settings).
@@ -66,7 +73,14 @@ func (p *SliderProvider) Issue(ctx context.Context, ip, scene string) (*Challeng
 	gapX := randInt(cfg.PieceSize+20, maxX)
 	gapY := randInt(20, cfg.BGHeight-cfg.PieceSize-20)
 
-	bgPNG, piecePNG := renderSlider(cfg, gapX, gapY)
+	rng := newSceneRNG()
+	var bgImage *image.RGBA
+	if p.photos != nil {
+		bgImage = p.photos.pick(rng, cfg.BGWidth, cfg.BGHeight)
+	} else {
+		bgImage = renderScene(cfg.BGWidth, cfg.BGHeight, rng)
+	}
+	bgJPEG, piecePNG := renderSlider(bgImage, cfg, gapX, gapY)
 
 	if err := p.store.Save(ctx, id, StoredChallenge{
 		GapX:  float64(gapX),
@@ -79,8 +93,9 @@ func (p *SliderProvider) Issue(ctx context.Context, ip, scene string) (*Challeng
 	return &Challenge{
 		CaptchaID:   id,
 		Provider:    "slider",
-		BGImage:     bgPNG,
+		BGImage:     bgJPEG,
 		PuzzleImage: piecePNG,
+		BGMime:      "image/jpeg",
 		BGWidth:     cfg.BGWidth,
 		BGHeight:    cfg.BGHeight,
 		GapY:        gapY,

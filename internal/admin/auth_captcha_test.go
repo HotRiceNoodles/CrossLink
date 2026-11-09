@@ -50,7 +50,7 @@ func newTestGate(t *testing.T) (*captcha.Gate, *captcha.RedisStore) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { rdb.Close() })
 	store := captcha.NewRedisStore(rdb, "captcha:")
-	prov := captcha.NewSliderProvider(store, captcha.DefaultSliderConfig())
+	prov := captcha.NewSliderProvider(store, captcha.DefaultSliderConfig(), "")
 	g := captcha.NewGate(prov, captcha.CaptchaGateConfig{
 		Enabled: true, TrustDays: 7, TrustIPMask: 24, RedisFailOpen: true,
 	}, []byte("test-jwt-secret-0123456789abcdef-test"))

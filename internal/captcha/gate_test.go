@@ -15,7 +15,7 @@ func newTestGate(t *testing.T) (*Gate, *SliderProvider, *RedisStore) {
 	rdb := newRedisClient(mr.Addr())
 	t.Cleanup(func() { rdb.Close() })
 	store := NewRedisStore(rdb, "captcha:")
-	prov := NewSliderProvider(store, DefaultSliderConfig())
+	prov := NewSliderProvider(store, DefaultSliderConfig(), "")
 	g := NewGate(prov, testCaptchaCfg(24, 7*24*time.Hour), []byte("test-jwt-secret-0123456789-test-test"))
 	g.now = func() time.Time { return testNow }
 	return g, prov, store

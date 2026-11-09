@@ -375,11 +375,12 @@ type CaptchaConfig struct {
 }
 
 type CaptchaSliderConfig struct {
-	TolerancePx float64 `mapstructure:"tolerance_px"`
-	MinPoints   int     `mapstructure:"min_points"`
-	BGWidth     int     `mapstructure:"bg_width"`
-	BGHeight    int     `mapstructure:"bg_height"`
-	PieceSize   int     `mapstructure:"piece_size"`
+	TolerancePx    float64 `mapstructure:"tolerance_px"`
+	MinPoints      int     `mapstructure:"min_points"`
+	BGWidth        int     `mapstructure:"bg_width"`
+	BGHeight       int     `mapstructure:"bg_height"`
+	PieceSize      int     `mapstructure:"piece_size"`
+	BackgroundsDir string  `mapstructure:"backgrounds_dir"` // optional dir of real photos; empty = procedural scenes (restart to apply)
 }
 
 type RateLimitConfig struct {
@@ -816,6 +817,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("captcha.slider.min_points", 5)
 	v.SetDefault("captcha.slider.bg_width", 300)
 	v.SetDefault("captcha.slider.bg_height", 150)
+	v.SetDefault("captcha.slider.backgrounds_dir", "")
 
 	v.SetDefault("gateway.concurrency_limit", 2000)
 	v.SetDefault("gateway.provider_timeout", "180s")

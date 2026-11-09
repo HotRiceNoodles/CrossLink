@@ -27,8 +27,9 @@ type Provider interface {
 type Challenge struct {
 	CaptchaID   string `json:"captcha_id"`
 	Provider    string `json:"provider"`
-	BGImage     string `json:"bg_image,omitempty"`     // base64 PNG of background with gap hole
+	BGImage     string `json:"bg_image,omitempty"`     // base64 image (BGMime) of background with gap hole
 	PuzzleImage string `json:"puzzle_image,omitempty"` // base64 PNG of the puzzle piece
+	BGMime      string `json:"bg_mime,omitempty"`      // mime of bg_image, e.g. "image/jpeg"
 	BGWidth     int    `json:"bg_width,omitempty"`
 	BGHeight    int    `json:"bg_height,omitempty"`
 	GapY        int    `json:"gap_y,omitempty"` // vertical position of the gap (client fixes piece Y)

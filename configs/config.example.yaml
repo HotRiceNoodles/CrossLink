@@ -202,6 +202,10 @@ captcha:
         bg_width: 300
         bg_height: 150
         piece_size: 44
+        # Optional directory of real background photos (jpg/png, centre-cropped
+        # to the slider). Empty or missing → built-in procedural scenes.
+        # Restart to apply (not a runtime setting).
+        backgrounds_dir: ""
 mcp:
   # Bootstrap defaults — max_servers/tool_cache_ttl/request_timeout editable at
   # runtime in Settings (hot); the rest needs a restart.

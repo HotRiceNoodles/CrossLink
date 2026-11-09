@@ -25,7 +25,9 @@ func buildCaptchaGate(cfg config.CaptchaConfig, rdb *redis.Client, jwtSecret []b
 
 	gateCfg, sliderCfg := captchaConfigsFrom(cfg)
 	store := captcha.NewRedisStore(rdb, "captcha:")
-	provider := captcha.NewSliderProvider(store, sliderCfg)
+	// backgrounds_dir is yaml-only (restart to apply): filesystem paths do
+	// not belong in the runtime-settings registry. Empty → procedural scenes.
+	provider := captcha.NewSliderProvider(store, sliderCfg, cfg.Slider.BackgroundsDir)
 	return captcha.NewGate(provider, gateCfg, jwtSecret)
 }
 
