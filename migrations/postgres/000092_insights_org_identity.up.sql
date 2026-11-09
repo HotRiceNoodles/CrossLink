@@ -1,0 +1,13 @@
+-- 洞察行逻辑身份对齐物理唯一性（保留 NULL=全局语义，不改外键、不造组织 0）：
+-- 旧唯一键 (period_key, scope, scope_id, insight_type) 不含组织身份，与组织过滤的
+-- upsert 不一致（组织上下文遇历史 NULL-org 行 → INSERT 撞唯一索引 → 23505 → 500）。
+-- 方案：新增归一身份生成列 org_key = COALESCE(org_id, 0)（NULL 全局行→0，组织行→org id），
+-- 唯一索引含 org_key：组织 A / 组织 B / 全局（NULL）三者同周期同作用域共存，互不覆盖。
+-- 不回填、不改 org_id 可空性：insights.org_id REFERENCES organizations(id) 外键保持原状。
+-- 本槽位曾由商业 overlay 使用（商业存量库 schema_migrations 已记录 92），现回填与
+-- 000094 内容等价的幂等迁移：新装库经 92 顺序应用；已越过 92 的存量库（golang-migrate
+-- 只向前应用、静默跳过本文件）由 000094 兜底重放，两路收敛同一形态。92/94 成对存在，
+-- 不可只留其一。
+ALTER TABLE insights ADD COLUMN IF NOT EXISTS org_key BIGINT GENERATED ALWAYS AS (COALESCE(org_id, 0)) STORED;
+DROP INDEX IF EXISTS idx_insights_unique;
+CREATE UNIQUE INDEX idx_insights_unique ON insights(period_key, scope, scope_id, insight_type, org_key);
