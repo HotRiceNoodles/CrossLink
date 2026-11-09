@@ -33,10 +33,6 @@ var communityActions = map[string]bool{
 	"mcp:permission":    true,
 	"mcp:logs":          true,
 	"mcp:stats":         true,
-	"error_rule:list":   true,
-	"error_rule:create": true,
-	"error_rule:update": true,
-	"error_rule:delete": true,
 	// System settings — community-core. Powers the Settings page (sidebar +
 	// route guard use system:view) and the dedicated /system/content-log
 	// endpoint. The aggregate /system/settings endpoint itself stays Pro
@@ -48,14 +44,8 @@ var communityActions = map[string]bool{
 	"template:create": true,
 	"template:update": true,
 	"template:delete": true,
-	// Guardrail CRUD (keyword/length/credential_detection engines) — community-core
-	// feature. Pro-only engines (PII/injection/moderation) and guardrail_alert:*
-	// remain Pro-gated.
-	"guardrail:list":   true,
-	"guardrail:create": true,
-	"guardrail:update": true,
-	"guardrail:delete": true,
-	"guardrail:test":   true,
+	// 护栏 CRUD 与容灾错误分类已上移至 proExtraActions（产品决策 2026-11-09：
+	// 社区版整体隐藏「安全与治理」模块）。
 	// crosslink-guard 管理动作位：guard 独立部署运行 Community 档，
 	// 其管理 API 必须在 Community 档可用（网关路由不引用这些动作位）。
 	"guard:token_manage": true,
@@ -88,6 +78,18 @@ var proExtraActions = map[string]bool{
 	"guardrail_alert:update":      true,
 	"guardrail_alert:delete":      true,
 	"guardrail_alert:logs":        true,
+	// 护栏 CRUD 与容灾错误分类 —— Pro 及以上（产品决策 2026-11-09：社区版整体
+	// 隐藏「安全与治理」模块；护栏 CRUD 与 error_rule:* 原为 community-core，
+	// 自该决策起上移至 Pro）。
+	"guardrail:list":    true,
+	"guardrail:create":  true,
+	"guardrail:update":  true,
+	"guardrail:delete":  true,
+	"guardrail:test":    true,
+	"error_rule:list":   true,
+	"error_rule:create": true,
+	"error_rule:update": true,
+	"error_rule:delete": true,
 	"secret:test":                 true,
 	"secret:manage":               true,
 	"agent_shield:view":           true,
