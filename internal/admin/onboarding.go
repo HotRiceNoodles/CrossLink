@@ -77,8 +77,9 @@ type probeModel struct {
 
 // Probe constructs a throwaway provider (never persisted, never logged) and,
 // if the adapter supports it, enumerates upstream models. Adapters without a
-// models endpoint (Anthropic, Azure) fall back to a 1-token chat probe that
-// only verifies connectivity.
+// models endpoint (Azure) fall back to a 1-token chat probe that only verifies
+// connectivity. Anthropic 自 2026-11-10 起实现 ModelsLister（GET /v1/models），
+// probe 可正常列出其模型目录。
 func (h *OnboardingHandler) Probe(c *gin.Context) {
 	var input probeRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -185,12 +186,14 @@ type onboardingKeyInput struct {
 type onboardingRequest struct {
 	Provider      onboardingProviderInput `json:"provider" binding:"required"`
 	Models        []onboardingModelInput  `json:"models"`
-	Key           onboardingKeyInput      `json:"key" binding:"required"`
-	ReuseProvider bool                    `json:"reuse_provider"` // skip provider creation if name exists, just add models + key
+	// Key 可选（2026-11-10）：向导只做 供应商+映射 接入——生成的密钥明文从不展示，
+	// 用户拿不到却被动创建属无意义副作用；需要密钥在「API 密钥」页创建（明文只显一次可复制）。传了仍按原规则建。
+	Key           *onboardingKeyInput     `json:"key"`
+	ReuseProvider bool                    `json:"reuse_provider"` // skip provider creation if name exists, just add models (+ key)
 }
 
-// Commit creates provider + models + api key + hash in a single transaction.
-// Any failure rolls back all three tables. Post-transaction side effects
+// Commit creates provider + models (+ optional api key + hash) in a single transaction.
+// Any failure rolls back all tables. Post-transaction side effects
 // (registry sync, cache flush, audit) run best-effort and never undo the data.
 func (h *OnboardingHandler) Commit(c *gin.Context) {
 	var input onboardingRequest
@@ -221,13 +224,15 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			return
 		}
 	}
-	if input.Key.MaxBudget < 0 {
-		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "key.max_budget must be non-negative")
-		return
-	}
-	if input.Key.ExpiresAt != nil && input.Key.ExpiresAt.Before(time.Now()) {
-		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "key.expires_at must be in the future")
-		return
+	if input.Key != nil {
+		if input.Key.MaxBudget < 0 {
+			errorResp(c, http.StatusBadRequest, ErrPricesNegative, "key.max_budget must be non-negative")
+			return
+		}
+		if input.Key.ExpiresAt != nil && input.Key.ExpiresAt.Before(time.Now()) {
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "key.expires_at must be in the future")
+			return
+		}
 	}
 
 	orgID := GetOrgID(c)
@@ -310,43 +315,49 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		p.ID = existingProvider.ID
 	}
 
-	// --- generate key material (pure CPU, outside tx) ---
-	rawKey, err := service.GenerateRawKey()
-	if err != nil {
-		internalErr(c, err, "generate key failed")
-		return
-	}
-	keyHash := h.cryptoProvider.HashHex([]byte(rawKey))
-	prefix := rawKey[:7]
+	// --- generate key material (pure CPU, outside tx); key 是可选步骤 ---
+	var rawKey, prefix string
+	var key *model.APIKey
+	var hashAlgo string
+	if input.Key != nil {
+		generated, err := service.GenerateRawKey()
+		if err != nil {
+			internalErr(c, err, "generate key failed")
+			return
+		}
+		rawKey = generated
+		keyHash := h.cryptoProvider.HashHex([]byte(rawKey))
+		prefix = rawKey[:7]
 
-	key := &model.APIKey{
-		Name:         input.Key.Name,
-		KeyHash:      keyHash,
-		KeyPrefix:    prefix,
-		Status:       1,
-		TPMLimit:     input.Key.TPMLimit,
-		RPMLimit:     input.Key.RPMLimit,
-		MaxBudget:    input.Key.MaxBudget,
-		BudgetPeriod: input.Key.BudgetPeriod,
-		ExpiresAt:    input.Key.ExpiresAt,
-	}
-	if len(input.Key.AllowedModels) > 0 {
-		key.AllowedModels, _ = json.Marshal(input.Key.AllowedModels)
-	}
-	if uid := GetUserID(c); uid > 0 {
-		key.CreatedByID = &uid
-	}
-	if tid := GetTeamID(c); tid > 0 {
-		key.TeamID = &tid
-	}
-	if orgID != 0 {
-		key.OrgID = &orgID
+		key = &model.APIKey{
+			Name:         input.Key.Name,
+			KeyHash:      keyHash,
+			KeyPrefix:    prefix,
+			Status:       1,
+			TPMLimit:     input.Key.TPMLimit,
+			RPMLimit:     input.Key.RPMLimit,
+			MaxBudget:    input.Key.MaxBudget,
+			BudgetPeriod: input.Key.BudgetPeriod,
+			ExpiresAt:    input.Key.ExpiresAt,
+		}
+		if len(input.Key.AllowedModels) > 0 {
+			key.AllowedModels, _ = json.Marshal(input.Key.AllowedModels)
+		}
+		if uid := GetUserID(c); uid > 0 {
+			key.CreatedByID = &uid
+		}
+		if tid := GetTeamID(c); tid > 0 {
+			key.TeamID = &tid
+		}
+		if orgID != 0 {
+			key.OrgID = &orgID
+		}
+
+		hashAlgo = string(h.cryptoProvider.Algorithms().Hash)
 	}
 
-	hashAlgo := string(h.cryptoProvider.Algorithms().Hash)
-
-	// --- transaction: provider → models → key → hash ---
-	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+	// --- transaction: provider → models → (+ key → hash) ---
+	txErr := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if !reuseMode {
 			if err := tx.Create(p).Error; err != nil {
 				return classifyCreateErr(err, "create provider")
@@ -381,28 +392,30 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 				return classifyCreateErr(err, "create models")
 			}
 		}
-		if err := tx.Create(key).Error; err != nil {
-			return classifyCreateErr(err, "create api key")
-		}
-		hashRecord := &model.APIKeyHash{
-			KeyHash:   keyHash,
-			KeyPrefix: prefix,
-			HashAlgo:  hashAlgo,
-			IsPrimary: true,
-			APIKeyID:  key.ID,
-		}
-		if err := tx.Create(hashRecord).Error; err != nil {
-			return classifyCreateErr(err, "create hash record")
+		if key != nil {
+			if err := tx.Create(key).Error; err != nil {
+				return classifyCreateErr(err, "create api key")
+			}
+			hashRecord := &model.APIKeyHash{
+				KeyHash:   key.KeyHash,
+				KeyPrefix: prefix,
+				HashAlgo:  hashAlgo,
+				IsPrimary: true,
+				APIKeyID:  key.ID,
+			}
+			if err := tx.Create(hashRecord).Error; err != nil {
+				return classifyCreateErr(err, "create hash record")
+			}
 		}
 		return nil
 	})
-	if err != nil {
-		if isDuplicateNameErr(err) {
+	if txErr != nil {
+		if isDuplicateNameErr(txErr) {
 			// Race fallback: provider was inserted between pre-check and tx.
 			errorResp(c, http.StatusConflict, ErrProviderExists, "provider name already exists")
 			return
 		}
-		internalErr(c, err, err.Error())
+		internalErr(c, txErr, txErr.Error())
 		return
 	}
 
@@ -421,14 +434,18 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	if h.cacheSvc != nil {
 		h.cacheSvc.FlushAll(c.Request.Context())
 	}
-	if input.Key.Name != "" && OnKeyCreated != nil {
+	if input.Key != nil && input.Key.Name != "" && OnKeyCreated != nil {
 		OnKeyCreated(input.Key.Name, "", rawKey, "")
 	}
 	if h.auditSvc != nil {
+		auditKey := ""
+		if input.Key != nil {
+			auditKey = input.Key.Name
+		}
 		h.auditSvc.LogFromContext(c, "onboarding:commit", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{
 			"provider_id":     p.ID,
 			"model_count":     len(models),
-			"key_name":        input.Key.Name,
+			"key_name":        auditKey,
 			"api_key_length":  len(input.Provider.APIKey),
 			"reused_provider": reuseMode,
 		}))
@@ -438,13 +455,17 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	for _, mm := range models {
 		modelIDs = append(modelIDs, mm.ID)
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
+	resp := gin.H{
 		"provider_id":     p.ID,
 		"model_ids":       modelIDs,
-		"key":             rawKey,
-		"key_prefix":      prefix,
 		"reused_provider": reuseMode,
-	}})
+	}
+	if key != nil {
+		/* 明文密钥仅在建钥时返回（调用方负责展示一次）；未建钥不含该字段 */
+		resp["key"] = rawKey
+		resp["key_prefix"] = prefix
+	}
+	c.JSON(http.StatusCreated, gin.H{"data": resp})
 }
 
 // encryptProvider mirrors ProviderHandler.encryptProvider but on this handler's encStore.

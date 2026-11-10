@@ -162,6 +162,47 @@ func TestOnboarding_Commit_HappyPath(t *testing.T) {
 	assert.EqualValues(t, 1, hashCount)
 }
 
+// TestOnboarding_Commit_NoKey: 向导不再强制建首密钥（生成的明文从不展示，被动创建属
+// 无意义副作用）——不带 key 时事务只建 供应商+映射，APIKey/APIKeyHash 零行，
+// 响应不含 key/key_prefix 字段。
+func TestOnboarding_Commit_NoKey(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
+		"provider": gin.H{
+			"name": "nokey-provider", "display_name": "NoKey", "adapter_type": "openai_compatible",
+			"base_url": "https://api.openai.com/v1", "api_key": "sk-test",
+		},
+		"models": []gin.H{{"model_name": "gpt-4o", "provider_model": "gpt-4o"}},
+	})
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Data struct {
+			ProviderID int64  `json:"provider_id"`
+			Key        string `json:"key"`
+			KeyPrefix  string `json:"key_prefix"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Greater(t, resp.Data.ProviderID, int64(0))
+	assert.Empty(t, resp.Data.Key, "no key material in response when key step omitted")
+	assert.Empty(t, resp.Data.KeyPrefix)
+
+	var keyCount, hashCount int64
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	db.Model(&model.APIKeyHash{}).Count(&hashCount)
+	assert.EqualValues(t, 0, keyCount, "no APIKey rows should be created")
+	assert.EqualValues(t, 0, hashCount, "no APIKeyHash rows should be created")
+
+	var modelCount int64
+	db.Model(&model.ProviderModel{}).Where("provider_id = ?", resp.Data.ProviderID).Count(&modelCount)
+	assert.EqualValues(t, 1, modelCount)
+}
+
 // --- Commit: transaction rollback (core guarantee) ---
 
 func TestOnboarding_Commit_TransactionRollback(t *testing.T) {
