@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -207,4 +208,44 @@ func TestAnthropicProvider_ExtraConfig_APIVersion(t *testing.T) {
 	}, "key")
 	require.NoError(t, err)
 	assert.Equal(t, "2024-01-01", captured)
+}
+
+func TestAnthropicProvider_ListUpstreamModels(t *testing.T) {
+	// Anthropic /v1/models 信封：data[].id + type（2026-11-10 补 ModelsLister 后 probe 可枚举目录）
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		assert.Equal(t, "1000", r.URL.Query().Get("limit"))
+		assert.Equal(t, "test-key", r.Header.Get("x-api-key"))
+		assert.Equal(t, "2023-06-01", r.Header.Get("anthropic-version"))
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"claude-sonnet-4-20250514","display_name":"Claude Sonnet 4","type":"model"},{"id":"claude-opus-4-20250514","type":"model"}]}`)
+	}))
+	defer server.Close()
+
+	p, err := NewAnthropicProvider("anthropic", server.URL, "test-key", nil, 10*time.Second)
+	require.NoError(t, err)
+
+	models, err := p.ListUpstreamModels(context.Background(), "test-key")
+	require.NoError(t, err)
+	require.Len(t, models, 2)
+	assert.Equal(t, "claude-sonnet-4-20250514", models[0].ID)
+	assert.Equal(t, "model", models[0].OwnedBy)
+	assert.Equal(t, "claude-opus-4-20250514", models[1].ID)
+}
+
+func TestAnthropicProvider_ListUpstreamModels_ErrorStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+	}))
+	defer server.Close()
+
+	p, err := NewAnthropicProvider("anthropic", server.URL, "test-key", nil, 10*time.Second)
+	require.NoError(t, err)
+
+	_, err = p.ListUpstreamModels(context.Background(), "test-key")
+	require.Error(t, err)
 }

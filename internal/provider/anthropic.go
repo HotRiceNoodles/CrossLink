@@ -60,6 +60,53 @@ func NewAnthropicProvider(name, baseURL, apiKey string, extraConfig []byte, time
 
 func (p *AnthropicProvider) Name() string { return p.name }
 
+// ListUpstreamModels enumerates models from Anthropic's GET /v1/models endpoint.
+// 该适配器此前未实现 ModelsLister，接入向导的 probe 对 Anthropic 一律降级为
+// 1-token 聊天探测（models_supported=false，无法列出模型目录）——2026-11-10 补齐，
+// probe 侧按接口断言自动生效（onboarding.go Probe → ModelsLister）。
+// 与 Chat 同一 base_url 约定（不含 /v1，路径内拼接）；单页 limit=1000（API 上限，
+// 实际可见模型数远低于此，未实现 has_more 游标翻页）。
+func (p *AnthropicProvider) ListUpstreamModels(ctx context.Context, apiKey string) ([]UpstreamModel, error) {
+	key := apiKey
+	if key == "" {
+		key = p.apiKey
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/models?limit=1000", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	p.setHeaders(httpReq, key)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseProviderError(resp)
+	}
+
+	// Anthropic 信封：{"data":[{"id":"claude-...","display_name":"...","type":"model",...}]}
+	// type 原样映射 OwnedBy（上游真实字段，不编造归属）。
+	var envelope struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"data"`
+	}
+	if err := decodeBoundedJSON(resp, &envelope, maxAnthropicResponseSize, "anthropic models response"); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	out := make([]UpstreamModel, 0, len(envelope.Data))
+	for _, m := range envelope.Data {
+		if m.ID == "" {
+			continue
+		}
+		out = append(out, UpstreamModel{ID: m.ID, OwnedBy: m.Type})
+	}
+	return out, nil
+}
+
 func (p *AnthropicProvider) Chat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (*domain.OpenAIResponse, error) {
 	anthropicReq, err := translator.OpenAIToAnthropicRequest(req)
 	if err != nil {
