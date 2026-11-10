@@ -623,6 +623,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.DELETE("/providers/:id", middleware.RequireAction(permCache, "provider:delete"), handlers.Provider.Delete)
 		adminGroup.POST("/providers/:id/test", middleware.RequireAction(permCache, "provider:test"), handlers.Provider.Test)
 		adminGroup.GET("/providers/:id/models", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.ListModels)
+		// Stateful catalog enumeration for a SAVED provider: resolves the stored
+		// api_key server-side (probe above is stateless by design — wizard time,
+		// no stored key yet). Same action gate as the DB-mapping list beside it.
+		adminGroup.POST("/providers/:id/models/remote", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.ListRemoteModels)
 		// Onboarding wizard: stateless upstream probe (no RequireAction — login-only,
 		// like /adapters and /system:info) and atomic provider+models+key creator.
 		adminGroup.POST("/providers/probe", handlers.Onboarding.Probe)

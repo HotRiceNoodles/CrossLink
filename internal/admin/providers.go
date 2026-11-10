@@ -411,6 +411,90 @@ func (h *ProviderHandler) ListModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": models})
 }
 
+// ListRemoteModels enumerates the upstream catalog of a SAVED provider using the
+// stored api_key resolved server-side — the stateful counterpart of the wizard's
+// stateless probe (POST /providers/probe takes credentials in the body because
+// at wizard time the provider does not exist yet). model.Provider.APIKey is
+// json:"-" and never sent back to the frontend, so a one-click "sync models"
+// on an existing provider is only possible through this endpoint; the key never
+// leaves the server. No audit/usage row: read-only catalog fetch, no tokens
+// billed (unlike Test, which logs a test usage row).
+func (h *ProviderHandler) ListRemoteModels(c *gin.Context) {
+	orgID := GetOrgID(c)
+	id := parseID(c.Param("id"))
+	if id == 0 {
+		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
+	if err != nil {
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
+		return
+	}
+
+	// Resolve stored secrets on a copy before constructing the adapter (same path as Test).
+	cp := *p
+	apiKey := cp.APIKey
+	if h.secretResolver != nil {
+		resolved, err := h.secretResolver.Resolve(c.Request.Context(), cp.APIKey)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "models_supported": false, "error": "failed to resolve api_key: " + err.Error()}})
+			return
+		}
+		apiKey = resolved
+		cp.APIKey = resolved
+		if len(cp.ExtraConfig) > 0 {
+			var config map[string]any
+			if json.Unmarshal(cp.ExtraConfig, &config) == nil {
+				if err := h.secretResolver.ResolveExtraConfigSecrets(c.Request.Context(), config); err != nil {
+					c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "models_supported": false, "error": "failed to resolve extra_config: " + err.Error()}})
+					return
+				}
+				if data, err := json.Marshal(config); err == nil {
+					cp.ExtraConfig = data
+				}
+			}
+		}
+	}
+
+	prov, err := provider.NewFromModel(&cp, 15*time.Second)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "models_supported": false, "error": "unsupported provider type: " + p.AdapterType}})
+		return
+	}
+
+	lister, ok := prov.(provider.ModelsLister)
+	if !ok {
+		// Adapter without a catalog endpoint (e.g. azure): nothing to sync, the
+		// frontend falls back to manual mapping. No 1-token chat fallback here —
+		// connectivity is Test's job, and a chat probe yields no catalog anyway.
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": true, "models_supported": false}})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	models, err := lister.ListUpstreamModels(ctx, apiKey)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		slog.Error("provider remote models failed", "error", err, "provider_id", p.ID)
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "models_supported": true, "latency_ms": latency, "error": err.Error()}})
+		return
+	}
+	out := make([]probeModel, 0, len(models))
+	for _, m := range models {
+		out = append(out, probeModel{ID: m.ID, OwnedBy: m.OwnedBy})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"success":          true,
+		"models_supported": true,
+		"latency_ms":       latency,
+		"models":           out,
+	}})
+}
+
 // encryptProvider encrypts plaintext api_key and extra_config sensitive fields if encryption is enabled.
 func (h *ProviderHandler) encryptProvider(p *model.Provider) error {
 	if h.encStore == nil {

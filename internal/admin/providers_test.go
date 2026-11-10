@@ -3,9 +3,13 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/gin-gonic/gin"
@@ -281,5 +285,176 @@ func TestProviderHandler_Delete_InvalidID(t *testing.T) {
 	decodeResponse(t, w, &resp)
 	if resp["error_code"] != ErrInvalidID {
 		t.Errorf("error_code = %v, want %s", resp["error_code"], ErrInvalidID)
+	}
+}
+
+// --- ListRemoteModels: stateful catalog enumeration with the STORED key ---
+
+// newSSRFAllowedTestServer starts an httptest server bound to the host's first
+// private interface address and temporarily allowlists that address. Provider
+// transports run the secure-by-default SSRF dialer (loopback/private blocked),
+// and loopback is never allowlistable, so admin-package tests that must place a
+// REAL upstream call bind to the LAN address instead — the same mechanism the
+// runtime uses via CL_GATEWAY_INTERNAL_ALLOW_CIDRS. Skips on hosts without a
+// private interface.
+func newSSRFAllowedTestServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	var ip net.IP
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("enumerate interfaces: %v", err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil && n.IP.IsPrivate() {
+			ip = n.IP
+			break
+		}
+	}
+	if ip == nil {
+		t.Skip("no private interface address; cannot SSRF-allowlist a test upstream")
+	}
+	if err := guardrail.SetInternalAllowlist([]string{ip.String() + "/32"}); err != nil {
+		t.Fatalf("allowlist %s: %v", ip, err)
+	}
+	t.Cleanup(func() { guardrail.ApplyInternalAllowlist(nil) })
+
+	srv := httptest.NewUnstartedServer(h)
+	l, err := net.Listen("tcp", ip.String()+":0")
+	if err != nil {
+		t.Skipf("listen on %s: %v", ip, err)
+	}
+	srv.Listener = l
+	srv.Start()
+	return srv
+}
+
+// TestProviderHandler_ListRemoteModels_UsesStoredKeyServerSide is the contract
+// test for the one-click sync design: the api_key lives only in the DB (json:"-",
+// never returned to the frontend), yet enumeration must authenticate against the
+// upstream — so the handler resolves and uses it server-side.
+func TestProviderHandler_ListRemoteModels_UsesStoredKeyServerSide(t *testing.T) {
+	var gotAuth, gotPath string
+	srv := newSSRFAllowedTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4o-mini"},{"id":"gpt-4o","owned_by":"system"}]}`)
+	}))
+	defer srv.Close()
+
+	repo, _ := defaultProviderMocks()
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: "p", Status: 1, AdapterType: "openai_compatible", BaseURL: srv.URL, APIKey: "stored-secret"}, nil
+	}
+	h := newProviderHandler(repo, nil)
+
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/providers/1/models/remote", nil)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "1"}})
+	h.ListRemoteModels(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data struct {
+			Success         bool         `json:"success"`
+			ModelsSupported bool         `json:"models_supported"`
+			LatencyMs       int64        `json:"latency_ms"`
+			Models          []probeModel `json:"models"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if !resp.Data.Success || !resp.Data.ModelsSupported {
+		t.Errorf("success=%v models_supported=%v, want true/true", resp.Data.Success, resp.Data.ModelsSupported)
+	}
+	if len(resp.Data.Models) != 2 || resp.Data.Models[0].ID != "gpt-4o-mini" || resp.Data.Models[1].ID != "gpt-4o" {
+		t.Errorf("models = %+v, want gpt-4o-mini + gpt-4o", resp.Data.Models)
+	}
+	if gotAuth != "Bearer stored-secret" {
+		t.Errorf("upstream Authorization = %q, want stored key sent server-side", gotAuth)
+	}
+	if gotPath != "/models" {
+		t.Errorf("upstream path = %q, want /models (openai_compatible)", gotPath)
+	}
+}
+
+// Adapters without a catalog (azure_openai/ollama/mock) must report
+// models_supported=false instead of erroring — the UI falls back to manual mapping.
+func TestProviderHandler_ListRemoteModels_AdapterWithoutCatalog(t *testing.T) {
+	repo, _ := defaultProviderMocks()
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: "p", Status: 1, AdapterType: "mock", APIKey: "k"}, nil
+	}
+	h := newProviderHandler(repo, nil)
+
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/providers/1/models/remote", nil)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "1"}})
+	h.ListRemoteModels(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data struct {
+			Success         bool `json:"success"`
+			ModelsSupported bool `json:"models_supported"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if !resp.Data.Success || resp.Data.ModelsSupported {
+		t.Errorf("success=%v models_supported=%v, want true/false", resp.Data.Success, resp.Data.ModelsSupported)
+	}
+}
+
+func TestProviderHandler_ListRemoteModels_NotFound(t *testing.T) {
+	repo, _ := defaultProviderMocks()
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return nil, errors.New("not found")
+	}
+	h := newProviderHandler(repo, nil)
+
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/providers/99/models/remote", nil)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "99"}})
+	h.ListRemoteModels(c)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestProviderHandler_ListRemoteModels_UpstreamError(t *testing.T) {
+	srv := newSSRFAllowedTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"message":"bad key"}}`)
+	}))
+	defer srv.Close()
+
+	repo, _ := defaultProviderMocks()
+	repo.getByIDFn = func(ctx context.Context, orgID, id int64) (*model.Provider, error) {
+		return &model.Provider{ID: id, Name: "p", Status: 1, AdapterType: "openai_compatible", BaseURL: srv.URL, APIKey: "wrong"}, nil
+	}
+	h := newProviderHandler(repo, nil)
+
+	c, w := newTestContext(t, http.MethodPost, "/api/v1/providers/1/models/remote", nil)
+	setAdminContext(c, 1, 1, "admin")
+	setPathParams(c, gin.Params{{Key: "id", Value: "1"}})
+	h.ListRemoteModels(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (probe-style soft fail)", w.Code, http.StatusOK)
+	}
+	var resp struct {
+		Data struct {
+			Success         bool   `json:"success"`
+			ModelsSupported bool   `json:"models_supported"`
+			Error           string `json:"error"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if resp.Data.Success || !resp.Data.ModelsSupported || resp.Data.Error == "" {
+		t.Errorf("soft-fail shape wrong: %+v", resp.Data)
 	}
 }
