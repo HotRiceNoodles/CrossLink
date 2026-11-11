@@ -14,6 +14,14 @@ const (
 	kindPersistent
 )
 
+// String returns the kind name surfaced by the health snapshot API（管理端熔断视图）.
+func (k circuitKind) String() string {
+	if k == kindPersistent {
+		return "persistent"
+	}
+	return "transient"
+}
+
 // CircuitState is a snapshot of a circuit breaker's state (pure read, does not
 // affect probeInFlight single-flight semantics). Higher value = more severe.
 type CircuitState int8
@@ -42,6 +50,7 @@ type ProviderHealthSnapshot struct {
 	Provider string
 	Model    string
 	State    string    // "closed" / "half_open" / "open"
+	Kind     string    // "persistent" / "transient"（打开该电路的失败类别）
 	Until    time.Time // cooldown deadline; zero value = none
 	// OpenCount is how many times this circuit has opened in a row without an
 	// intervening recovery (escalating cooldown factor).
@@ -67,6 +76,7 @@ func (h *HealthTracker) Snapshot() []ProviderHealthSnapshot {
 		snap := ProviderHealthSnapshot{
 			Provider:         name,
 			Model:            model,
+			Kind:             s.kind.String(),
 			OpenCount:        s.openCount,
 			LastErrorType:    s.lastErrType,
 			LastErrorMessage: s.lastErrMsg,
@@ -234,6 +244,22 @@ func (h *HealthTracker) RecordSuccessModel(name, model string) {
 			return // persistent circuit still active — leave it
 		}
 		delete(h.states, name)
+	}
+}
+
+// ForceClear removes the model key and the account key unconditionally — the
+// admin "reset circuit" escape hatch (POST /providers/health/reset). Unlike
+// RecordSuccessModel it ALSO deletes a non-expired persistent account circuit:
+// C1 protects against automatic successes racing a just-set circuit; a manual
+// reset is explicit operator intent and is audited at the call site. Safety vs
+// in-flight half-open probes: their later ClearProbe no-ops on the missing
+// state, and the next real failure re-opens the circuit normally.
+func (h *HealthTracker) ForceClear(name, model string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.states, name)
+	if model != "" {
+		delete(h.states, name+"|"+model)
 	}
 }
 

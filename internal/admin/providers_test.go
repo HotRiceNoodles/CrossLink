@@ -1,12 +1,14 @@
 package admin
 
 import (
+	"encoding/json"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"time"
 	"testing"
 
 	"github.com/crosslink/internal/guardrail"
@@ -456,5 +458,130 @@ func TestProviderHandler_ListRemoteModels_UpstreamError(t *testing.T) {
 	decodeResponse(t, w, &resp)
 	if resp.Data.Success || !resp.Data.ModelsSupported || resp.Data.Error == "" {
 		t.Errorf("soft-fail shape wrong: %+v", resp.Data)
+	}
+}
+
+// --- ProviderHealth：运行时熔断视图（GET /providers/health + POST reset） ---
+
+func newHealthTestHandler(t *testing.T, tracker *provider.HealthTracker) *ProviderHandler {
+	t.Helper()
+	repo, modelRepo := defaultProviderMocks()
+	h := newProviderHandler(repo, modelRepo)
+	h.SetHealthTracker(tracker)
+	return h
+}
+
+// TestProviderCircuits_OpenAndHalfOpen：持久失败 → open 行（kind/recover 秒数/原因全量）；
+// 冷却过期 → half_open（recover=0）；closed 行不返回；响应带 server_now 供前端无偏倒计时。
+func TestProviderCircuits_OpenAndHalfOpen(t *testing.T) {
+	tracker := provider.NewHealthTrackerWithConfig(3, 40*time.Millisecond)
+	tracker.RecordPersistentFailure("bad-prov", "m1", "model", 30*time.Minute)
+	tracker.RecordCause("bad-prov", "m1", "bad_request", "provider bad request: unknown model 'm1'")
+	tracker.RecordTransientFailure("half-prov", "m2", 0) // 阈值未到不开 —— 需 3 次
+	tracker.RecordTransientFailure("half-prov", "m2", 0)
+	tracker.RecordTransientFailure("half-prov", "m2", 0) // 第 3 次 → open（40ms 冷却）
+	time.Sleep(60 * time.Millisecond)                     // 过期 → half_open
+
+	h := newHealthTestHandler(t, tracker)
+	c, w := newTestContext(t, http.MethodGet, "/admin/api/providers/health", nil)
+	setAdminContext(c, 1, 1, "admin")
+	h.Circuits(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ServerNow time.Time `json:"server_now"`
+			Circuits []struct {
+				Provider string `json:"provider"`
+				Model    string `json:"model"`
+				State    string `json:"state"`
+				Kind     string `json:"kind"`
+				RecoverInSeconds int64 `json:"recover_in_seconds"`
+				ErrorType string `json:"error_type"`
+			} `json:"circuits"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if resp.Data.ServerNow.IsZero() {
+		t.Fatal("server_now must be present")
+	}
+	if len(resp.Data.Circuits) != 2 {
+		t.Fatalf("circuits = %+v, want 2 (open + half_open)", resp.Data.Circuits)
+	}
+	byProv := map[string]struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		State    string `json:"state"`
+		Kind     string `json:"kind"`
+		RecoverInSeconds int64 `json:"recover_in_seconds"`
+		ErrorType string `json:"error_type"`
+	}{}
+	for _, r := range resp.Data.Circuits {
+		byProv[r.Provider] = r
+	}
+	open := byProv["bad-prov"]
+	if open.State != "open" || open.Kind != "persistent" || open.ErrorType != "bad_request" {
+		t.Fatalf("open row = %+v", open)
+	}
+	if open.RecoverInSeconds <= 0 || open.RecoverInSeconds > 1800 {
+		t.Fatalf("recover seconds = %d, want (0,1800]", open.RecoverInSeconds)
+	}
+	half := byProv["half-prov"]
+	if half.State != "half_open" || half.Kind != "transient" || half.RecoverInSeconds != 0 {
+		t.Fatalf("half_open row = %+v", half)
+	}
+}
+
+// TestProviderCircuits_ForceClearExcludesClosed：手动清除后电路不再出现在活跃列表。
+func TestProviderCircuits_ForceClearExcludesClosed(t *testing.T) {
+	tracker := provider.NewHealthTracker()
+	tracker.RecordPersistentFailure("p", "m", "model", time.Hour)
+	tracker.ForceClear("p", "m")
+	if !tracker.IsHealthyModel("p", "m") {
+		t.Fatal("ForceClear must clear the circuit")
+	}
+
+	h := newHealthTestHandler(t, tracker)
+	c, w := newTestContext(t, http.MethodGet, "/admin/api/providers/health", nil)
+	setAdminContext(c, 1, 1, "admin")
+	h.Circuits(c)
+
+	var resp struct {
+		Data struct {
+			Circuits []json.RawMessage `json:"circuits"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &resp)
+	if len(resp.Data.Circuits) != 0 {
+		t.Fatalf("cleared circuit must not be listed, got %d rows", len(resp.Data.Circuits))
+	}
+}
+
+// TestResetCircuit_ForcesOpenCircuitClosed：未到期的持久电路也能被管理员闭合
+// （区别于 RecordSuccessModel 的 C1 保护）；空 provider 400。
+func TestResetCircuit_ForcesOpenCircuitClosed(t *testing.T) {
+	tracker := provider.NewHealthTracker()
+	tracker.RecordPersistentFailure("p", "m", "model", time.Hour) // 1 小时持久熔断
+
+	h := newHealthTestHandler(t, tracker)
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/providers/health/reset", gin.H{"provider": "p", "model": "m"})
+	setAdminContext(c, 1, 1, "admin")
+	h.ResetCircuit(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if !tracker.IsHealthyModel("p", "m") {
+		t.Fatal("circuit should be closed after admin reset")
+	}
+
+	/* 空 provider → 400 */
+	c2, w2 := newTestContext(t, http.MethodPost, "/admin/api/providers/health/reset", gin.H{"provider": "  "})
+	setAdminContext(c2, 1, 1, "admin")
+	h.ResetCircuit(c2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("empty provider status = %d, want 400", w2.Code)
 	}
 }

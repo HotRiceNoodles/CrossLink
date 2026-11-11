@@ -549,6 +549,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
 		go infra.RegistrySync.Start(appCtx)
 	}
+	// 运行时熔断视图依赖（provider_health.go；无条件注入）
+	handlers.Provider.SetHealthTracker(infra.Health)
 	// VCR recording/playback: construct fixture repo, enable on providers + mock.
 	fixtureRepo := repository.NewFixtureRepo(db)
 	handlers.Provider.SetFixtureStore(fixtureRepo)
@@ -617,6 +619,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Providers
 		// Intentionally no RequireAction: read-only metadata endpoint, not sensitive.
 		adminGroup.GET("/adapters", handlers.Provider.ListAdapters)
+		// 运行时熔断视图（2026-11-10）：内存态只读快照 + 管理员强制闭合（审计）
+		adminGroup.GET("/providers/health", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.Circuits)
+		adminGroup.POST("/providers/health/reset", middleware.RequireAction(permCache, "provider:update"), handlers.Provider.ResetCircuit)
 		adminGroup.GET("/providers", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.List)
 		adminGroup.POST("/providers", middleware.RequireAction(permCache, "provider:create"), handlers.Provider.Create)
 		adminGroup.PUT("/providers/:id", middleware.RequireAction(permCache, "provider:update"), handlers.Provider.Update)
@@ -646,6 +651,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Keys
 		adminGroup.POST("/keys", middleware.RequireAction(permCache, "key:create"), handlers.Key.Create)
 		adminGroup.GET("/keys", middleware.RequireAction(permCache, "key:list"), handlers.Key.List)
+		// Key usage summary (governance): per-key real month-to-date aggregation
+		// (COUNT + SUM(billable_cost)). Literal path on its own GET tree — gin
+		// builds one tree per HTTP method, so PUT/DELETE /keys/:id never clash.
+		adminGroup.GET("/keys/usage-summary", middleware.RequireAction(permCache, "key:list"), handlers.Usage.KeyUsageSummary)
 		adminGroup.PUT("/keys/:id", middleware.RequireAction(permCache, "key:update"), handlers.Key.Update)
 		adminGroup.DELETE("/keys/:id", middleware.RequireAction(permCache, "key:delete"), handlers.Key.Delete)
 		adminGroup.POST("/keys/:id/regenerate", middleware.RequireAction(permCache, "key:regenerate"), handlers.Key.Regenerate)
@@ -682,6 +691,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// (chat/stream/image/tts/stt/video/responses). Multimodal modes
 		// capability-probe providers via type assertion.
 		playgroundHandler := admin.NewPlaygroundHandler(infra.Resolver, svcs.UsageSvc, svcs.LatencySvc, svcs.ActiveTracker, infra.RetryBudget, guardrailSvc, videoTaskSvc)
+		// 与网关同一分类器（漏注会让试验场路径的确定性 4xx 不触发容灾切换——语义分叉）
+		playgroundHandler.SetClassifier(infra.Classifier)
 		pg := adminGroup.Group("/playground")
 		// Playground traffic consumes team/org budgets (identity from JWT
 		// context: team_id/org_id). Key-level budget/calls don't apply — no API key.

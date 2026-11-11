@@ -31,6 +31,7 @@ type ProviderHandler struct {
 	usageSvc       *service.UsageService
 	latencySvc     *service.LatencyService
 	fixtureStore   provider.FixtureStore // nil = recording disabled
+	health         *provider.HealthTracker // 运行时熔断视图（provider_health.go；SetHealthTracker 注入）
 	// OnRegistryChange is called after a local registry mutation (create/update/delete).
 	// action is "reload" or "remove"; providerName is the affected provider.
 	// When nil (single-instance Community), the call is skipped.
