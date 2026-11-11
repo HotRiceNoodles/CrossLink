@@ -38,6 +38,7 @@ type PlaygroundHandler struct {
 	budget        *provider.RetryBudget
 	guardrailSvc  *guardrail.GuardrailService
 	taskSvc       *service.VideoTaskService
+	classifier    *service.ErrorClassifier
 }
 
 func NewPlaygroundHandler(
@@ -60,6 +61,19 @@ func NewPlaygroundHandler(
 		taskSvc:       taskSvc,
 	}
 	return h
+}
+
+// SetClassifier injects the error classifier used by every fallback engine this
+// handler creates（与 OpenAIHandler 同构）。漏注（2026-11-10 实测）会让确定性 4xx
+// 按瞬时处理、不触发切换——试验场与网关同一执行语义的前提就是同样接线。
+func (h *PlaygroundHandler) SetClassifier(c *service.ErrorClassifier) { h.classifier = c }
+
+// newFallbackEngine 统一构造+接线：所有任务路径（chat/stream/image/tts/video/
+// responses…）共用同一分类器，杜绝某条路径漏注导致容灾语义分叉。
+func (h *PlaygroundHandler) newFallbackEngine(config router.FallbackConfig) *service.FallbackEngine {
+	engine := service.NewFallbackEngine(h.health, config)
+	engine.SetClassifier(h.classifier)
+	return engine
 }
 
 type PlaygroundRequest struct {
@@ -130,6 +144,39 @@ func truncateStr(s string, n int) string {
 	return s[:n]
 }
 
+// playgroundFallback serializes the failover-chain execution for the console:
+// switch count + per-row attempts (skipped/failed/served, latency, error class).
+// 试验场直连 FallbackEngine（与生产网关同一执行语义），链路可见性由此透出——
+// 否则用户无法从控制台判断「是否发生了路由切换」（2026-11-10 需求）。
+func playgroundFallback(result *service.FallbackResult) gin.H {
+	attempts := make([]gin.H, 0, len(result.Attempts))
+	for _, a := range result.Attempts {
+		row := gin.H{
+			"provider": a.ProviderName,
+			"model":    a.ProviderModel,
+			"success":  a.Success,
+			"skipped":  a.Skipped,
+		}
+		if a.LatencyMs > 0 || !a.Success {
+			row["latency_ms"] = a.LatencyMs
+		}
+		if a.ErrorType != "" {
+			row["error_type"] = string(a.ErrorType)
+		}
+		if a.Error != nil {
+			row["error"] = truncateStr(a.Error.Error(), 200)
+		}
+		if a.UpstreamStatus > 0 {
+			row["upstream_status"] = a.UpstreamStatus
+		}
+		if a.Persistent {
+			row["persistent"] = true
+		}
+		attempts = append(attempts, row)
+	}
+	return gin.H{"count": result.FallbackCount, "attempts": attempts}
+}
+
 func (h *PlaygroundHandler) Chat(c *gin.Context) {
 	req, ok := bindPlaygroundRequest(c)
 	if !ok {
@@ -149,7 +196,7 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	openaiReq := &domain.OpenAIRequest{
 		Model:       req.Model,
@@ -289,6 +336,7 @@ func (h *PlaygroundHandler) Chat(c *gin.Context) {
 			"provider":   pn,
 			"tokens":     gin.H{"input": resp.Usage.PromptTokens, "output": resp.Usage.CompletionTokens},
 			"latency_ms": latencyMs,
+			"fallback":   playgroundFallback(result),
 		},
 	})
 }
@@ -312,7 +360,7 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 
 	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 	config := service.ResolveFallbackConfig(routes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	openaiReq := &domain.OpenAIRequest{
 		Model:       req.Model,
@@ -363,7 +411,8 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 
 	if result.FinalError != nil {
 		slog.Error("playground: stream request failed", "model", req.Model, "error", result.FinalError)
-		c.JSON(mapPlaygroundErrorStatus(result.FinalError), gin.H{"error": safeProviderError(result.FinalError)})
+		/* 链路明细随错误透出：全坏链时前端诊断面板仍可呈现逐行尝试（谁失败/谁被跳过） */
+		c.JSON(mapPlaygroundErrorStatus(result.FinalError), gin.H{"error": safeProviderError(result.FinalError), "fallback": playgroundFallback(result)})
 		return
 	}
 
@@ -528,6 +577,7 @@ func (h *PlaygroundHandler) StreamChat(c *gin.Context) {
 			"output":     outputTokens,
 			"latency_ms": latencyMs,
 			"provider":   pn,
+			"fallback":   playgroundFallback(result),
 		},
 	})
 	fmt.Fprintf(c.Writer, "data: %s\n\n", usageData)
@@ -705,7 +755,7 @@ func (h *PlaygroundHandler) ImageGenerate(c *gin.Context) {
 	}
 
 	config := service.ResolveFallbackConfig(imageRoutes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	var totalRetries int
 	result := engine.ExecuteNonStream(c.Request.Context(), imageRoutes,
@@ -1062,7 +1112,7 @@ func (h *PlaygroundHandler) VideoGenerate(c *gin.Context) {
 	}
 
 	config := service.ResolveFallbackConfig(videoRoutes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	var totalRetries int
 	result := engine.ExecuteNonStream(c.Request.Context(), videoRoutes,
@@ -1245,7 +1295,7 @@ func (h *PlaygroundHandler) handleTranscribeOrTranslate(c *gin.Context, isTransl
 	}
 
 	config := service.ResolveFallbackConfig(capable)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	var totalRetries int
 	result := engine.ExecuteNonStream(c.Request.Context(), capable,

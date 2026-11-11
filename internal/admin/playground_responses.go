@@ -106,7 +106,7 @@ func (h *PlaygroundHandler) Responses(c *gin.Context) {
 
 func (h *PlaygroundHandler) responsesNonStream(c *gin.Context, rawBody []byte, req *PlaygroundResponsesRequest, routes []*router.RouteResult, start time.Time) {
 	config := service.ResolveFallbackConfig(routes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 
 	result := engine.ExecuteNonStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
 		pn := route.Provider.Name()
@@ -226,7 +226,7 @@ func (h *PlaygroundHandler) responsesStream(c *gin.Context, rawBody []byte, req 
 		return
 	}
 	config := service.ResolveFallbackConfig(bRoutes)
-	engine := service.NewFallbackEngine(h.health, config)
+	engine := h.newFallbackEngine(config)
 	builder := translator.NewResponsesStreamBuilder("", req.Model)
 
 	res := engine.ExecuteStream(c.Request.Context(), bRoutes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {

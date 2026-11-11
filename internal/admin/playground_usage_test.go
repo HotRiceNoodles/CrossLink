@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"fmt"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -122,5 +123,44 @@ func TestPlaygroundStreamChat_ClientDisconnect_StillRecordsUsage(t *testing.T) {
 			t.Fatal("client-disconnected playground stream was not recorded in usage_logs")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// playgroundFallback 序列化（2026-11-10 容灾链可见性）：count + 逐行尝试，
+// skipped 区分熔断跳过，失败行带 error_type/upstream_status/latency，成功行仅耗时。
+func TestPlaygroundFallback_Serialization(t *testing.T) {
+	result := &service.FallbackResult{
+		FallbackCount: 1,
+		Attempts: []service.FallbackAttempt{
+			{ProviderName: "bad-prov", ProviderModel: "m1", ErrorType: provider.ErrorBadRequest, Error: fmt.Errorf("provider bad request: unknown model"), LatencyMs: 3, UpstreamStatus: 400, Persistent: true},
+			{ProviderName: "skip-prov", ProviderModel: "m1", ErrorType: provider.ErrorServer, Error: fmt.Errorf("circuit breaker open"), Skipped: true},
+			{ProviderName: "good-prov", ProviderModel: "m1", LatencyMs: 210, Success: true},
+		},
+	}
+	got := playgroundFallback(result)
+	if got["count"] != 1 {
+		t.Fatalf("count = %v, want 1", got["count"])
+	}
+	rows := got["attempts"].([]gin.H)
+	if len(rows) != 3 {
+		t.Fatalf("attempts len = %d, want 3", len(rows))
+	}
+	failRow := rows[0]
+	if failRow["error_type"] != "bad_request" || failRow["upstream_status"] != 400 || failRow["skipped"] != false || failRow["persistent"] != true {
+		t.Fatalf("fail row = %#v", failRow)
+	}
+	if _, ok := failRow["error"]; !ok {
+		t.Fatal("fail row should carry error text")
+	}
+	skipRow := rows[1]
+	if skipRow["skipped"] != true {
+		t.Fatalf("skip row = %#v", skipRow)
+	}
+	okRow := rows[2]
+	if okRow["success"] != true || okRow["latency_ms"] != int64(210) {
+		t.Fatalf("ok row = %#v", okRow)
+	}
+	if _, hasErr := okRow["error"]; hasErr {
+		t.Fatal("ok row must not carry error")
 	}
 }
