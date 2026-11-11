@@ -32,6 +32,8 @@ type FallbackAttempt struct {
 	LatencyMs     int64
 	Success       bool
 	Persistent    bool // true if classified as a persistent (quota/billing) failure
+	// Skipped: 该行未被调用——熔断开启被引擎跳过（区分「熔断跳过」与真实失败尝试）。
+	Skipped bool
 	// UpstreamStatus is the provider's HTTP status when the error carried one
 	// (0 = network/timeout/cancel, no upstream response). Persisted in the
 	// usage log's attempts timeline (error observability L2).
@@ -190,6 +192,7 @@ func (e *FallbackEngine) ExecuteNonStream(
 				ErrorType:     provider.ErrorServer,
 				Error:         skipErr,
 				Success:       false,
+				Skipped:       true,
 			})
 			lastErr = skipErr
 			slog.Warn("skipping provider due to circuit breaker", "provider", name,
@@ -358,6 +361,7 @@ func (e *FallbackEngine) ExecuteStream(
 				ErrorType:     provider.ErrorServer,
 				Error:         skipErr,
 				Success:       false,
+				Skipped:       true,
 			})
 			lastErr = skipErr
 			slog.Warn("skipping provider due to circuit breaker", "provider", name,

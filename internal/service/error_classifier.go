@@ -114,6 +114,16 @@ func NewErrorClassifier(loader ruleLoader, interval time.Duration) *ErrorClassif
 // timeout, cancellation) are transient by default and never query the rule table.
 // Rules are evaluated in tie-break order (priority ASC, specific before global,
 // account before model, id ASC); the first quota match wins.
+//
+// Built-in deterministic 4xx (auth / not_found / bad_request) are persistent for
+// THIS provider row without needing a rule: the same request can never succeed
+// against it (dead credential; provider lost or never had the model — catalog
+// drift), but a different chain node may well serve it. Persistent makes the
+// FallbackEngine fail over instead of surfacing the error (a chain that stopped
+// dead on unknown-model was the filed bug) and opens the circuit one-strike.
+// quota rules above still win where configured (they may re-scope). auth is
+// account-scoped (credential is provider-wide); not_found/bad_request are
+// model-scoped (usually a per-model fact).
 func (c *ErrorClassifier) Classify(adapterType string, err error) ClassifiedError {
 	pe, ok := err.(*provider.ProviderError)
 	if !ok {
@@ -125,6 +135,12 @@ func (c *ErrorClassifier) Classify(adapterType string, err error) ClassifiedErro
 				return ClassifiedError{ErrorType: provider.ErrorQuota, Persistent: true, Scope: r.Scope, RuleID: r.ID}
 			}
 		}
+	}
+	switch pe.ErrorType {
+	case provider.ErrorAuth:
+		return ClassifiedError{ErrorType: pe.ErrorType, Persistent: true, Scope: "account"}
+	case provider.ErrorNotFound, provider.ErrorBadRequest:
+		return ClassifiedError{ErrorType: pe.ErrorType, Persistent: true, Scope: "model"}
 	}
 	return ClassifiedError{ErrorType: pe.ErrorType}
 }

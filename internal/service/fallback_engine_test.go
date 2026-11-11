@@ -621,3 +621,51 @@ func TestExecuteStream_NoDeadlineWhenUncapped(t *testing.T) {
 		t.Fatal("result.CancelStream should be nil when StreamMaxDuration is unset")
 	}
 }
+
+// TestBadRequest_BuiltInFailover（2026-11-10 容灾链断裂修复）：主行 400
+// unknown-model（bad_request）不得终止链——对本行确定失败、对下一行可能成
+// 功，须切换。修复前 bad_request 非 Persistent 且不在默认 RetryOn 四类中，
+// 引擎 break 直接把错误抛给客户端（用户双供应商同对外名实测断裂）。
+func TestBadRequest_BuiltInFailover(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{RetryOn: []string{"rate_limit", "server", "network", "timeout"}})
+	engine.SetClassifier(NewErrorClassifier(stubLoader{}, time.Hour)) // 无规则，纯内建判定
+	routes := []*router.RouteResult{makeRouteTyped("a", "openai_compatible"), makeRouteTyped("b", "openai_compatible")}
+	calls := 0
+
+	result := engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, route *router.RouteResult) (any, error) {
+		calls++
+		if route.Provider.Name() == "a" {
+			return nil, &provider.ProviderError{StatusCode: 400, Code: "2013", ErrorType: provider.ErrorBadRequest, Message: "invalid params, unknown model 'x' (2013)"}
+		}
+		return "ok", nil
+	})
+
+	if result.FinalError != nil {
+		t.Fatalf("expected fallback success, got %v", result.FinalError)
+	}
+	if calls != 2 || result.FallbackCount != 1 {
+		t.Fatalf("expected 2 calls + FallbackCount=1 (switch to b), got calls=%d count=%d", calls, result.FallbackCount)
+	}
+	if !result.Attempts[0].Persistent {
+		t.Fatal("bad_request attempt should be marked persistent (one-strike circuit)")
+	}
+}
+
+// TestBadRequest_LastRoute_SurfacesError：链上全部 bad_request → 最终错误
+// 仍是最后一条（不吞错），且逐条记 persistent。
+func TestBadRequest_LastRoute_SurfacesError(t *testing.T) {
+	engine := NewFallbackEngine(nil, router.FallbackConfig{RetryOn: []string{"server"}})
+	engine.SetClassifier(NewErrorClassifier(stubLoader{}, time.Hour))
+	routes := []*router.RouteResult{makeRouteTyped("a", "openai_compatible"), makeRouteTyped("b", "openai_compatible")}
+
+	result := engine.ExecuteNonStream(context.Background(), routes, func(_ context.Context, _ *router.RouteResult) (any, error) {
+		return nil, &provider.ProviderError{StatusCode: 400, ErrorType: provider.ErrorBadRequest, Message: "unknown model"}
+	})
+
+	if result.FinalError == nil {
+		t.Fatal("all-bad chain must surface the error")
+	}
+	if len(result.Attempts) != 2 || !result.Attempts[0].Persistent || !result.Attempts[1].Persistent {
+		t.Fatalf("expected 2 persistent attempts, got %+v", result.Attempts)
+	}
+}

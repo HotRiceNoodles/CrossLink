@@ -115,3 +115,35 @@ func TestClassify_LoadFailure_KeepsLastKnownGood(t *testing.T) {
 		t.Fatal("last-known-good rules must be retained after a failed reload")
 	}
 }
+
+// TestClassify_BuiltIn4xx_PersistentFailover（2026-11-10 容灾链断裂修复）：
+// auth/not_found/bad_request 是「对本行确定失败、换行可能成功」——内建判
+// Persistent 让引擎切下一家并一击开熔断；无需 quota 规则。rate_limit/server
+// 与无类型错误保持非持久（瞬时/未知语义不变）。
+func TestClassify_BuiltIn4xx_PersistentFailover(t *testing.T) {
+	c := NewErrorClassifier(stubLoader{}, time.Hour) // 无规则——纯内建判定
+	auth := c.Classify("openai_compatible", &provider.ProviderError{StatusCode: 401, ErrorType: provider.ErrorAuth, Message: "invalid key"})
+	if !auth.Persistent || auth.ErrorType != provider.ErrorAuth || auth.Scope != "account" {
+		t.Fatalf("auth = %+v, want persistent/account (credential is provider-wide)", auth)
+	}
+	bad := c.Classify("openai_compatible", &provider.ProviderError{StatusCode: 400, ErrorType: provider.ErrorBadRequest, Message: "invalid params, unknown model"})
+	if !bad.Persistent || bad.ErrorType != provider.ErrorBadRequest || bad.Scope != "model" {
+		t.Fatalf("bad_request = %+v, want persistent/model (catalog drift is per-model)", bad)
+	}
+	nf := c.Classify("openai_compatible", &provider.ProviderError{StatusCode: 404, ErrorType: provider.ErrorNotFound})
+	if !nf.Persistent || nf.Scope != "model" {
+		t.Fatalf("not_found = %+v, want persistent/model", nf)
+	}
+	rl := c.Classify("openai_compatible", &provider.ProviderError{StatusCode: 429, ErrorType: provider.ErrorRateLimit})
+	if rl.Persistent {
+		t.Fatal("rate_limit must stay transient (retry-after semantics)")
+	}
+	srv := c.Classify("openai_compatible", &provider.ProviderError{StatusCode: 500, ErrorType: provider.ErrorServer})
+	if srv.Persistent {
+		t.Fatal("server error must stay transient")
+	}
+	untyped := c.Classify("openai_compatible", &provider.ProviderError{Code: "x"})
+	if untyped.Persistent {
+		t.Fatal("untyped ProviderError stays non-persistent")
+	}
+}
