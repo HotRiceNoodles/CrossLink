@@ -538,6 +538,59 @@ func (h *UsageHandler) TeamStats(c *gin.Context) {
 
 // --- Reconciliation Export ---
 
+// --- Key usage summary (governance) ---
+
+// keyUsageRow is the per-key aggregation served by KeyUsageSummary: three
+// calendar windows (day / ISO week / month) in one row so the client can pair
+// each key's spend with its own budget_period limit without a second request.
+type keyUsageRow struct {
+	ApiKeyID      int     `json:"api_key_id"`
+	DayRequests   int64   `json:"day_requests"`
+	DayCost       float64 `json:"day_cost"`
+	WeekRequests  int64   `json:"week_requests"`
+	WeekCost      float64 `json:"week_cost"`
+	MonthRequests int64   `json:"month_requests"`
+	MonthCost     float64 `json:"month_cost"`
+}
+
+// KeyUsageSummary aggregates real usage per API key over three calendar
+// windows (today / current ISO week starting Monday / current month), using
+// billable_cost — the same billing basis as reconciliation and budgets, and
+// the same UTC day/week/month boundaries BudgetService.PeriodKey enforces.
+// It backs the key list's budget-progress column and the detail drawer's
+// traffic section, replacing the old client-side "sum the visible page"
+// estimate. Scoped by org/team exactly like the key list itself, so a
+// non-admin team member only ever sees their own team's consumption.
+func (h *UsageHandler) KeyUsageSummary(c *gin.Context) {
+	now := time.Now().UTC()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	isoWeekday := (int(now.Weekday()) + 6) % 7 // Mon=0 … Sun=6
+	weekStart := dayStart.AddDate(0, 0, -isoWeekday)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	var rows []keyUsageRow
+	tx := applyOrgScope(applyTeamScope(h.db.WithContext(c.Request.Context()).
+		Model(&model.UsageLog{}), c), c).
+		Select("api_key_id, "+
+			"COUNT(CASE WHEN created_at >= ? THEN 1 END) as day_requests, "+
+			"COALESCE(SUM(CASE WHEN created_at >= ? THEN billable_cost END), 0) as day_cost, "+
+			"COUNT(CASE WHEN created_at >= ? THEN 1 END) as week_requests, "+
+			"COALESCE(SUM(CASE WHEN created_at >= ? THEN billable_cost END), 0) as week_cost, "+
+			"COUNT(*) as month_requests, "+
+			"COALESCE(SUM(billable_cost), 0) as month_cost",
+			dayStart, dayStart, weekStart, weekStart).
+		Where("created_at >= ? AND api_key_id IS NOT NULL", monthStart).
+		Group("api_key_id").
+		Scan(&rows)
+	if tx.Error != nil {
+		internalErr(c, tx.Error, "key usage summary failed")
+		return
+	}
+	if rows == nil {
+		rows = []keyUsageRow{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
 type reconciliationRow struct {
 	KeyName      string  `json:"key_name"`
 	KeyPrefix    string  `json:"key_prefix"`
