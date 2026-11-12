@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,9 @@ type loginResult struct {
 	Permissions []string
 	Tier        string
 }
+
+// ErrOrgDisabled：用户所属组织已停用（resolveLoginResponse 返回；登录/改密换发 token 前拒绝）
+var ErrOrgDisabled = errors.New("organization disabled")
 
 // resolveLoginResponse resolves role, team, org, generates a JWT token, and
 // builds the common login response. Shared by LoginHandler, ChangeForcedPasswordHandler,
@@ -74,6 +78,10 @@ func resolveLoginResponse(c *gin.Context, user *model.User,
 			orgRole = member.Role
 			org, err := orgRepo.GetByID(c.Request.Context(), orgID)
 			if err == nil && org != nil {
+				/* 租户停用强制点（登录）：停用租户的用户拒绝登录（403 语义经 ErrOrgDisabled 上抛） */
+				if org.Status != 1 {
+					return nil, ErrOrgDisabled
+				}
 				orgName = org.DisplayName
 			}
 		}
@@ -230,6 +238,17 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 			} else if errors.Is(err, gorm.ErrRecordNotFound) {
 				orgID = 0
 				orgRole = ""
+			}
+		}
+
+		// 租户停用强制点（管理面）：成员身份解析出的 org 已停用 → 拒绝该请求。
+		// 查询失败时放行（与成员解析同口径：DB 抖动不应整租户锁死管理面）；
+		// 平台 admin（orgID=0）不受影响——平台上下文不属于任何租户。
+		if orgID != 0 {
+			var orgStatus struct{ Status int16 }
+			if err := db.WithContext(c.Request.Context()).Select("status").Table("organizations").Where("id = ?", orgID).Scan(&orgStatus).Error; err == nil && orgStatus.Status != 1 {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "organization disabled", "error_code": "org_disabled"})
+				return
 			}
 		}
 
@@ -399,6 +418,13 @@ func LoginHandler(userRepo *repository.UserRepo, teamRepo *repository.TeamRepo, 
 
 		result, err := resolveLoginResponse(c, user, roleRepo, teamRepo, orgRepo, cfg, cp)
 		if err != nil {
+			if errors.Is(err, ErrOrgDisabled) {
+				if auditSvc != nil {
+					auditSvc.LogFailure(c, "auth:login_failed", "auth", user.Username, user.Username, service.AuditDetail(map[string]any{"method": "password", "reason": "org_disabled"}))
+				}
+				c.JSON(http.StatusForbidden, gin.H{"error": "organization disabled", "error_code": "org_disabled"})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 			return
 		}
@@ -578,8 +604,41 @@ func GetPermissionsHandler(roleRepo *repository.RoleRepo, readiness *ReadinessCh
 	}
 }
 
-func LogoutHandler() gin.HandlerFunc {
+func LogoutHandler(cfg config.AdminConfig, auditSvc *service.AuditService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if auditSvc != nil {
+			// Best-effort identity recovery: logout is public (pre-auth), so
+			// the acting user comes from the JWT cookie being cleared. An
+			// already-invalid/expired cookie still logs the event, just with
+			// an empty identity.
+			uid := int64(0)
+			username := ""
+			if tokenStr, _ := c.Cookie("admin_token"); tokenStr != "" {
+				claims := &Claims{}
+				if token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
+					switch t.Method.Alg() {
+					case "HS256", "HS384", "HS512", "HMACSM3":
+					default:
+						return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+					}
+					return []byte(cfg.JWTSecret), nil
+				}); err == nil && token.Valid {
+					uid, username = claims.UserID, claims.Username
+				}
+			}
+			auditSvc.Log(&model.AuditLog{
+				UserID:       uid,
+				Username:     username,
+				Action:       "auth:logout",
+				ResourceType: "auth",
+				ResourceID:   strconv.FormatInt(uid, 10),
+				ResourceName: username,
+				IPAddress:    c.ClientIP(),
+				UserAgent:    c.Request.UserAgent(),
+				Status:       "success",
+				CreatedAt:    time.Now().UTC(),
+			})
+		}
 		c.SetCookie("admin_token", "", -1, "/", "", true, true)
 		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 	}
@@ -618,15 +677,24 @@ func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *reposi
 			ConfirmPassword string `json:"confirm_password" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&input); err != nil {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", "", "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid request")
 			return
 		}
 
 		if input.NewPassword != input.ConfirmPassword {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", "", "", service.AuditDetail(map[string]any{"reason": "password_mismatch"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "passwords do not match")
 			return
 		}
 		if len(input.NewPassword) < 8 {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", "", "", service.AuditDetail(map[string]any{"reason": "password_too_short"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "password must be at least 8 characters")
 			return
 		}
@@ -634,12 +702,18 @@ func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *reposi
 		userID := GetUserID(c)
 		user, err := userRepo.GetByID(c.Request.Context(), userID)
 		if err != nil {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "user_not_found", "error": err.Error()}))
+			}
 			errorResp(c, http.StatusNotFound, "user_not_found", "user not found")
 			return
 		}
 
 		hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcryptCost)
 		if err != nil {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", fmt.Sprintf("%d", user.ID), user.Username, service.AuditDetail(map[string]any{"reason": "hash_failed", "error": err.Error()}))
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
 			return
 		}
@@ -647,12 +721,25 @@ func ChangeForcedPasswordHandler(userRepo *repository.UserRepo, roleRepo *reposi
 		user.PasswordHash = string(hash)
 		user.ForcePasswordChange = false
 		if err := userRepo.Update(c.Request.Context(), user); err != nil {
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", fmt.Sprintf("%d", user.ID), user.Username, service.AuditDetail(map[string]any{"reason": "update_failed", "error": err.Error()}))
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update password"})
 			return
 		}
 
 		result, err := resolveLoginResponse(c, user, roleRepo, teamRepo, orgRepo, cfg, cp)
 		if err != nil {
+			if errors.Is(err, ErrOrgDisabled) {
+				if auditSvc != nil {
+					auditSvc.LogFailure(c, "auth:change_forced_password", "auth", fmt.Sprintf("%d", user.ID), user.Username, service.AuditDetail(map[string]any{"reason": "org_disabled"}))
+				}
+				c.JSON(http.StatusForbidden, gin.H{"error": "organization disabled", "error_code": "org_disabled"})
+				return
+			}
+			if auditSvc != nil {
+				auditSvc.LogFailure(c, "auth:change_forced_password", "auth", fmt.Sprintf("%d", user.ID), user.Username, service.AuditDetail(map[string]any{"reason": "token_generation_failed", "error": err.Error()}))
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 			return
 		}
