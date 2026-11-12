@@ -42,3 +42,20 @@ func TestStore_GetBySeqWithDuplicateRequestIDs(t *testing.T) {
 	// Unknown Seq returns nil.
 	assert.Nil(t, s.Get(99999))
 }
+
+/* 采样策略钳制（0-100 外的收入边界）+ 只记失败开关（2026-11-12 调试数据安全） */
+func TestSamplingPolicyClamp(t *testing.T) {
+	s := NewStore(10, 1024)
+	s.SetSamplingRate(-5)
+	if s.SamplingRate() != 0 {
+		t.Fatalf("negative rate must clamp to 0, got %d", s.SamplingRate())
+	}
+	s.SetSamplingRate(150)
+	if s.SamplingRate() != 100 {
+		t.Fatalf("oversized rate must clamp to 100, got %d", s.SamplingRate())
+	}
+	s.SetOnlyFailed(true)
+	if !s.OnlyFailed() {
+		t.Fatal("only-failed flag must round-trip")
+	}
+}

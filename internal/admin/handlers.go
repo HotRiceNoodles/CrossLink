@@ -110,6 +110,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.AuditSvc,
 			deps.Svcs.KeySvc,
 			deps.Config.Server.Port,
+			deps.DB,
 		),
 		License:     NewLicenseHandler(deps.DB, deps.Config),
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),

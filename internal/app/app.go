@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -250,11 +251,21 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		svcs.UsageSvc.SetContentLogEnabled(logContentSetting.Value == "true")
 	}
 
-	// Debug store
+	// Debug store（容量/体积上限为部署参数；采样策略三键持久化于 system_settings，启动读回）
 	debugStore := debug.NewStore(100, 10*1024*1024)
 	var debugModeSetting model.SystemSetting
 	if err := db.Where("system_settings.key = ?", "debug_mode").First(&debugModeSetting).Error; err == nil {
 		debugStore.SetEnabled(debugModeSetting.Value == "true")
+	}
+	if v := readSystemSetting(db, "debug_sampling_rate"); v != "" {
+		if r, err := strconv.Atoi(v); err == nil {
+			debugStore.SetSamplingRate(r)
+		}
+	} else {
+		debugStore.SetSamplingRate(100) // 缺省全量：开启后即有记录；0 是显式「不记录」策略
+	}
+	if v := readSystemSetting(db, "debug_only_failed"); v != "" {
+		debugStore.SetOnlyFailed(v == "true")
 	}
 
 	// Wire guardrail engine callbacks
@@ -757,6 +768,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// Debug
 		adminGroup.GET("/debug/entries", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.List)
+		adminGroup.GET("/debug/config", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.GetDebugConfig)
+		adminGroup.PUT("/debug/config", middleware.RequireAction(permCache, "debug:clear"), handlers.Debug.UpdateDebugConfig)
 		adminGroup.GET("/debug/entries/:seq", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Get)
 		adminGroup.POST("/debug/entries/:seq/replay", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Replay)
 		adminGroup.DELETE("/debug/entries", middleware.RequireAction(permCache, "debug:clear"), handlers.Debug.Clear)
@@ -1335,3 +1348,12 @@ func (w *deadlineResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // through to the REAL connection instead of treating this wrapper as the
 // terminal writer.
 func (w *deadlineResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// readSystemSetting returns the system_settings value for key, "" when absent.
+func readSystemSetting(db *gorm.DB, key string) string {
+	var s model.SystemSetting
+	if err := db.Where("system_settings.key = ?", key).First(&s).Error; err != nil {
+		return ""
+	}
+	return s.Value
+}

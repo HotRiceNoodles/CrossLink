@@ -52,7 +52,7 @@ func newReplayHandler(t *testing.T, port int, upstream *httptest.Server) *DebugH
 			actualPort = p
 		}
 	}
-	return NewDebugHandler(store, nil, nil, actualPort)
+	return NewDebugHandler(store, nil, nil, actualPort, nil)
 }
 
 func fmtSscanf(s string, v *int) {
@@ -268,7 +268,7 @@ func TestDebug_Replay_OrgAdminCannotReplayForeignOrgKey(t *testing.T) {
 	store.SetEnabled(true)
 	seq := addOrgEntry(t, store, 7)
 
-	h := NewDebugHandler(store, nil, keySvc, 8080)
+	h := NewDebugHandler(store, nil, keySvc, 8080, nil)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
 		"key_id": 5,
 	})
@@ -301,7 +301,7 @@ func TestDebug_Replay_OrgAdminSameOrgKeyMintsTokenNotKeyID(t *testing.T) {
 	store.SetEnabled(true)
 	seq := addOrgEntry(t, store, 7)
 
-	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, upstream.URL))
+	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, upstream.URL), nil)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
 		"key_id": 5,
 	})
@@ -346,7 +346,7 @@ func TestDebug_Replay_EndToEndThroughRealAuth(t *testing.T) {
 	store.SetEnabled(true)
 	seq := addOrgEntry(t, store, 0) // platform-level entry; caller below is platform admin
 
-	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, srv.URL))
+	h := NewDebugHandler(store, nil, keySvc, upstreamPort(t, srv.URL), nil)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
 		"key_id": 5,
 	})

@@ -2,6 +2,7 @@ package debug
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/json"
 	"io"
 	"time"
@@ -85,6 +86,30 @@ func Middleware(store *Store) gin.HandlerFunc {
 		entry.UpstreamCalls = collector.Calls()
 		orgID, _ := c.Get("org_id")
 		entry.OrgID, _ = orgID.(int64)
+
+		// 采样策略（管理端运行时策略，调试数据安全）：onlyFailed 只留失败请求；
+		// samplingRate 按百分比随机丢弃。均为记录前最后判定，不影响请求本身。
+		if store.OnlyFailed() && entry.RespStatus < 400 {
+			return
+		}
+		if rate := store.SamplingRate(); rate < 100 {
+			if rate <= 0 {
+				return
+			}
+			if !sampleHit(rate) {
+				return
+			}
+		}
 		store.Add(entry)
 	}
+}
+
+// sampleHit reports whether this request falls inside a rate% sample window.
+// Uses crypto/rand so an observer cannot predict which requests are recorded.
+func sampleHit(rate int) bool {
+	var b [1]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return true // 读取失败宁可多记（诊断可用性优先），不静默丢
+	}
+	return int(b[0]) < rate*255/100
 }

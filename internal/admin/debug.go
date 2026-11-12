@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"github.com/crosslink/internal/model"
+	"gorm.io/gorm"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -22,15 +24,17 @@ import (
 type DebugHandler struct {
 	store      *debug.Store
 	auditSvc   *service.AuditService
+	db         *gorm.DB // 调试策略持久化（system_settings）；nil=不持久化（测试装配）
 	keySvc     *service.KeyService
 	port       int
 	httpClient *http.Client
 }
 
-func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, keySvc *service.KeyService, port int) *DebugHandler {
+func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, keySvc *service.KeyService, port int, db *gorm.DB) *DebugHandler {
 	return &DebugHandler{
 		store:    store,
 		auditSvc: auditSvc,
+		db:       db,
 		keySvc:   keySvc,
 		port:     port,
 		httpClient: &http.Client{
@@ -56,6 +60,9 @@ type debugEntrySummary struct {
 	ReqBodyLen    int    `json:"req_body_len"`
 	RespBodyLen   int    `json:"resp_body_len"`
 	UpstreamCount int    `json:"upstream_count"`
+	RetryCount    int    `json:"retry_count"`
+	FallbackCount int    `json:"fallback_count"`
+	LastUpstreamError string `json:"last_upstream_error,omitempty"`
 }
 
 func (h *DebugHandler) List(c *gin.Context) {
@@ -67,6 +74,21 @@ func (h *DebugHandler) List(c *gin.Context) {
 	}
 	summaries := make([]debugEntrySummary, 0, len(entries))
 	for _, e := range entries {
+		/* 链路诊断派生：重试/容灾次数与最后一次上游错误——HTTP 200 不代表链路无恙
+		   （可能经两次重试才成功），列表层即可见异常链路 */
+		retryCount, fallbackCount := 0, 0
+		lastErr := ""
+		for _, uc := range e.UpstreamCalls {
+			if uc.IsRetry {
+				retryCount++
+			}
+			if uc.IsFallback {
+				fallbackCount++
+			}
+			if uc.Error != "" {
+				lastErr = uc.Error
+			}
+		}
 		summaries = append(summaries, debugEntrySummary{
 			Seq:           e.Seq,
 			ID:            e.ID,
@@ -81,6 +103,9 @@ func (h *DebugHandler) List(c *gin.Context) {
 			ReqBodyLen:    len(e.ReqBody),
 			RespBodyLen:   len(e.RespBody),
 			UpstreamCount: len(e.UpstreamCalls),
+			RetryCount:    retryCount,
+			FallbackCount: fallbackCount,
+			LastUpstreamError: lastErr,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": summaries})
@@ -137,6 +162,11 @@ func (h *DebugHandler) Get(c *gin.Context) {
 	if orgID := GetOrgID(c); orgID != 0 && entry.OrgID != orgID {
 		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
 		return
+	}
+
+	// 查看原始报文入审计（调试数据安全：查看/重放/清空均可追溯）
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "debug:view", "debug", c.Param("seq"), entry.Path, nil)
 	}
 
 	reqBody := truncateBody(tryPrettyJSON(entry.ReqBody))
@@ -430,4 +460,76 @@ func formatHeadersForDisplay(h map[string][]string) string {
 		}
 	}
 	return b.String()
+}
+
+// --- Debug config（调试数据安全四件套：开关/采样率/只记失败；容量与体积上限只读展示，改配置文件生效） ---
+
+type debugConfigDTO struct {
+	Enabled      bool `json:"enabled"`
+	SamplingRate int  `json:"sampling_rate"` // 0-100：每百次请求记录的百分比（100=全量）
+	OnlyFailed   bool `json:"only_failed"`   // true=仅记录 HTTP >= 400 的请求（降存储与隐私面）
+	Capacity     int  `json:"capacity"`      // 只读：内存环形容量（条），随容量自动淘汰最旧记录
+	MaxBodySize  int  `json:"max_body_size"` // 只读：单侧报文体积上限（字节）
+}
+
+// GetDebugConfig GET /admin/api/debug/config
+func (h *DebugHandler) GetDebugConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"data": debugConfigDTO{
+		Enabled:      h.store.IsEnabled(),
+		SamplingRate: h.store.SamplingRate(),
+		OnlyFailed:   h.store.OnlyFailed(),
+		Capacity:     h.store.Capacity(),
+		MaxBodySize:  h.store.MaxBodySize(),
+	}})
+}
+
+// UpdateDebugConfig PUT /admin/api/debug/config —— 三字段立即生效（原子，无需重启）；
+// 变更入审计（采样策略变更直接影响可观测面，属安全相关配置）
+func (h *DebugHandler) UpdateDebugConfig(c *gin.Context) {
+	var input struct {
+		Enabled      *bool `json:"enabled" binding:"required"`
+		SamplingRate *int  `json:"sampling_rate" binding:"required,min=0,max=100"`
+		OnlyFailed   *bool `json:"only_failed" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
+	}
+	before := debugConfigDTO{
+		Enabled: h.store.IsEnabled(), SamplingRate: h.store.SamplingRate(), OnlyFailed: h.store.OnlyFailed(),
+		Capacity: h.store.Capacity(), MaxBodySize: h.store.MaxBodySize(),
+	}
+	h.store.SetEnabled(*input.Enabled)
+	h.store.SetSamplingRate(*input.SamplingRate)
+	h.store.SetOnlyFailed(*input.OnlyFailed)
+	// 持久化到 system_settings（app 启动时读回），重启不丢策略
+	if h.db != nil {
+	for _, kv := range []struct{ key, val string }{
+		{"debug_mode", boolStr(*input.Enabled)},
+		{"debug_sampling_rate", strconv.Itoa(*input.SamplingRate)},
+		{"debug_only_failed", boolStr(*input.OnlyFailed)},
+	} {
+		if err := h.db.Save(&model.SystemSetting{Key: kv.key, Value: kv.val, UpdatedAt: time.Now().UTC()}).Error; err != nil {
+			internalErr(c, err, "persist debug config failed")
+			return
+		}
+	}
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "debug:update_config", "debug", "", "", service.AuditDetail(map[string]any{
+			"before": map[string]any{"enabled": before.Enabled, "sampling_rate": before.SamplingRate, "only_failed": before.OnlyFailed},
+			"after":  map[string]any{"enabled": *input.Enabled, "sampling_rate": *input.SamplingRate, "only_failed": *input.OnlyFailed},
+		}))
+	}
+	c.JSON(http.StatusOK, gin.H{"data": debugConfigDTO{
+		Enabled: h.store.IsEnabled(), SamplingRate: h.store.SamplingRate(), OnlyFailed: h.store.OnlyFailed(),
+		Capacity: h.store.Capacity(), MaxBodySize: h.store.MaxBodySize(),
+	}})
+}
+
+func boolStr(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }

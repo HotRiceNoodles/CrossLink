@@ -42,6 +42,10 @@ type Store struct {
 	enabled     atomic.Bool
 	maxBodySize int
 	nextSeq     atomic.Int64
+	/* 采样策略（管理端运行时调整）：samplingRate = 0-100（每百次记录百分比，100=全量）；
+	   onlyFailed = true 时仅记录 RespStatus >= 400 的请求。判定在 middleware 响应完成后进行。 */
+	samplingRate atomic.Int32
+	onlyFailed   atomic.Bool
 }
 
 func NewStore(capacity, maxBodySize int) *Store {
@@ -63,6 +67,24 @@ func (s *Store) SetEnabled(enabled bool) {
 func (s *Store) MaxBodySize() int {
 	return s.maxBodySize
 }
+
+func (s *Store) Capacity() int { return s.capacity }
+
+func (s *Store) SamplingRate() int { return int(s.samplingRate.Load()) }
+
+func (s *Store) SetSamplingRate(rate int) {
+	if rate < 0 {
+		rate = 0
+	}
+	if rate > 100 {
+		rate = 100
+	}
+	s.samplingRate.Store(int32(rate))
+}
+
+func (s *Store) OnlyFailed() bool { return s.onlyFailed.Load() }
+
+func (s *Store) SetOnlyFailed(v bool) { s.onlyFailed.Store(v) }
 
 func (s *Store) Add(entry *Entry) {
 	s.mu.Lock()
