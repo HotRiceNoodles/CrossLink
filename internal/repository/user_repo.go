@@ -48,6 +48,12 @@ func (r *UserRepo) Update(ctx context.Context, u *model.User) error {
 	return r.db.WithContext(ctx).Save(u).Error
 }
 
+// UpdateColumnsByID 定向列更新（个人中心自助资料：仅白名单列，
+// 不经 Save 全量写——避免调用方 Preload("Role") 后把关联一并 upsert）
+func (r *UserRepo) UpdateColumnsByID(ctx context.Context, id int64, cols map[string]any) error {
+	return r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).Updates(cols).Error
+}
+
 func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 	var users []model.User
 	err := r.db.WithContext(ctx).Preload("Role").Where("status = 1").Order("created_at DESC").Find(&users).Error

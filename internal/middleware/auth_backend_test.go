@@ -51,7 +51,7 @@ func newKeyServiceWithClosedDB(t *testing.T) (*service.KeyService, *redis.Client
 func TestAuth_BackendUnavailableIs503Not401AndNeverLocks(t *testing.T) {
 	keySvc, rdb := newKeyServiceWithClosedDB(t)
 	r := setupRouter()
-	r.Use(Auth("", keySvc, rdb, service.NoopPolicy{}))
+	r.Use(Auth("", keySvc, rdb, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	for i := 0; i < 30; i++ { // far beyond the lock threshold
@@ -108,7 +108,7 @@ func TestAuth_InvalidKeyStillCountsWhenBackendHealthy(t *testing.T) {
 	keySvc := service.NewKeyService(nil, repository.NewAPIKeyHashRepo(gdb), nil, cp, rdb)
 
 	r := setupRouter()
-	r.Use(Auth("", keySvc, rdb, service.NoopPolicy{}))
+	r.Use(Auth("", keySvc, rdb, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()

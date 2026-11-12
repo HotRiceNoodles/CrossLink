@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,9 +18,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// OrgStatusChecker resolves an org's live status for the gateway key path
+// (tenant disablement enforcement). OrgCache satisfies it; nil disables the check.
+type OrgStatusChecker interface {
+	Get(ctx context.Context, orgID int64) *model.Organization
+}
+
 // NOTE: This middleware enforces IP-based rate limiting on failed authentication attempts.
 // If an IP exceeds the failure threshold, it is blocked before any key validation attempt.
-func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy) gin.HandlerFunc {
+func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy, orgStatus OrgStatusChecker) gin.HandlerFunc {
+	// 租户停用强制点：key 所属 org status != 1 → 403（org 查不到时按限流中间件同策略跳过——
+	// 查询失败不等于停用，fail-open 只放宽到「与未配置检查一致」）
+	orgDisabled := func(c *gin.Context, key *model.APIKey) bool {
+		if orgStatus == nil || key == nil || key.OrgID == nil || *key.OrgID == 0 {
+			return false
+		}
+		org := orgStatus.Get(c.Request.Context(), *key.OrgID)
+		return org != nil && org.Status != 1
+	}
+	denyDisabledOrg := func(c *gin.Context) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"type":  "error",
+			"error": gin.H{"type": "permission_error", "message": "organization is disabled"},
+		})
+		c.Abort()
+	}
 	return func(c *gin.Context) {
 		// IP-based auth-failure blocking is enforced by the AuthFailureLimit
 		// middleware (mounted on the gateway group). Failure counting is done
@@ -41,6 +64,10 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 				key, err := keySvc.GetByID(c.Request.Context(), 0, keyID)
 				if err == nil && key != nil && key.Status == 1 &&
 					(key.ExpiresAt == nil || key.ExpiresAt.After(time.Now())) {
+					if orgDisabled(c, key) {
+						denyDisabledOrg(c)
+						return
+					}
 					c.Set("api_key", key)
 					c.Set("api_key_id", key.ID)
 					c.Set("team_id", key.TeamID)
@@ -64,6 +91,10 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 		if keySvc != nil {
 			key, err := keySvc.Validate(c.Request.Context(), apiKey)
 			if err == nil && key != nil {
+				if orgDisabled(c, key) {
+					denyDisabledOrg(c)
+					return
+				}
 				c.Set("api_key", key)
 				c.Set("api_key_id", key.ID)
 				// IP binding (Pro/Enterprise). NoopPolicy in Community is a no-op.

@@ -26,7 +26,7 @@ func setupRouter() *gin.Engine {
 
 func TestAuth_MissingAPIKey(t *testing.T) {
 	r := setupRouter()
-	r.Use(Auth("secret", nil, nil, service.NoopPolicy{}))
+	r.Use(Auth("secret", nil, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -42,7 +42,7 @@ func TestAuth_MissingAPIKey(t *testing.T) {
 
 func TestAuth_ConfigKeyMatch(t *testing.T) {
 	r := setupRouter()
-	r.Use(Auth("my-secret-key", nil, nil, service.NoopPolicy{}))
+	r.Use(Auth("my-secret-key", nil, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -59,7 +59,7 @@ func TestAuth_ConfigKeyMatch(t *testing.T) {
 
 func TestAuth_BearerToken(t *testing.T) {
 	r := setupRouter()
-	r.Use(Auth("my-key", nil, nil, service.NoopPolicy{}))
+	r.Use(Auth("my-key", nil, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -76,7 +76,7 @@ func TestAuth_BearerToken(t *testing.T) {
 
 func TestAuth_InvalidKey(t *testing.T) {
 	r := setupRouter()
-	r.Use(Auth("correct-key", nil, nil, service.NoopPolicy{}))
+	r.Use(Auth("correct-key", nil, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -272,7 +272,7 @@ func TestAuthIPBindingDenies(t *testing.T) {
 
 	r := setupRouter()
 	// denyAllIPPolicy: non-empty ClientIP -> deny.
-	r.Use(Auth("", keySvc, nil, denyAllIPPolicy{}))
+	r.Use(Auth("", keySvc, nil, denyAllIPPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -303,7 +303,7 @@ func TestAuthIPBindingDenies(t *testing.T) {
 func TestAuthIPBindingConfigKeyBypasses(t *testing.T) {
 	r := setupRouter()
 	// denyAllIPPolicy would deny any DB key, but config-key path must bypass it.
-	r.Use(Auth("my-secret-key", nil, nil, denyAllIPPolicy{}))
+	r.Use(Auth("my-secret-key", nil, nil, denyAllIPPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -329,7 +329,7 @@ func TestAuthIPBindingNoopAllows(t *testing.T) {
 
 	r := setupRouter()
 	// NoopPolicy: always allows, even with a non-empty ClientIP.
-	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}))
+	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})

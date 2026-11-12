@@ -577,7 +577,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// as login.
 	r.GET("/admin/api/auth/captcha/issue", middleware.LoginRateLimit(rdb, 30, time.Minute), admin.CaptchaIssueHandler(captchaGate))
 	r.POST("/admin/api/auth/login", middleware.LoginRateLimit(rdb, 10, 15*time.Minute), admin.LoginHandler(repos.UserRepo, repos.TeamRepo, repos.RoleRepo, repos.OrgRepo, cfg.Admin, ext.Deps.AuditSvc, cryptoProvider, captchaGate, loginReadiness))
-	r.POST("/admin/api/auth/logout", admin.LogoutHandler())
+	r.POST("/admin/api/auth/logout", admin.LogoutHandler(cfg.Admin, ext.Deps.AuditSvc))
 
 	// Lightweight auth endpoints (JWT required, exempt from rate limit)
 	authGroup := r.Group("/admin/api")
@@ -750,6 +750,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/user/preferences", handlers.Preferences.Get)
 		adminGroup.PUT("/user/preferences", handlers.Preferences.Update)
 
+		// Self-service profile (个人中心资料：邮箱/注册时间/最近登录 + 自助改 display_name/email)
+		profileHandler := admin.NewProfileHandler(repos.UserRepo, ext.Deps.AuditSvc)
+		adminGroup.GET("/user/profile", profileHandler.Get)
+		adminGroup.PUT("/user/profile", profileHandler.Update)
+
 		// Debug
 		adminGroup.GET("/debug/entries", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.List)
 		adminGroup.GET("/debug/entries/:seq", middleware.RequireAction(permCache, "debug:list"), handlers.Debug.Get)
@@ -848,7 +853,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(debug.Middleware(debugStore))
 	gwGroup.Use(middleware.UsageLog(svcs.UsageSvc))
 	gwGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
-	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
+	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc, ext.ToolObserver))
@@ -897,7 +902,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
 		return apidoc.ActiveDeprecations
 	}))
-	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy))
+	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
 	// U-17: this group authenticates keys with the same DB-backed KeyService
 	// (no negative cache) — random-key scanning here was an unbounded DB
 	// point-query path. Share the gateway group's per-IP auth-failure budget

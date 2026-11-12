@@ -46,7 +46,7 @@ func newReplayTestEnv(t *testing.T) (*gin.Engine, *gorm.DB) {
 	// X-Forwarded-For entirely and ClientIP() is the socket peer address.
 	// The stock test router trusts all proxies, which is LOOSER than production.
 	_ = r.SetTrustedProxies(nil)
-	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}))
+	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil))
 	r.GET("/test", func(c *gin.Context) {
 		key := GetAPIKeyFromContext(c)
 		if key == nil {
