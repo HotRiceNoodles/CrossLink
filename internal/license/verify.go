@@ -96,12 +96,18 @@ const keylessAutoNote = "auto mode has no trusted public keys (CL_LICENSE_VERIFY
 	"licensed tokens are REJECTED and the node runs as Community until keys are configured; " +
 	"see docs/节点身份与授权迁移.md for the upgrade checklist"
 
+const offIgnoredNote = "verify_mode=off was IGNORED: the signature-verification escape hatch is not compiled " +
+	"into this production build (rebuild with -tags license_dev / make build-dev for development use) — " +
+	"verification fell back to auto"
+
 // ConfigureSignatureVerification installs the global verification state.
 // spec is inline key material or "@<path>": JSON {kid: <PEM text or base64
 // raw Ed25519 key>} or a PEM list where "# kid=<id>" precedes its block.
 //
 // Resolution:
-//   - off: explicit development escape hatch — no checks (never a default);
+//   - off: explicit development escape hatch — no checks (never a default).
+//     Build-tag gated: honored only in license_dev builds; in production
+//     builds the request degrades to auto with offIgnoredNote;
 //   - warn with keys: verify, report failures, caller decides (accept);
 //   - enforce with keys: verify, reject on failure;
 //   - auto with keys: exactly enforce;
@@ -119,6 +125,16 @@ func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
 	default:
 		return &ConfigureError{Reason: fmt.Sprintf("unknown mode %q (off|warn|enforce|auto)", mode)}
 	}
+	// Build-tag gate: verify_mode=off exists only in license_dev builds.
+	// In production builds the request degrades to auto (fail-closed) with
+	// a loud note — valid signed licenses keep working, unsigned/forged
+	// tokens are rejected. The dev-compose-copied-to-prod scenario is
+	// therefore inert by construction.
+	offIgnored := false
+	if mode == VerifyModeOff && !devEscapeHatchAllowed {
+		mode = VerifyModeAuto
+		offIgnored = true
+	}
 	keys, err := loadLicenseKeys(spec)
 	if err != nil {
 		return err
@@ -126,13 +142,20 @@ func ConfigureSignatureVerification(mode, issuer, audience, spec string) error {
 	note := ""
 	switch {
 	case mode == VerifyModeOff:
-		// explicit dev-only choice
+		// explicit dev-only choice (license_dev build)
 	case mode == VerifyModeAuto && len(keys) == 0:
 		mode, note = VerifyModeEnforce, keylessAutoNote
 	case mode == VerifyModeAuto:
 		mode = VerifyModeEnforce
 	case len(keys) == 0:
 		return &ConfigureError{Reason: "mode " + mode + " requires at least one whitelisted public key"}
+	}
+	if offIgnored {
+		if note == "" {
+			note = offIgnoredNote
+		} else {
+			note = offIgnoredNote + "; " + note
+		}
 	}
 	verification = tokenVerification{configured: configured, mode: mode, issuer: issuer, audience: audience, keys: keys, note: note}
 	return nil

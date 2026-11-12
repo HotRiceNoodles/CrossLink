@@ -40,6 +40,13 @@ func configureVerificationFromConfig(cfg config.LicenseConfig) {
 			"requested", requested, "error", err)
 		return
 	}
+	if VerificationConfiguredMode() == VerifyModeOff && VerificationMode() != VerifyModeOff {
+		// Production build + verify_mode=off requested: the escape hatch is
+		// not compiled in. Degraded to auto — see offIgnoredNote.
+		slog.Error("verify_mode=off IGNORED in production build — signature verification stays ACTIVE (rebuild with -tags license_dev for the development escape hatch)",
+			"effective_mode", VerificationMode(), "note", VerificationNote())
+		return
+	}
 	if note := VerificationNote(); note != "" {
 		slog.Error("license verification unavailable — licensed tokens are REJECTED and the node runs as Community",
 			"configured", VerificationConfiguredMode(), "note", note)

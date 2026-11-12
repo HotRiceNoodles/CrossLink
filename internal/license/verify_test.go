@@ -374,6 +374,7 @@ func TestVerify_EdDSAFuturePath(t *testing.T) {
 // Mode matrix: off accepts everything; warn still DETECTS (caller logs and
 // accepts); enforce without keys is a configure error; unknown modes rejected.
 func TestVerify_ModeMatrixAndMisconfig(t *testing.T) {
+	enableDevEscapeForTest(t) // off leg of the matrix needs the dev posture
 	k := newRS256(t)
 	attacker := newRS256(t)
 
@@ -446,6 +447,7 @@ func hmacSHA256(secret, msg string) []byte {
 // * auto-keyless never relaxes to "accept unverified" — un-migrated
 // deployments follow the upgrade checklist instead.
 func TestVerify_AutoOffWarnEnforceMatrix(t *testing.T) {
+	enableDevEscapeForTest(t) // exercises the off leg + off-mode cleanup
 	good := newRS256(t)
 	bad := newRS256(t)
 	whitelistSpec := whitelist(kidJSON("k1", good.material()))
@@ -544,6 +546,7 @@ func TestVerify_AutoOffWarnEnforceMatrix(t *testing.T) {
 // lockdown (reject-everything), never a silent unverified fallback; a valid
 // config afterwards clears the state.
 func TestVerify_ConfigMisconfigurationLocksDown(t *testing.T) {
+	enableDevEscapeForTest(t) // the "valid config clears lockdown" leg configures off
 	t.Cleanup(func() {
 		_ = ConfigureSignatureVerification(VerifyModeOff, "", "", "")
 	})
