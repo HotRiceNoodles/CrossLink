@@ -184,12 +184,12 @@ type onboardingKeyInput struct {
 }
 
 type onboardingRequest struct {
-	Provider      onboardingProviderInput `json:"provider" binding:"required"`
-	Models        []onboardingModelInput  `json:"models"`
+	Provider onboardingProviderInput `json:"provider" binding:"required"`
+	Models   []onboardingModelInput  `json:"models"`
 	// Key 可选（2026-11-10）：向导只做 供应商+映射 接入——生成的密钥明文从不展示，
 	// 用户拿不到却被动创建属无意义副作用；需要密钥在「API 密钥」页创建（明文只显一次可复制）。传了仍按原规则建。
-	Key           *onboardingKeyInput     `json:"key"`
-	ReuseProvider bool                    `json:"reuse_provider"` // skip provider creation if name exists, just add models (+ key)
+	Key           *onboardingKeyInput `json:"key"`
+	ReuseProvider bool                `json:"reuse_provider"` // skip provider creation if name exists, just add models (+ key)
 }
 
 // Commit creates provider + models (+ optional api key + hash) in a single transaction.
@@ -198,12 +198,18 @@ type onboardingRequest struct {
 func (h *OnboardingHandler) Commit(c *gin.Context) {
 	var input onboardingRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 
 	// --- validate (reuse existing rules) ---
 	if providerBaseURL, urlMsg := validateOutboundURL("base_url", input.Provider.BaseURL); urlMsg != "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "provider_url_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
 	} else {
@@ -211,6 +217,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 	for i, m := range input.Models {
 		if m.InputPrice < 0 || m.OutputPrice < 0 {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "prices_negative"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrPricesNegative, fmt.Sprintf("models[%d]: prices must be non-negative", i))
 			return
 		}
@@ -220,16 +229,25 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			input.Models[i].RoutingStrategy = strategy
 		}
 		if !router.IsValidStrategy(router.StrategyName(strategy), nil) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "invalid_routing_strategy"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, fmt.Sprintf("models[%d]: invalid routing strategy", i))
 			return
 		}
 	}
 	if input.Key != nil {
 		if input.Key.MaxBudget < 0 {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "prices_negative"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrPricesNegative, "key.max_budget must be non-negative")
 			return
 		}
 		if input.Key.ExpiresAt != nil && input.Key.ExpiresAt.Before(time.Now()) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "key.expires_at must be in the future")
 			return
 		}
@@ -243,6 +261,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	// This is a backend backstop against any frontend hole that lets the wizard
 	// open from the global view.
 	if orgID == 0 && license.G().CurrentTier() == license.TierEnterprise {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest,
 			"请先切换到具体企业（不要使用全局视角）再运行配置向导")
 		return
@@ -259,6 +280,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		result := h.db.WithContext(c.Request.Context()).Select("id", "name").Where("name = ?", input.Provider.Name).First(&found)
 		if result.Error == nil {
 			if !input.ReuseProvider {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "provider_exists"}))
+				}
 				// Structured 409: wizard prompts the user to reuse or rename.
 				c.JSON(http.StatusConflict, gin.H{
 					"error":                  "provider name already exists",
@@ -271,6 +295,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			existingProvider = found
 			reuseMode = true
 		} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": result.Error.Error()}))
+			}
 			internalErr(c, result.Error, "check existing provider failed")
 			return
 		}
@@ -308,6 +335,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	if !reuseMode {
 		// In reuse mode the provider row already exists; don't re-encrypt/overwrite.
 		if err := h.encryptProvider(p); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+			}
 			internalErr(c, err, "encrypt provider failed")
 			return
 		}
@@ -322,6 +352,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	if input.Key != nil {
 		generated, err := service.GenerateRawKey()
 		if err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "key_generation_failed", "error": err.Error()}))
+			}
 			internalErr(c, err, "generate key failed")
 			return
 		}
@@ -411,9 +444,15 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	})
 	if txErr != nil {
 		if isDuplicateNameErr(txErr) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "provider_exists"}))
+			}
 			// Race fallback: provider was inserted between pre-check and tx.
 			errorResp(c, http.StatusConflict, ErrProviderExists, "provider name already exists")
 			return
+		}
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": txErr.Error()}))
 		}
 		internalErr(c, txErr, txErr.Error())
 		return

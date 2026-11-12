@@ -28,6 +28,7 @@ var validPreferenceKeys = map[string]bool{
 	"language":          true,
 	"sidebar_collapsed": true,
 	"default_provider":  true,
+	// 统计时区属系统级配置（setup wizard）、预算告警走告警规则 webhook（budget_alert_service）——均不入个人偏好
 }
 
 type PreferencesHandler struct {
@@ -67,6 +68,9 @@ func (h *PreferencesHandler) Get(c *gin.Context) {
 func (h *PreferencesHandler) Update(c *gin.Context) {
 	userID := GetUserID(c)
 	if userID <= 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", "", "", service.AuditDetail(map[string]any{"reason": "unauthorized"}))
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -76,6 +80,9 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 
 	var input map[string]interface{}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid JSON")
 		return
 	}
@@ -83,6 +90,9 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 	// Reject unknown top-level keys
 	for key := range input {
 		if !validPreferenceKeys[key] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "unknown_preference_key"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "unknown preference key: "+key)
 			return
 		}
@@ -92,6 +102,9 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 	if os, ok := input["overview_screen"].(map[string]interface{}); ok {
 		if tmpl, ok := os["template"].(string); ok {
 			if !validTemplates[tmpl] {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "invalid_template"}))
+				}
 				errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid template")
 				return
 			}
@@ -100,6 +113,9 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 			for _, m := range modules {
 				name, ok := m.(string)
 				if !ok || !validModules[name] {
+					if h.auditSvc != nil {
+						h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "invalid_module"}))
+					}
 					errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "invalid module: "+name)
 					return
 				}
@@ -109,18 +125,27 @@ func (h *PreferencesHandler) Update(c *gin.Context) {
 
 	raw, err := json.Marshal(input)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "marshal_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "marshal preferences failed")
 		return
 	}
 
 	user, err := h.userRepo.GetByID(c.Request.Context(), userID)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), "", service.AuditDetail(map[string]any{"reason": "get_user_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "get user failed")
 		return
 	}
 
 	user.Preferences = raw
 	if err := h.userRepo.Update(c.Request.Context(), user); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "preferences:update", "user_preferences", fmt.Sprintf("%d", userID), user.Username, service.AuditDetail(map[string]any{"reason": "save_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "save preferences failed")
 		return
 	}

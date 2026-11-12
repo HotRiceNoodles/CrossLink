@@ -48,10 +48,16 @@ func (h *ErrorRuleHandler) Create(c *gin.Context) {
 		Enabled        *bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:create", "error_rule", "", input.Pattern, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if err := validateErrorRule(input.MatchField, input.Scope, input.Classification); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:create", "error_rule", "", input.Pattern, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -70,6 +76,9 @@ func (h *ErrorRuleHandler) Create(c *gin.Context) {
 		Enabled:        enabled,
 	}
 	if err := h.repo.Create(c.Request.Context(), r); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:create", "error_rule", "", r.Pattern, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "create error rule failed")
 		return
 	}
@@ -82,6 +91,9 @@ func (h *ErrorRuleHandler) Create(c *gin.Context) {
 func (h *ErrorRuleHandler) Update(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:update", "error_rule", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -96,12 +108,18 @@ func (h *ErrorRuleHandler) Update(c *gin.Context) {
 		Enabled        *bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:update", "error_rule", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 
 	r, err := h.repo.GetByID(c.Request.Context(), id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:update", "error_rule", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
@@ -117,6 +135,9 @@ func (h *ErrorRuleHandler) Update(c *gin.Context) {
 		classification = *input.Classification
 	}
 	if err := validateErrorRule(matchField, scope, classification); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:update", "error_rule", fmt.Sprintf("%d", id), r.Pattern, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -142,6 +163,9 @@ func (h *ErrorRuleHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.repo.Update(c.Request.Context(), r); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:update", "error_rule", fmt.Sprintf("%d", id), r.Pattern, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "update error rule failed")
 		return
 	}
@@ -154,15 +178,24 @@ func (h *ErrorRuleHandler) Update(c *gin.Context) {
 func (h *ErrorRuleHandler) Delete(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:delete", "error_rule", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
 	r, err := h.repo.GetByID(c.Request.Context(), id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:delete", "error_rule", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "error_rule:delete", "error_rule", fmt.Sprintf("%d", id), r.Pattern, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete error rule failed")
 		return
 	}

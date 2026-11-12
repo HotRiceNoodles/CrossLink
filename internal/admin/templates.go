@@ -53,10 +53,16 @@ func (h *TemplateHandler) Create(c *gin.Context) {
 		TargetFormat    string          `json:"target_format"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:create", "template", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if !validTargetFormat(input.TargetFormat) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:create", "template", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_target_format"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "target_format must be auto|anthropic|openai")
 		return
 	}
@@ -76,8 +82,14 @@ func (h *TemplateHandler) Create(c *gin.Context) {
 	}
 	if err := h.db.WithContext(c.Request.Context()).Create(tpl).Error; err != nil {
 		if isDuplicateNameErr(err) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "template:create", "template", "", tpl.Name, service.AuditDetail(map[string]any{"reason": "duplicate_name"}))
+			}
 			errorResp(c, http.StatusConflict, ErrConflict, "template name already exists")
 			return
+		}
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:create", "template", "", tpl.Name, service.AuditDetail(map[string]any{"reason": "create_failed", "error": err.Error()}))
 		}
 		internalErr(c, err, "create template failed")
 		return
@@ -98,6 +110,9 @@ func (h *TemplateHandler) Get(c *gin.Context) {
 func (h *TemplateHandler) Update(c *gin.Context) {
 	tpl, ok := h.findByID(c)
 	if !ok {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:update", "template", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "not_found"}))
+		}
 		return
 	}
 	var input struct {
@@ -111,10 +126,16 @@ func (h *TemplateHandler) Update(c *gin.Context) {
 		Status          *int16          `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:update", "template", itoaInt64(tpl.ID), tpl.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if input.TargetFormat != nil && !validTargetFormat(*input.TargetFormat) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:update", "template", itoaInt64(tpl.ID), tpl.Name, service.AuditDetail(map[string]any{"reason": "invalid_target_format"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "target_format must be auto|anthropic|openai")
 		return
 	}
@@ -145,8 +166,14 @@ func (h *TemplateHandler) Update(c *gin.Context) {
 
 	if err := h.db.WithContext(c.Request.Context()).Save(tpl).Error; err != nil {
 		if isDuplicateNameErr(err) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "template:update", "template", itoaInt64(tpl.ID), tpl.Name, service.AuditDetail(map[string]any{"reason": "duplicate_name"}))
+			}
 			errorResp(c, http.StatusConflict, ErrConflict, "template name already exists")
 			return
+		}
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:update", "template", itoaInt64(tpl.ID), tpl.Name, service.AuditDetail(map[string]any{"reason": "update_failed", "error": err.Error()}))
 		}
 		internalErr(c, err, "update template failed")
 		return
@@ -162,9 +189,15 @@ func (h *TemplateHandler) Update(c *gin.Context) {
 func (h *TemplateHandler) Delete(c *gin.Context) {
 	tpl, ok := h.findByID(c)
 	if !ok {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:delete", "template", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "not_found"}))
+		}
 		return
 	}
 	if err := h.db.WithContext(c.Request.Context()).Delete(tpl).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "template:delete", "template", itoaInt64(tpl.ID), tpl.Name, service.AuditDetail(map[string]any{"reason": "delete_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete template failed")
 		return
 	}

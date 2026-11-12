@@ -328,7 +328,7 @@ func TestDebug_Replay_EndToEndThroughRealAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	require.NoError(t, engine.SetTrustedProxies(nil)) // production default (app.go)
-	engine.Use(middleware.Auth("", keySvc, nil, service.NoopPolicy{}))
+	engine.Use(middleware.Auth("", keySvc, nil, service.NoopPolicy{}, nil))
 	var gotKeyID int64
 	engine.POST("/v1/chat/completions", func(c *gin.Context) {
 		key := middleware.GetAPIKeyFromContext(c)

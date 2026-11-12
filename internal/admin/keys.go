@@ -62,30 +62,51 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		PriceMultiplier *float64   `json:"price_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "expires_at must be in the future")
 		return
 	}
 	if input.BudgetPeriod != "" && !isValidPeriod(input.BudgetPeriod) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "budget_period must be daily, weekly, or monthly")
 		return
 	}
 	if input.MaxBudget < 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "budget_negative"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetNegative, "max_budget must be >= 0")
 		return
 	}
 	if input.CallPeriod != "" && !isValidPeriod(input.CallPeriod) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "call_period must be daily, weekly, or monthly")
 		return
 	}
 	if input.MaxCalls < 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
 	if input.PriceMultiplier != nil && (*input.PriceMultiplier < 0.01 || *input.PriceMultiplier > 10) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "price_multiplier must be between 0.01 and 10")
 		return
 	}
@@ -108,6 +129,9 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		OrgID:           GetOrgID(c),
 	})
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:create", "key", "", input.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "create key failed")
 		return
 	}
@@ -150,6 +174,9 @@ func (h *KeyHandler) List(c *gin.Context) {
 func (h *KeyHandler) Update(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -168,27 +195,45 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		PriceMultiplier *float64   `json:"price_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 
 	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "expires_at must be in the future")
 		return
 	}
 	if input.BudgetPeriod != nil && !isValidPeriod(*input.BudgetPeriod) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "budget_period must be daily, weekly, or monthly")
 		return
 	}
 	if input.CallPeriod != nil && !isValidPeriod(*input.CallPeriod) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "call_period must be daily, weekly, or monthly")
 		return
 	}
 	if input.MaxCalls != nil && *input.MaxCalls < 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "budget_period_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBudgetPeriodInvalid, "max_calls must be >= 0")
 		return
 	}
 	if input.PriceMultiplier != nil && (*input.PriceMultiplier < 0.01 || *input.PriceMultiplier > 10) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "price_multiplier must be between 0.01 and 10")
 		return
 	}
@@ -196,11 +241,17 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	orgID := GetOrgID(c)
 	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "key_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return
 	}
 
 	if !h.checkKeyOwnership(c, key) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "insufficient_permissions"}))
+		}
 		errorResp(c, http.StatusForbidden, ErrInsufficientPermissions, "insufficient permissions")
 		return
 	}
@@ -254,6 +305,9 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.keySvc.Update(c.Request.Context(), key); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:update", "key", fmt.Sprintf("%d", key.ID), key.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "update key failed")
 		return
 	}
@@ -267,6 +321,9 @@ func (h *KeyHandler) Update(c *gin.Context) {
 func (h *KeyHandler) Delete(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:delete", "key", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -274,11 +331,17 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 	orgID := GetOrgID(c)
 	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:delete", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "key_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return
 	}
 
 	if !h.checkKeyOwnership(c, key) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:delete", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "insufficient_permissions"}))
+		}
 		errorResp(c, http.StatusForbidden, ErrInsufficientPermissions, "insufficient permissions")
 		return
 	}
@@ -309,6 +372,9 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.keySvc.Delete(c.Request.Context(), id); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:delete", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete key failed")
 		return
 	}
@@ -322,6 +388,9 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 func (h *KeyHandler) Regenerate(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:regenerate", "key", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -329,11 +398,17 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 	orgID := GetOrgID(c)
 	key, err := h.keySvc.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:regenerate", "key", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "key_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 		return
 	}
 
 	if !h.checkKeyOwnership(c, key) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:regenerate", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "insufficient_permissions"}))
+		}
 		errorResp(c, http.StatusForbidden, ErrInsufficientPermissions, "insufficient permissions")
 		return
 	}
@@ -341,8 +416,14 @@ func (h *KeyHandler) Regenerate(c *gin.Context) {
 	result, err := h.keySvc.Regenerate(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, repository.ErrKeyNotFound) || errors.Is(err, repository.ErrHashNotFound) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "key:regenerate", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "key_not_found", "error": err.Error()}))
+			}
 			errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 			return
+		}
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:regenerate", "key", fmt.Sprintf("%d", id), key.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
 		}
 		slog.Error("regenerate key failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -380,6 +461,9 @@ func (h *KeyHandler) Import(c *gin.Context) {
 		Keys []service.ImportKeyItem `json:"keys" binding:"required,min=1,max=100,dive"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "key:import", "key", "", "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}

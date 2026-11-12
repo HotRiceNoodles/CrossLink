@@ -51,20 +51,32 @@ type setupApplyResult struct {
 func (h *SetupHandler) Apply(c *gin.Context) {
 	var input setupApplyRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if input.Status != "done" && input.Status != "pending" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "invalid_status"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrSetupStatusInvalid, "status must be done or pending")
 		return
 	}
 	if input.Timezone != "" {
 		if _, err := time.LoadLocation(input.Timezone); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "invalid_timezone"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrTimezoneInvalid, "timezone must be a valid IANA name, e.g. Asia/Shanghai")
 			return
 		}
 	}
 	if baseURL, urlMsg := validateOutboundURL("base_url", input.BaseURL); urlMsg != "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "invalid_base_url"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, urlMsg)
 		return
 	} else {
@@ -79,17 +91,26 @@ func (h *SetupHandler) Apply(c *gin.Context) {
 	newKey := ""
 	if input.GenerateEncryptionKey {
 		if h.activeKeyExists() {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "encryption_key_active"}))
+			}
 			errorResp(c, http.StatusConflict, ErrEncryptionKeyActive,
 				"an encryption key is already active; use /secrets/rotate-key (Pro) to change it")
 			return
 		}
 		if !h.cfg.SecretManager.AllowWizardGeneration {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "wizard_generation_disabled"}))
+			}
 			errorResp(c, http.StatusForbidden, ErrEncryptionKeyUiDisabled,
 				"UI encryption-key generation is disabled by policy (secret_manager.allow_wizard_generation=false); provision the master key at install time via CL_ENCRYPTION_KEY / secret_manager.encryption_key")
 			return
 		}
 		raw := make([]byte, h.cp.CipherKeySize())
 		if _, err := rand.Read(raw); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "key_generation_failed", "error": err.Error()}))
+			}
 			internalErr(c, err, "generate encryption key failed")
 			return
 		}
@@ -130,6 +151,9 @@ func (h *SetupHandler) Apply(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:setup_apply", "setting", "setup", "wizard", service.AuditDetail(map[string]any{"reason": "apply_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "apply setup settings failed")
 		return
 	}
@@ -155,6 +179,9 @@ func (h *SetupHandler) Apply(c *gin.Context) {
 // reminder item and the dashboard banner stays until the wizard completes.
 func (h *SetupHandler) Skip(c *gin.Context) {
 	if err := h.db.WithContext(c.Request.Context()).Save(&model.SystemSetting{Key: "setup_wizard_status", Value: "skipped", UpdatedAt: time.Now().UTC()}).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:setup_skip", "setting", "setup_wizard_status", "wizard", service.AuditDetail(map[string]any{"reason": "save_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "record setup skip failed")
 		return
 	}

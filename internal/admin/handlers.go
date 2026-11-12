@@ -94,7 +94,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 			deps.RDB,
 			deps.AuditSvc,
 		),
-		Usage: NewUsageHandler(deps.DB, ""),
+		Usage: NewUsageHandler(deps.DB, "", deps.AuditSvc),
 		System: NewSystemHandler(
 			deps.DB,
 			deps.RDB,
@@ -128,7 +128,7 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Templates:     NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
 		Readiness:     NewReadinessHandler(readiness),
 		Setup:         NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
-		SsrfAllowlist: NewSsrfAllowlistHandler(deps.SsrfAllowlist, adminReauth, deps.Repos.UserRepo),
+		SsrfAllowlist: NewSsrfAllowlistHandler(deps.SsrfAllowlist, adminReauth, deps.Repos.UserRepo, deps.AuditSvc),
 		Perms:         GetPermissionsHandler(deps.Repos.RoleRepo, readiness),
 	}
 	// Runtime settings provider (may be nil in handler-level tests). Wired

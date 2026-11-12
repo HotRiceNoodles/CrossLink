@@ -218,25 +218,40 @@ var replayPathWhitelist = map[string]bool{
 func (h *DebugHandler) Replay(c *gin.Context) {
 	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", c.Param("seq"), "", service.AuditDetail(map[string]any{"reason": "invalid_seq"}))
+		}
 		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
 		return
 	}
 	entry := h.store.Get(seq)
 	if entry == nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), "", service.AuditDetail(map[string]any{"reason": "not_found"}))
+		}
 		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
 		return
 	}
 	if orgID := GetOrgID(c); orgID != 0 && entry.OrgID != orgID {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "org_scope_mismatch"}))
+		}
 		errorResp(c, http.StatusNotFound, ErrEntryNotFound, "entry not found")
 		return
 	}
 
 	// Validate: truncated / path whitelist.
 	if entry.Truncated {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "replay_truncated"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_truncated: original body was truncated, cannot replay")
 		return
 	}
 	if !replayPathWhitelist[entry.Path] {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "replay_path_not_allowed"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_path_not_allowed: only /v1/chat/completions and /v1/messages are replayable")
 		return
 	}
@@ -246,6 +261,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 		KeyID     int64          `json:"key_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -257,10 +275,16 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	// admin cannot replay at all.
 	if orgID := GetOrgID(c); orgID != 0 {
 		if h.keySvc == nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "key_service_unavailable"}))
+			}
 			internalErr(c, errors.New("key service unavailable"), "replay key ownership check unavailable")
 			return
 		}
 		if _, err := h.keySvc.GetByID(c.Request.Context(), orgID, input.KeyID); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "key_not_found"}))
+			}
 			errorResp(c, http.StatusNotFound, ErrKeyNotFound, "key not found")
 			return
 		}
@@ -269,6 +293,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	// Parse original body and apply top-level overrides.
 	var body map[string]any
 	if err := json.Unmarshal(entry.ReqBody, &body); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "replay_invalid_body"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "replay_invalid_body: original request body is not valid JSON")
 		return
 	}
@@ -280,6 +307,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 
 	newBody, err := json.Marshal(body)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "marshal_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "replay marshal failed")
 		return
 	}
@@ -288,6 +318,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", h.port, entry.Path)
 	req, err := http.NewRequestWithContext(c.Request.Context(), entry.Method, url, bytes.NewReader(newBody))
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "request_creation_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "replay request creation failed")
 		return
 	}
@@ -298,6 +331,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	// anyone who can reach the app from a loopback source.
 	replayToken := middleware.MintReplayToken(input.KeyID)
 	if replayToken == "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "token_mint_failed"}))
+		}
 		internalErr(c, errors.New("replay token mint failed"), "replay token mint failed")
 		return
 	}
@@ -306,6 +342,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		slog.Error("replay: internal HTTP call failed", "seq", seq, "error", err)
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "replay_failed", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusInternalServerError, "replay_failed", "internal replay request failed: "+err.Error())
 		return
 	}
@@ -313,6 +352,9 @@ func (h *DebugHandler) Replay(c *gin.Context) {
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "debug:replay", "debug", strconv.FormatInt(seq, 10), entry.Path, service.AuditDetail(map[string]any{"reason": "replay_failed", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusInternalServerError, "replay_failed", "failed to read replay response")
 		return
 	}

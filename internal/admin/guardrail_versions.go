@@ -149,6 +149,9 @@ func applyVersionToRule(rule *guardrail.GuardrailRule, h guardrail.GuardrailRule
 func (h *GuardrailHandler) Rollback(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -156,6 +159,9 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 		ToVersion int64 `json:"to_version" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -166,6 +172,9 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 		q = q.Where("org_id = ?", orgID)
 	}
 	if err := q.First(&rule, id).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "rule_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrRuleNotFound, "rule not found")
 		return
 	}
@@ -175,20 +184,32 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 	if err := h.db.WithContext(c.Request.Context()).
 		Where("rule_id = ? AND version = ?", rule.ID, input.ToVersion).
 		First(&hist).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "rule_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrRuleNotFound, "version not found")
 		return
 	}
 	// a delete snapshot is terminal: it documents removal, not a restorable state
 	if hist.ChangeKind == "delete" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "cannot roll back to a delete snapshot")
 		return
 	}
 	if err := guardrail.ValidateRuleAction(hist.Type, hist.Action); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
 		return
 	}
 	// validate the historical config before publishing it
 	if _, err := guardrail.CreateEngine(hist.Type, json.RawMessage(hist.Config)); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_config"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("historical config no longer valid: %v", err))
 		return
 	}
@@ -218,10 +239,16 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 		return tx.Create(&hist).Error
 	})
 	if err == errVersionConflict {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "version_conflict"}))
+		}
 		c.JSON(http.StatusConflict, gin.H{"error": "version conflict: rule changed concurrently, reload and retry", "error_code": "version_conflict"})
 		return
 	}
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:rollback", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "rollback guardrail rule failed")
 		return
 	}

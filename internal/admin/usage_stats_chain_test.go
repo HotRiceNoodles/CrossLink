@@ -63,7 +63,7 @@ func seedUsageRow(t *testing.T, db *gorm.DB, org int64, currency string, cost fl
 
 func runStats(t *testing.T, db *gorm.DB, orgID int64) map[string]any {
 	t.Helper()
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/admin/api/usage/stats", nil).WithContext(t.Context())

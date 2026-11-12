@@ -30,13 +30,14 @@ import (
 // env/YAML), while DELETE tombstones the override (the row and its monotonic
 // version are KEPT — anti-ABA) and falls back to env > YAML > strict.
 type SsrfAllowlistHandler struct {
-	svc    *service.SsrfAllowlistService
-	reauth *ReauthManager
-	users  *repository.UserRepo
+	svc      *service.SsrfAllowlistService
+	reauth   *ReauthManager
+	users    *repository.UserRepo
+	auditSvc *service.AuditService // set by commercial build; nil in Community
 }
 
-func NewSsrfAllowlistHandler(svc *service.SsrfAllowlistService, reauth *ReauthManager, users *repository.UserRepo) *SsrfAllowlistHandler {
-	return &SsrfAllowlistHandler{svc: svc, reauth: reauth, users: users}
+func NewSsrfAllowlistHandler(svc *service.SsrfAllowlistService, reauth *ReauthManager, users *repository.UserRepo, auditSvc *service.AuditService) *SsrfAllowlistHandler {
+	return &SsrfAllowlistHandler{svc: svc, reauth: reauth, users: users, auditSvc: auditSvc}
 }
 
 // ssrfAllowlistActor captures the same context fields the async audit
@@ -138,6 +139,16 @@ func (h *SsrfAllowlistHandler) Reauth(c *gin.Context) {
 	}
 	token, err := h.reauth.Issue(uid, h.sessionFingerprint(c), in.Password, verify)
 	if err != nil {
+		if h.auditSvc != nil {
+			reason := "invalid_credentials"
+			switch {
+			case errors.Is(err, ErrReauthRateLimited):
+				reason = "rate_limited"
+			case errors.Is(err, ErrReauthUnavailable):
+				reason = "reauth_unavailable"
+			}
+			h.auditSvc.LogFailure(c, "system:ssrf_reauth", "system", strconv.FormatInt(uid, 10), "", service.AuditDetail(map[string]any{"reason": reason}))
+		}
 		switch {
 		case errors.Is(err, ErrReauthRateLimited):
 			errorResp(c, http.StatusTooManyRequests, ErrReauthRateLimitedCode, err.Error())
@@ -150,6 +161,9 @@ func (h *SsrfAllowlistHandler) Reauth(c *gin.Context) {
 			errorResp(c, http.StatusUnauthorized, ErrReauthInvalidCode, err.Error())
 		}
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "system:ssrf_reauth", "system", strconv.FormatInt(uid, 10), "", nil)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"token": token, "expires_in": int(reauthTokenTTL.Seconds())}})
 }

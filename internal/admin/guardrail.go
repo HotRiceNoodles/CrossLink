@@ -65,6 +65,9 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		ModelFilter *string         `json:"model_filter"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -78,16 +81,25 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		}
 	}
 	if !typeValid {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_guardrail_type"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidGuardrailType, "invalid guardrail type")
 		return
 	}
 
 	if _, err := guardrail.CreateEngine(input.Type, input.Config); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_config"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config: %v", err))
 		return
 	}
 
 	if !validDirections[input.Direction] {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_direction"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidDirection, "invalid direction, must be one of: request, response, both")
 		return
 	}
@@ -99,6 +111,9 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 	severity := "medium"
 	if input.Severity != "" {
 		if !validSeverities[input.Severity] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_severity"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidSeverity, "invalid severity, must be one of: low, medium, high, critical")
 			return
 		}
@@ -107,12 +122,18 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 	action := "block"
 	if input.Action != "" {
 		if !validActions[input.Action] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidAction, "invalid action, must be one of: block, log, mask")
 			return
 		}
 		action = input.Action
 	}
 	if err := guardrail.ValidateRuleAction(input.Type, action); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
 		return
 	}
@@ -131,6 +152,9 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		rule.OrgID = &orgID
 	}
 	if err := versionedCreate(c, h.db, rule); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:create", "guardrail", "", rule.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "create guardrail rule failed")
 		return
 	}
@@ -145,6 +169,9 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 func (h *GuardrailHandler) Update(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -155,6 +182,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 		q = q.Where("org_id = ?", orgID)
 	}
 	if err := q.First(&rule, id).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "rule_not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrRuleNotFound, "rule not found")
 		return
 	}
@@ -172,6 +202,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 		ModelFilter *string         `json:"model_filter"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -188,6 +221,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 			}
 		}
 		if !typeValid {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_guardrail_type"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidGuardrailType, "invalid guardrail type")
 			return
 		}
@@ -197,6 +233,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 			configToValidate = json.RawMessage(rule.Config)
 		}
 		if _, err := guardrail.CreateEngine(*input.Type, configToValidate); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_config"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config for new type: %v", err))
 			return
 		}
@@ -204,6 +243,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.Direction != nil {
 		if !validDirections[*input.Direction] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_direction"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidDirection, "invalid direction, must be one of: request, response, both")
 			return
 		}
@@ -214,6 +256,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.Config != nil {
 		if _, err := guardrail.CreateEngine(rule.Type, input.Config); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_config"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidConfig, fmt.Sprintf("invalid config: %v", err))
 			return
 		}
@@ -221,6 +266,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.Severity != nil {
 		if !validSeverities[*input.Severity] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_severity"}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid severity, must be one of: low, medium, high, critical"})
 			return
 		}
@@ -228,6 +276,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	if input.Action != nil {
 		if !validActions[*input.Action] {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidAction, "invalid action, must be one of: block, log, mask")
 			return
 		}
@@ -240,14 +291,23 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	onlyDisable := input.Enabled != nil && !*input.Enabled && input.Name == nil && input.Type == nil &&
 		input.Direction == nil && input.Config == nil && input.Severity == nil && input.Action == nil && input.ModelFilter == nil
 	if err := guardrail.ValidateRuleAction(rule.Type, rule.Action); err != nil && !onlyDisable {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidAction, err.Error())
 		return
 	}
 
 	if err := versionedUpdate(c, h.db, &rule, nil); err == errVersionConflict {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "version_conflict"}))
+		}
 		c.JSON(http.StatusConflict, gin.H{"error": "version conflict: rule changed concurrently, reload and retry", "error_code": "version_conflict"})
 		return
 	} else if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "update guardrail rule failed")
 		return
 	}
@@ -262,6 +322,9 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 func (h *GuardrailHandler) Delete(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:delete", "guardrail", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
@@ -271,13 +334,22 @@ func (h *GuardrailHandler) Delete(c *gin.Context) {
 		q = q.Where("org_id = ?", orgID)
 	}
 	if err := q.First(&rule, id).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:delete", "guardrail", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 	if err := versionedDelete(c, h.db, &rule); err == errVersionConflict {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:delete", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "version_conflict"}))
+		}
 		c.JSON(http.StatusConflict, gin.H{"error": "version conflict: rule changed concurrently, reload and retry", "error_code": "version_conflict"})
 		return
 	} else if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:delete", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete guardrail rule failed")
 		return
 	}
@@ -407,6 +479,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 		StrictCoverage        *bool   `json:"strict_coverage"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -432,6 +507,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 	}
 	if input.StreamMode != nil {
 		if *input.StreamMode != "window" && *input.StreamMode != "strict" && *input.StreamMode != "incremental" {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "invalid_stream_mode"}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "stream_mode must be \"window\", \"strict\" or \"incremental\""})
 			return
 		}
@@ -452,6 +530,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 			continue
 		}
 		if *f.value <= 0 {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "non_positive_setting", "setting": f.setting}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": f.setting + " must be positive"})
 			return
 		}
@@ -459,6 +540,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 	}
 	if input.OversizeAction != nil {
 		if *input.OversizeAction != "truncate" && *input.OversizeAction != "reject" {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "invalid_oversize_action"}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "oversize_action must be \"truncate\" or \"reject\""})
 			return
 		}
@@ -466,6 +550,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 	}
 	if input.EngineErrorAction != nil {
 		if *input.EngineErrorAction != "skip" && *input.EngineErrorAction != "block" {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "invalid_engine_error_action"}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "engine_error_action must be \"skip\" or \"block\""})
 			return
 		}
@@ -484,6 +571,9 @@ func (h *GuardrailHandler) UpdateConfig(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "guardrail:update_config", "guardrail", "", "global_config", service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "save guardrail config failed")
 		return
 	}

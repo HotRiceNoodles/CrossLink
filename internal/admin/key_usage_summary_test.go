@@ -46,7 +46,7 @@ func callKeyUsageSummary(t *testing.T, h *UsageHandler, orgID int64) (*httptest.
 // is org-scoped.
 func TestKeyUsageSummary_MonthWindowAndOrgScope(t *testing.T) {
 	db := setupKeyUsageDB(t)
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 
 	org7, org9 := int64(7), int64(9)
 	key101, key102, key103 := int64(101), int64(102), int64(103)
@@ -105,7 +105,7 @@ func TestKeyUsageSummary_MonthWindowAndOrgScope(t *testing.T) {
 
 func TestKeyUsageSummary_EmptyReturnsArray(t *testing.T) {
 	db := setupKeyUsageDB(t)
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w, _ := callKeyUsageSummary(t, h, 7)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)

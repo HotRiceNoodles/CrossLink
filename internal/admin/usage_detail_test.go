@@ -60,7 +60,7 @@ func TestUsageGet_ReturnsFullRow(t *testing.T) {
 	db := newUsageTestDB(t)
 	seedUsageLog(t, db, nil)
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/1", nil)
@@ -92,7 +92,7 @@ func TestUsageGet_ReturnsFullRow(t *testing.T) {
 func TestUsageGet_NotFound(t *testing.T) {
 	db := newUsageTestDB(t)
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/99999", nil)
@@ -115,7 +115,7 @@ func TestUsageGet_NotFound(t *testing.T) {
 func TestUsageGet_InvalidID(t *testing.T) {
 	db := newUsageTestDB(t)
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/abc", nil)
@@ -133,7 +133,7 @@ func TestUsageGet_TeamScopeMismatch(t *testing.T) {
 	teamID := int64(8)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.TeamID = &teamID })
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/1", nil)
@@ -152,7 +152,7 @@ func TestUsageGet_OrgScopeMismatch(t *testing.T) {
 	orgID := int64(1)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.OrgID = &orgID })
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/1", nil)
@@ -175,7 +175,7 @@ func TestUsageList_OmitsContentColumns(t *testing.T) {
 	seedUsageLog(t, db, nil)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.RequestID = "efgh5678" })
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage?page=1&page_size=20", nil)

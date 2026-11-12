@@ -40,7 +40,7 @@ func TestDailyTrend_ScanMatchesSelect(t *testing.T) {
 		t.Fatalf("seed usage_logs: %v", err)
 	}
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/daily?days=7", nil)

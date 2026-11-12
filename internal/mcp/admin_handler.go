@@ -9,6 +9,7 @@ import (
 	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/secret"
+	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 )
@@ -16,6 +17,7 @@ import (
 type AdminHandler struct {
 	svc      *MCPService
 	encStore Encrypter
+	auditSvc *service.AuditService // set by commercial build; nil in Community
 }
 
 func NewAdminHandler(svc *MCPService, encStore Encrypter) *AdminHandler {
@@ -25,6 +27,12 @@ func NewAdminHandler(svc *MCPService, encStore Encrypter) *AdminHandler {
 // SetEncStore allows late binding of the encryption store.
 func (h *AdminHandler) SetEncStore(encStore Encrypter) {
 	h.encStore = encStore
+}
+
+// SetAuditLogger allows late binding of the audit service (commercial build
+// only; Community never calls it, keeping admin writes audit-free there).
+func (h *AdminHandler) SetAuditLogger(auditSvc *service.AuditService) {
+	h.auditSvc = auditSvc
 }
 
 type createServerInput struct {
@@ -41,6 +49,9 @@ type createServerInput struct {
 func (h *AdminHandler) Create(c *gin.Context) {
 	var input createServerInput
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:create", "mcp_server", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request", "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -67,6 +78,9 @@ func (h *AdminHandler) Create(c *gin.Context) {
 	// Validate URL for HTTP/SSE transport
 	if (srv.TransportType == "http" || srv.TransportType == "sse") && srv.URL != "" {
 		if err := validateServerURL(srv.URL); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "mcp_server:create", "mcp_server", "", srv.Name, service.AuditDetail(map[string]any{"reason": "url_rejected", "url": srv.URL, "error": err.Error()}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -76,6 +90,9 @@ func (h *AdminHandler) Create(c *gin.Context) {
 	if len(input.AuthConfig) > 0 {
 		encrypted, err := h.encryptJSONSensitiveFields(input.AuthConfig)
 		if err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "mcp_server:create", "mcp_server", "", srv.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "encrypt auth config failed"})
 			return
 		}
@@ -86,10 +103,16 @@ func (h *AdminHandler) Create(c *gin.Context) {
 	}
 
 	if err := h.svc.CreateServer(c.Request.Context(), srv); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:create", "mcp_server", "", srv.Name, service.AuditDetail(map[string]any{"reason": "create_failed", "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_server:create", "mcp_server", strconv.FormatInt(srv.ID, 10), srv.Name, service.AuditDetail(map[string]any{"transport_type": srv.TransportType, "auth_type": srv.AuthType, "enabled": srv.Enabled}))
+	}
 	c.JSON(http.StatusCreated, gin.H{"data": srv})
 }
 
@@ -135,12 +158,18 @@ func (h *AdminHandler) Update(c *gin.Context) {
 	id := parseIDParam(c)
 	srv, err := h.svc.GetServer(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "not_found"}))
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
 	}
 
 	var input updateServerInput
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "invalid_request", "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -159,11 +188,17 @@ func (h *AdminHandler) Update(c *gin.Context) {
 	}
 	if input.URL != nil {
 		if *input.URL == "" && (srv.TransportType == "http" || srv.TransportType == "sse") {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "url_required"}))
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "url is required for HTTP/SSE transport"})
 			return
 		}
 		if *input.URL != "" && (srv.TransportType == "http" || srv.TransportType == "sse") {
 			if err := validateServerURL(*input.URL); err != nil {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "url_rejected", "url": *input.URL, "error": err.Error()}))
+				}
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
@@ -172,6 +207,9 @@ func (h *AdminHandler) Update(c *gin.Context) {
 	}
 	// After all field assignments, validate http/sse requires a URL
 	if (srv.TransportType == "http" || srv.TransportType == "sse") && srv.URL == "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "url_required"}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "url is required for HTTP/SSE transport"})
 		return
 	}
@@ -181,6 +219,9 @@ func (h *AdminHandler) Update(c *gin.Context) {
 	if len(input.AuthConfig) > 0 {
 		encrypted, err := h.encryptJSONSensitiveFields(input.AuthConfig)
 		if err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "encrypt auth config failed"})
 			return
 		}
@@ -191,8 +232,14 @@ func (h *AdminHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.svc.UpdateServer(c.Request.Context(), srv); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"reason": "update_failed", "error": err.Error()}))
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_server:update", "mcp_server", c.Param("id"), srv.Name, service.AuditDetail(map[string]any{"transport_type": srv.TransportType, "auth_type": srv.AuthType, "enabled": srv.Enabled}))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": srv})
 }
@@ -201,8 +248,14 @@ func (h *AdminHandler) Delete(c *gin.Context) {
 	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
 	if err := h.svc.DeleteServer(c.Request.Context(), orgID, id); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:delete", "mcp_server", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_server:delete", "mcp_server", c.Param("id"), "", nil)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
 }
@@ -211,8 +264,14 @@ func (h *AdminHandler) Test(c *gin.Context) {
 	orgID := admin.GetOrgID(c)
 	id := parseIDParam(c)
 	if err := h.svc.TestServer(c.Request.Context(), orgID, id); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_server:test", "mcp_server", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "test_failed", "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "healthy": false})
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_server:test", "mcp_server", c.Param("id"), "", nil)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"healthy": true}})
 }
@@ -292,6 +351,9 @@ func (h *AdminHandler) CreatePermission(c *gin.Context) {
 	serverID := parseIDParam(c)
 	var input createPermissionInput
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_permission:create", "mcp_permission", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_request", "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -309,25 +371,40 @@ func (h *AdminHandler) CreatePermission(c *gin.Context) {
 	}
 
 	if err := h.svc.repo.CreatePermission(c.Request.Context(), perm); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_permission:create", "mcp_permission", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "create_failed", "principal_type": input.PrincipalType, "principal_id": input.PrincipalID, "error": err.Error()}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	h.svc.InvalidatePermCache(serverID)
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_permission:create", "mcp_permission", strconv.FormatInt(perm.ID, 10), "", service.AuditDetail(map[string]any{"server_id": serverID, "principal_type": perm.PrincipalType, "principal_id": perm.PrincipalID}))
+	}
 	c.JSON(http.StatusCreated, gin.H{"data": perm})
 }
 
 func (h *AdminHandler) DeletePermission(c *gin.Context) {
 	pid, _ := strconv.ParseInt(c.Param("pid"), 10, 64)
 	if pid == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_permission:delete", "mcp_permission", c.Param("pid"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid permission id"})
 		return
 	}
 	if err := h.svc.repo.DeletePermission(c.Request.Context(), pid); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "mcp_permission:delete", "mcp_permission", c.Param("pid"), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "permission not found"})
 		return
 	}
 	serverID := parseIDParam(c)
 	h.svc.InvalidatePermCache(serverID)
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "mcp_permission:delete", "mcp_permission", c.Param("pid"), "", service.AuditDetail(map[string]any{"server_id": serverID}))
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
 }
 

@@ -38,7 +38,7 @@ func setupSsrfAllowlistHandler(t *testing.T) (*SsrfAllowlistHandler, *gorm.DB) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	return NewSsrfAllowlistHandler(svc, NewReauthManager(rdb), nil), db
+	return NewSsrfAllowlistHandler(svc, NewReauthManager(rdb), nil, nil), db
 }
 
 // mintReauth issues a re-auth token directly from the manager for the given
@@ -627,7 +627,7 @@ func TestSsrfAllowlistHandler_LocalMode_RefusesWrites(t *testing.T) {
 	t.Cleanup(func() { guardrail.ApplyInternalAllowlist(nil) })
 	svc := service.NewSsrfAllowlistService(db, nil, nil, false)
 	svc.LoadColdStart(context.Background())
-	h := NewSsrfAllowlistHandler(svc, NewReauthManager(nil), nil)
+	h := NewSsrfAllowlistHandler(svc, NewReauthManager(nil), nil, nil)
 
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/ssrf-allowlist", gin.H{"cidrs": []string{"10.30.0.0/16"}, "expected_version": 0})
 	setAdminContext(c, 1, 1, "admin")

@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type UsageHandler struct {
-	db *gorm.DB
+	db       *gorm.DB
+	auditSvc *service.AuditService // set by commercial build; nil in Community
 }
 
-func NewUsageHandler(db *gorm.DB, _ string) *UsageHandler {
-	return &UsageHandler{db: db}
+func NewUsageHandler(db *gorm.DB, _ string, auditSvc *service.AuditService) *UsageHandler {
+	return &UsageHandler{db: db, auditSvc: auditSvc}
 }
 
 func applyUsageFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
@@ -662,5 +664,8 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"reconciliation-%s.csv\"", endDate))
+	if h.auditSvc != nil {
+		h.auditSvc.LogFromContext(c, "usage:export_reconciliation", "usage", "", fmt.Sprintf("reconciliation-%s.csv", endDate), service.AuditDetail(map[string]any{"days": days, "key_id": keyIDStr, "rows": len(rows)}))
+	}
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
 }

@@ -186,7 +186,7 @@ func TestUsage_ReconciliationExport_CSV(t *testing.T) {
 		Cost: 0.02, BillableCost: 0.03, Currency: "USD", APIKeyID: &keyID,
 	}).Error)
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/usage/reconciliation/export?days=30", nil)
 	setAdminContext(c, 1, 1, "admin")
 	h.ReconciliationExport(c)
@@ -209,7 +209,7 @@ func TestUsage_ReconciliationExport_KeyFilter(t *testing.T) {
 	require.NoError(t, db.Create(&model.UsageLog{ModelUsed: "m1", Cost: 0.01, BillableCost: 0.01, Currency: "USD", APIKeyID: &key1}).Error)
 	require.NoError(t, db.Create(&model.UsageLog{ModelUsed: "m2", Cost: 0.02, BillableCost: 0.02, Currency: "USD", APIKeyID: &key2}).Error)
 
-	h := NewUsageHandler(db, "")
+	h := NewUsageHandler(db, "", nil)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/usage/reconciliation/export?key_id=2&days=30", nil)
 	setAdminContext(c, 1, 1, "admin")
 	h.ReconciliationExport(c)

@@ -74,6 +74,13 @@ func (s *AuditService) logFromContext(c *gin.Context, action, resourceType, reso
 		Status:       status,
 		CreatedAt:    time.Now().UTC(),
 	}
+	/* 租户归属（审计中心多租户维度）：org_id=0（平台上下文）保持 NULL 指针——
+	   「平台级 = IS NULL」筛选语义依赖它；读取口径与 admin.GetOrgID 一致（context 键 int64） */
+	if v, ok := c.Get("org_id"); ok {
+		if orgID, ok := v.(int64); ok && orgID != 0 {
+			entry.OrgID = &orgID
+		}
+	}
 	s.Log(entry)
 }
 

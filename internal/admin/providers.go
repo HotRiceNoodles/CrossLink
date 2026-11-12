@@ -30,7 +30,7 @@ type ProviderHandler struct {
 	auditSvc       *service.AuditService
 	usageSvc       *service.UsageService
 	latencySvc     *service.LatencyService
-	fixtureStore   provider.FixtureStore // nil = recording disabled
+	fixtureStore   provider.FixtureStore   // nil = recording disabled
 	health         *provider.HealthTracker // 运行时熔断视图（provider_health.go；SetHealthTracker 注入）
 	// OnRegistryChange is called after a local registry mutation (create/update/delete).
 	// action is "reload" or "remove"; providerName is the affected provider.
@@ -82,12 +82,18 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		ExtraConfig json.RawMessage `json:"extra_config"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:create", "provider", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	orgID := GetOrgID(c)
 	baseURL, urlMsg := validateOutboundURL("base_url", input.BaseURL)
 	if urlMsg != "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:create", "provider", "", input.Name, service.AuditDetail(map[string]any{"reason": "provider_url_invalid"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
 	}
@@ -105,10 +111,16 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		p.OrgID = &orgID
 	}
 	if err := h.encryptProvider(p); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:create", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "encrypt provider failed")
 		return
 	}
 	if err := h.repo.Create(c.Request.Context(), p); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:create", "provider", "", p.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "create provider failed")
 		return
 	}
@@ -130,11 +142,17 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	orgID := GetOrgID(c)
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
@@ -150,6 +168,9 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		ExtraConfig json.RawMessage `json:"extra_config"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -167,6 +188,9 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		if *input.BaseURL != "" {
 			trimmed, urlMsg := validateOutboundURL("base_url", *input.BaseURL)
 			if urlMsg != "" {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "provider_url_invalid"}))
+				}
 				errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 				return
 			}
@@ -180,6 +204,9 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		if p.APIKey != "" && h.encStore != nil && !secret.IsReference(p.APIKey) && !h.encStore.IsEncrypted(p.APIKey) {
 			encrypted, err := h.encStore.Encrypt(p.APIKey)
 			if err != nil {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+				}
 				internalErr(c, err, "encrypt api_key failed")
 				return
 			}
@@ -192,12 +219,18 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if input.ExtraConfig != nil {
 		p.ExtraConfig = datatypes.JSON(input.ExtraConfig)
 		if err := h.encryptExtraConfig(p); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+			}
 			internalErr(c, err, "encrypt extra_config failed")
 			return
 		}
 	}
 
 	if err := h.repo.Update(c.Request.Context(), p); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "update provider failed")
 		return
 	}
@@ -222,22 +255,34 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 	orgID := GetOrgID(c)
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:delete", "provider", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:delete", "provider", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 
 	count, _ := h.modelRepo.CountByProviderID(c.Request.Context(), p.ID)
 	if count > 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:delete", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "provider_has_models"}))
+		}
 		errorResp(c, http.StatusConflict, ErrProviderHasModels, fmt.Sprintf("provider still has %d model mappings, delete them first", count))
 		return
 	}
 
 	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:delete", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete provider failed")
 		return
 	}
@@ -375,7 +420,8 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 	if err != nil {
 		slog.Error("provider test failed", "error", err, "provider_id", p.ID)
 		if h.auditSvc != nil {
-			h.auditSvc.LogFromContext(c, "provider:test", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{"success": false, "model": modelName, "latency_ms": latency}))
+			/* 连通失败落真实失败状态（此前 success+success:false 让失败 KPI/快速标签漏计） */
+			h.auditSvc.LogFailure(c, "provider:test", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{"success": false, "model": modelName, "latency_ms": latency}))
 		}
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "error": "connection failed", "latency_ms": latency}})
 		return

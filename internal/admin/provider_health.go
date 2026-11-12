@@ -80,6 +80,9 @@ func (h *ProviderHandler) Circuits(c *gin.Context) {
 // 会立刻重新打开电路，保护语义完整。
 func (h *ProviderHandler) ResetCircuit(c *gin.Context) {
 	if h.health == nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider_circuit", "", "", service.AuditDetail(map[string]any{"reason": "health_tracker_unavailable"}))
+		}
 		errorResp(c, http.StatusServiceUnavailable, "health_tracker_unavailable", "health tracker not wired")
 		return
 	}
@@ -88,11 +91,17 @@ func (h *ProviderHandler) ResetCircuit(c *gin.Context) {
 		Model    string `json:"model"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider_circuit", input.Provider, input.Provider, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	input.Provider = strings.TrimSpace(input.Provider)
 	if input.Provider == "" {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:update", "provider_circuit", input.Provider, input.Provider, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "provider must not be empty")
 		return
 	}

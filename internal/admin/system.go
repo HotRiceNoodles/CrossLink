@@ -138,6 +138,9 @@ func (h *SystemHandler) UpdateContentLog(c *gin.Context) {
 		Enabled *bool `json:"enabled" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_settings", "setting", "log_content", "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "enabled must be a boolean")
 		return
 	}
@@ -146,6 +149,9 @@ func (h *SystemHandler) UpdateContentLog(c *gin.Context) {
 		val = "true"
 	}
 	if err := h.db.Save(&model.SystemSetting{Key: "log_content", Value: val}).Error; err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_settings", "setting", "log_content", val, service.AuditDetail(map[string]any{"reason": "save_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "save content log setting failed")
 		return
 	}
@@ -207,6 +213,9 @@ func (h *SystemHandler) ChangePassword(c *gin.Context) {
 	// Only admin users can change the system admin password.
 	// Non-admin users should use ChangeForcedPasswordHandler for self-service.
 	if !IsAdmin(c) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:password_change", "setting", "admin_password", h.cfg.Username, service.AuditDetail(map[string]any{"reason": "insufficient_permissions"}))
+		}
 		errorResp(c, http.StatusForbidden, ErrInsufficientPermissions, "insufficient permissions")
 		return
 	}
@@ -216,17 +225,26 @@ func (h *SystemHandler) ChangePassword(c *gin.Context) {
 		NewPassword string `json:"new_password" binding:"required,min=8,max=128"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:password_change", "setting", "admin_password", h.cfg.Username, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrPasswordTooShort, "new password must be at least 8 characters")
 		return
 	}
 
 	if !verifyPassword(req.OldPassword, h.cfg.PasswordHash) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:password_change", "setting", "admin_password", h.cfg.Username, service.AuditDetail(map[string]any{"reason": "wrong_old_password"}))
+		}
 		errorResp(c, http.StatusForbidden, ErrIncorrectOldPassword, "old password is incorrect")
 		return
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcryptCost)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:password_change", "setting", "admin_password", h.cfg.Username, service.AuditDetail(map[string]any{"reason": "hash_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "hash password failed")
 		return
 	}
@@ -242,6 +260,9 @@ func (h *SystemHandler) ChangePassword(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:password_change", "setting", "admin_password", h.cfg.Username, service.AuditDetail(map[string]any{"reason": "save_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "save password failed")
 		return
 	}

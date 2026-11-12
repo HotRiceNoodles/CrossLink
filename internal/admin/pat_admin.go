@@ -54,6 +54,9 @@ func (h *PATAdminHandler) Create(c *gin.Context) {
 		Scopes []string `json:"scopes"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "pat:create", "pat", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
@@ -67,8 +70,14 @@ func (h *PATAdminHandler) Create(c *gin.Context) {
 			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidScope, "scope exceeds your permissions")
 		case errors.Is(err, service.ErrInvalidName):
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "pat:create", "pat", "", input.Name, service.AuditDetail(map[string]any{"reason": "invalid_name"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "name is required")
 		default:
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "pat:create", "pat", "", input.Name, service.AuditDetail(map[string]any{"reason": "create_failed", "error": err.Error()}))
+			}
 			internalErr(c, err, "create pat failed")
 		}
 		return
@@ -101,14 +110,23 @@ func (h *PATAdminHandler) List(c *gin.Context) {
 func (h *PATAdminHandler) Revoke(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "pat:revoke", "pat", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
 
 	if err := h.patSvc.Revoke(c.Request.Context(), id, GetUserID(c)); err != nil {
 		if errors.Is(err, service.ErrPatTokenNotFound) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "pat:revoke", "pat", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found"}))
+			}
 			errorResp(c, http.StatusNotFound, ErrNotFound, "pat not found")
 			return
+		}
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "pat:revoke", "pat", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "revoke_failed", "error": err.Error()}))
 		}
 		internalErr(c, err, "revoke pat failed")
 		return

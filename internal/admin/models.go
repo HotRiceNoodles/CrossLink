@@ -65,10 +65,16 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		ExtraConfig     json.RawMessage `json:"extra_config"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if input.InputPrice < 0 || input.OutputPrice < 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "prices_negative"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "prices must be non-negative")
 		return
 	}
@@ -77,6 +83,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		input.RoutingStrategy = "weighted_random"
 	}
 	if !router.IsValidStrategy(router.StrategyName(input.RoutingStrategy), nil) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "invalid_routing_strategy"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, "invalid routing strategy")
 		return
 	}
@@ -96,6 +105,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 	}
 	orgID := GetOrgID(c)
 	if err := h.repo.Create(c.Request.Context(), m, orgID); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", m.ModelName, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "create model failed")
 		return
 	}
@@ -111,6 +123,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 func (h *ModelHandler) Delete(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:delete", "model", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -118,10 +133,16 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 	orgID := GetOrgID(c)
 	m, err := h.repo.GetByID(c.Request.Context(), id, orgID)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:delete", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	if err := h.repo.Delete(c.Request.Context(), id, orgID); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:delete", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "delete model failed")
 		return
 	}
@@ -137,6 +158,9 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 func (h *ModelHandler) Update(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
@@ -152,14 +176,23 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		ExtraConfig     json.RawMessage `json:"extra_config"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if input.InputPrice != nil && *input.InputPrice < 0 || input.OutputPrice != nil && *input.OutputPrice < 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "prices_negative"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "prices must be non-negative")
 		return
 	}
 	if input.RoutingStrategy != nil && !router.IsValidStrategy(router.StrategyName(*input.RoutingStrategy), nil) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_routing_strategy"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, "invalid routing strategy")
 		return
 	}
@@ -167,6 +200,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	orgID := GetOrgID(c)
 	m, err := h.repo.GetByID(c.Request.Context(), id, orgID)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "not_found", "error": err.Error()}))
+		}
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
@@ -198,6 +234,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.repo.Update(c.Request.Context(), m, orgID); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))
+		}
 		internalErr(c, err, "update model failed")
 		return
 	}

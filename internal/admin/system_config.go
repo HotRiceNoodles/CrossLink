@@ -60,15 +60,24 @@ type configOp struct {
 // read). Restart-required keys are echoed back so the UI can warn.
 func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 	if h.settings == nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "not_configured"}))
+		}
 		internalErr(c, nil, "settings provider not configured")
 		return
 	}
 	var payload map[string]json.RawMessage
 	if err := c.ShouldBindJSON(&payload); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "invalid_request"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
 	}
 	if len(payload) == 0 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "empty_payload"}))
+		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "no settings supplied")
 		return
 	}
@@ -77,6 +86,9 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 	for key, raw := range payload {
 		def, known := settings.RegistryMap[key]
 		if !known {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "unknown_config_key"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "unknown config key: "+key)
 			return
 		}
@@ -92,12 +104,18 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 		}
 		value, err := settings.ParseAndValidate(key, raw)
 		if err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "invalid_value"}))
+			}
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 			return
 		}
 		if key == settings.KeyGatewayBaseURL {
 			gatewayURL, urlMsg := validateOutboundURL("gateway_base_url", value)
 			if urlMsg != "" {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "invalid_base_url"}))
+				}
 				errorResp(c, http.StatusBadRequest, ErrBaseURLInvalid, urlMsg)
 				return
 			}
@@ -107,6 +125,9 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 		if def.Sensitive {
 			stored, encrypted, err := h.settings.EncryptSecret(value)
 			if err != nil {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "encrypt_failed", "error": err.Error()}))
+				}
 				internalErr(c, err, "encrypt sensitive setting failed")
 				return
 			}
@@ -127,6 +148,9 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 				allowed := settings.NormalizeOrigins(list)
 				reqOrigin := strings.ToLower(strings.TrimSpace(origin))
 				if !contains(allowed, reqOrigin) {
+					if h.auditSvc != nil {
+						h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "cors_origin_excluded"}))
+					}
 					errorResp(c, http.StatusBadRequest, ErrInvalidRequest,
 						"cors_allowed_origins would exclude the origin of this request; refusing to apply")
 					return
@@ -157,6 +181,9 @@ func (h *SystemHandler) UpdateConfig(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "system:update_config", "setting", "system", "", service.AuditDetail(map[string]any{"reason": "update_failed", "error": err.Error()}))
+		}
 		internalErr(c, err, "update config failed")
 		return
 	}
