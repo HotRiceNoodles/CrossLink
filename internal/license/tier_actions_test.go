@@ -91,3 +91,20 @@ func TestSystemSettingsActionsCommunity(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditActionsProTier: audit:list/audit:export 自 Enterprise 下放至 Pro
+// （产品决策 2026-11-12）。Pro 的动作集必须包含二者，否则 RequireAction 层
+// 在 Pro 部署把审计中心 403（菜单由前端 ROUTE_TIER 同步放行）。
+func TestAuditActionsProTier(t *testing.T) {
+	for _, a := range []string{"audit:list", "audit:export"} {
+		if !proExtraActions[a] {
+			t.Errorf("proExtraActions must include %s (audit center is Pro+ since 2026-11-12)", a)
+		}
+		if enterpriseExtraActions[a] {
+			t.Errorf("enterpriseExtraActions must NOT include %s (moved to Pro)", a)
+		}
+		if !TierActionSet[TierPro][a] {
+			t.Errorf("pro tier must allow %s", a)
+		}
+	}
+}

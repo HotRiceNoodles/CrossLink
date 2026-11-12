@@ -104,6 +104,10 @@ var proExtraActions = map[string]bool{
 	"datalens:export":             true,
 	"datalens:schedule":           true,
 	"datalens:manage_aggregation": true,
+	// 审计日志（审计中心列表/统计/导出）—— Pro 及以上（产品决策 2026-11-12：
+	// 自 Enterprise 下放，Pro 团队同样有操作留痕与导出取证诉求）。
+	"audit:list":   true,
+	"audit:export": true,
 	// 内容合规（content_compliance 引擎、事件与人工复核）—— Pro 及以上。
 	"compliance:policy":  true,
 	"compliance:check":   true,
@@ -131,8 +135,6 @@ var enterpriseExtraActions = map[string]bool{
 	"user:create":                 true,
 	"user:update":                 true,
 	"user:delete":                 true,
-	"audit:list":                  true,
-	"audit:export":                true,
 	"budget:manage":               true,
 	"insight:manage":              true,
 	"provider_guard_alert:list":   true,
