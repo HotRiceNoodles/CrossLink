@@ -40,7 +40,22 @@ type Span struct {
 	Replacement string `json:"replacement"`
 	// Reversible is internal only; original values never enter API results or events.
 	Reversible bool `json:"-"`
+	// Purpose distinguishes span producers on the shared MaskedSpans channel
+	// (freeze C1): secret masking (PII/credentials) vs sanitize evidence.
+	// Empty = secret_mask, the pre-existing semantics; json:"-" keeps the
+	// wire format of existing paths unchanged.
+	Purpose SpanPurpose `json:"-"`
 }
+
+// SpanPurpose labels why a span exists (freeze C1). Existing PII/mask paths
+// keep their behavior; sanitize evidence is produced only by kb_poisoning
+// (M1, commercial).
+type SpanPurpose string
+
+const (
+	SpanPurposeSecretMask       SpanPurpose = "secret_mask"
+	SpanPurposeSanitizeEvidence SpanPurpose = "sanitize_evidence"
+)
 
 type GuardrailEngine interface {
 	Name() string

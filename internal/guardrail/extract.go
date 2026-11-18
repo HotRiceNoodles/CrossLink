@@ -18,9 +18,43 @@ import (
 // the given masked text.
 type maskApply func(masked string)
 
+// Zone taxonomy (M0 freeze §1.1, closed set). A zone names the PROTOCOL
+// position of a segment — it carries no trust semantics by itself.
+const (
+	ZoneSystem         = "system"
+	ZoneInstructions   = "instructions"
+	ZoneUser           = "user"
+	ZoneAssistant      = "assistant"
+	ZoneToolResult     = "tool_result"
+	ZoneFunctionOutput = "function_output"
+	ZoneToolArgs       = "tool_args"
+	ZoneToolDesc       = "tool_desc"
+	ZoneEmbeddingInput = "embedding_input"
+	ZonePrompt         = "prompt"
+)
+
+// zoneForChatRole derives a zone from a chat/Responses message role
+// (freeze §1.1): system|developer → system, tool|function → tool_result,
+// user → user, assistant → assistant; unknown roles fall back to user with
+// the raw role kept on the segment for policy inspection.
+func zoneForChatRole(role string) string {
+	switch role {
+	case "system", "developer":
+		return ZoneSystem
+	case "tool", "function":
+		return ZoneToolResult
+	case "assistant":
+		return ZoneAssistant
+	default:
+		return ZoneUser
+	}
+}
+
 type contentSegment struct {
 	start int
 	end   int
+	zone  string // protocol position (Zone* constants)
+	role  string // message role where applicable ("" for non-message fields)
 	apply maskApply
 }
 
@@ -47,7 +81,7 @@ func newContentBuilder() *contentBuilder {
 	return &contentBuilder{maskOK: true}
 }
 
-func (cb *contentBuilder) add(text string, apply maskApply) {
+func (cb *contentBuilder) add(text string, zone, role string, apply maskApply) {
 	if text == "" || apply == nil {
 		return
 	}
@@ -56,7 +90,7 @@ func (cb *contentBuilder) add(text string, apply maskApply) {
 	}
 	start := cb.b.Len()
 	cb.b.WriteString(text)
-	cb.segs = append(cb.segs, contentSegment{start: start, end: start + len(text), apply: apply})
+	cb.segs = append(cb.segs, contentSegment{start: start, end: start + len(text), zone: zone, role: role, apply: apply})
 }
 
 func (cb *contentBuilder) build(commit func() []byte) *ExtractedContent {
@@ -64,6 +98,27 @@ func (cb *contentBuilder) build(commit func() []byte) *ExtractedContent {
 		return nil
 	}
 	return &ExtractedContent{Text: cb.b.String(), segs: cb.segs, commit: commit, maskOK: &cb.maskOK, Uninspectable: cb.uninspectable}
+}
+
+// SpanZones returns the zones of segments intersecting any span, in segment
+// order, deduplicated. Span offsets are byte ranges in e.Text — the same
+// coordinate space engines' MaskedSpans use (applyRequestMask relies on this
+// invariant). A span crossing two segments yields both zones.
+func (e *ExtractedContent) SpanZones(spans []Span) []string {
+	var zones []string
+	seen := make(map[string]bool, 4)
+	for _, seg := range e.segs {
+		for _, sp := range spans {
+			if sp.End > seg.start && sp.Start < seg.end {
+				if !seen[seg.zone] {
+					seen[seg.zone] = true
+					zones = append(zones, seg.zone)
+				}
+				break
+			}
+		}
+	}
+	return zones
 }
 
 // ApplyMask patches every segment intersecting a span and returns the
@@ -158,11 +213,13 @@ func RawString(raw json.RawMessage) (string, bool) {
 // addTextBlockSegments adds one segment per text part of an OpenAI-style
 // content value (string, or array of parts whose type is in textTypes —
 // e.g. "text", or the Responses-native "input_text"/"output_text"). Media
-// parts are neither checked nor touched.
-func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage, key string, textTypes ...string) {
+// parts are neither checked nor touched. Zone is derived from the message
+// role (zoneForChatRole).
+func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage, key, role string, textTypes ...string) {
 	if len(textTypes) == 0 {
 		textTypes = []string{"text"}
 	}
+	zone := zoneForChatRole(role)
 	allowed := make(map[string]bool, len(textTypes))
 	for _, t := range textTypes {
 		allowed[t] = true
@@ -173,7 +230,7 @@ func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage,
 	}
 	if s, isStr := RawString(raw); isStr {
 		if s != "" {
-			cb.add(s, func(masked string) {
+			cb.add(s, zone, role, func(masked string) {
 				holder[key], _ = json.Marshal(masked)
 			})
 		}
@@ -197,7 +254,7 @@ func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage,
 		if !ok || text == "" {
 			continue
 		}
-		cb.add(text, func(masked string) {
+		cb.add(text, zone, role, func(masked string) {
 			parts[pi]["text"], _ = json.Marshal(masked)
 			holder[key], _ = json.Marshal(parts)
 		})
@@ -222,9 +279,10 @@ func extractChatContent(body []byte) *ExtractedContent {
 	if hasMsgs {
 		for i := range msgs {
 			m := msgs[i]
-			addTextBlockSegments(cb, m, "content")
+			role, _ := RawString(m["role"])
+			addTextBlockSegments(cb, m, "content", role)
 			if s, ok := RawString(m["reasoning_content"]); ok && s != "" {
-				cb.add(s, func(masked string) {
+				cb.add(s, ZoneAssistant, "assistant", func(masked string) {
 					m["reasoning_content"], _ = json.Marshal(masked)
 				})
 			}
@@ -239,7 +297,7 @@ func extractChatContent(body []byte) *ExtractedContent {
 					if !ok || args == "" {
 						continue
 					}
-					cb.add(canonicalJSONText(args), func(masked string) {
+					cb.add(canonicalJSONText(args), ZoneToolArgs, "assistant", func(masked string) {
 						if !json.Valid([]byte(masked)) {
 							cb.maskOK = false
 							return
@@ -264,7 +322,7 @@ func extractChatContent(body []byte) *ExtractedContent {
 			if !ok || desc == "" {
 				continue
 			}
-			cb.add(desc, func(masked string) {
+			cb.add(desc, ZoneToolDesc, "", func(masked string) {
 				fnMap["description"], _ = json.Marshal(masked)
 				tools[ti]["function"], _ = json.Marshal(fnMap)
 				root["tools"], _ = json.Marshal(tools)
@@ -290,10 +348,17 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	}
 	cb := newContentBuilder()
 
-	addAnthropicBlocks := func(holder map[string]json.RawMessage, key string) {
+	// addAnthropicBlocks extracts one holder's block array. role carries the
+	// enclosing message role; role=="" marks the top-level system field
+	// (zone system regardless of blocks).
+	addAnthropicBlocks := func(holder map[string]json.RawMessage, key, role string) {
 		raw, ok := holder[key]
 		if !ok {
 			return
+		}
+		zone := zoneForChatRole(role)
+		if role == "" {
+			zone = ZoneSystem
 		}
 		// writeBack re-serializes the parsed block array into the holder so
 		// nested edits (e.g. tool_result text parts) reach the body.
@@ -301,7 +366,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 		writeBack := func() {}
 		if s, isStr := RawString(raw); isStr {
 			if s != "" {
-				cb.add(s, func(masked string) {
+				cb.add(s, zone, role, func(masked string) {
 					holder[key], _ = json.Marshal(masked)
 				})
 			}
@@ -321,7 +386,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 				if !ok || text == "" {
 					continue
 				}
-				cb.add(text, func(masked string) {
+				cb.add(text, zone, role, func(masked string) {
 					blocks[bi]["text"], _ = json.Marshal(masked)
 					writeBack()
 				})
@@ -338,7 +403,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 				if len(input) == 0 {
 					continue
 				}
-				cb.add(canonicalJSONText(string(input)), func(masked string) {
+				cb.add(canonicalJSONText(string(input)), ZoneToolArgs, role, func(masked string) {
 					if !json.Valid([]byte(masked)) {
 						cb.maskOK = false
 						return
@@ -353,7 +418,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 					if s == "" {
 						continue
 					}
-					cb.add(s, func(masked string) {
+					cb.add(s, ZoneToolResult, role, func(masked string) {
 						blocks[bi]["content"], _ = json.Marshal(masked)
 						writeBack()
 					})
@@ -375,7 +440,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 					if !ok || text == "" {
 						continue
 					}
-					cb.add(text, func(masked string) {
+					cb.add(text, ZoneToolResult, role, func(masked string) {
 						parts[pi]["text"], _ = json.Marshal(masked)
 						blocks[bi]["content"], _ = json.Marshal(parts)
 						writeBack()
@@ -386,7 +451,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	}
 
 	if _, ok := root["system"]; ok {
-		addAnthropicBlocks(root, "system")
+		addAnthropicBlocks(root, "system", "")
 	}
 
 	var msgs []map[string]json.RawMessage
@@ -396,7 +461,8 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	}
 	if hasMsgs {
 		for i := range msgs {
-			addAnthropicBlocks(msgs[i], "content")
+			role, _ := RawString(msgs[i]["role"])
+			addAnthropicBlocks(msgs[i], "content", role)
 		}
 	}
 
@@ -420,7 +486,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 	cb := newContentBuilder()
 
 	if s, ok := RawString(root["instructions"]); ok && s != "" {
-		cb.add(s, func(masked string) {
+		cb.add(s, ZoneInstructions, "", func(masked string) {
 			root["instructions"], _ = json.Marshal(masked)
 		})
 	}
@@ -430,7 +496,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 	if raw, ok := root["input"]; ok {
 		if s, isStr := RawString(raw); isStr {
 			if s != "" {
-				cb.add(s, func(masked string) {
+				cb.add(s, ZoneUser, "user", func(masked string) {
 					root["input"], _ = json.Marshal(masked)
 				})
 			}
@@ -445,13 +511,14 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 			switch t {
 			case "message":
 				// Responses-native content parts use input_text/output_text.
-				addTextBlockSegments(cb, it, "content", "text", "input_text", "output_text")
+				role, _ := RawString(it["role"])
+				addTextBlockSegments(cb, it, "content", role, "text", "input_text", "output_text")
 			case "function_call":
 				args, ok := RawString(it["arguments"])
 				if !ok || args == "" {
 					continue
 				}
-				cb.add(canonicalJSONText(args), func(masked string) {
+				cb.add(canonicalJSONText(args), ZoneToolArgs, "assistant", func(masked string) {
 					if !json.Valid([]byte(masked)) {
 						cb.maskOK = false
 						return
@@ -463,7 +530,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 				if !ok || out == "" {
 					continue
 				}
-				cb.add(out, func(masked string) {
+				cb.add(out, ZoneFunctionOutput, "", func(masked string) {
 					it["output"], _ = json.Marshal(masked)
 				})
 			}
@@ -494,7 +561,7 @@ func extractEmbeddingsContent(body []byte) *ExtractedContent {
 		if s == "" {
 			return nil
 		}
-		cb.add(s, func(masked string) {
+		cb.add(s, ZoneEmbeddingInput, "", func(masked string) {
 			root["input"], _ = json.Marshal(masked)
 		})
 	} else {
@@ -512,7 +579,7 @@ func extractEmbeddingsContent(body []byte) *ExtractedContent {
 			if s == "" {
 				continue
 			}
-			cb.add(s, func(masked string) {
+			cb.add(s, ZoneEmbeddingInput, "", func(masked string) {
 				arr[i], _ = json.Marshal(masked)
 				root["input"], _ = json.Marshal(arr)
 			})
@@ -534,7 +601,7 @@ func extractSimplePrompt(body []byte) *ExtractedContent {
 	cb := newContentBuilder()
 	for _, key := range []string{"prompt", "input"} {
 		if s, ok := RawString(root[key]); ok && s != "" {
-			cb.add(s, func(masked string) {
+			cb.add(s, ZonePrompt, "", func(masked string) {
 				root[key], _ = json.Marshal(masked)
 			})
 			break
