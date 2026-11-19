@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -174,9 +175,17 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 		if apiKeyID > 0 {
 			checkCtx.Metadata["api_key_id"] = fmt.Sprintf("%d", apiKeyID)
 		}
+		// org_id(M3):kb_poisoning 指纹库按 org 维度存取;缺省 0 = 全局
+		// 域(无组织上下文时指纹退化为全局匹配,语义见冻结件 §5.3)。
+		if orgID > 0 {
+			checkCtx.Metadata["org_id"] = fmt.Sprintf("%d", orgID)
+		}
 		ctx := context.WithValue(c.Request.Context(), guardrail.CtxKeyCheck, checkCtx)
 		ctx = context.WithValue(ctx, guardrail.CtxKeyUserAgent, c.GetHeader("User-Agent"))
 		ctx = context.WithValue(ctx, guardrail.CtxKeyHeaders, c.Request.Header)
+		// kb_poisoning zw-v2 plumbing: protocol-segment zones in e.Text
+		// coordinates (M1 C 线); engines read them from the check context.
+		ctx = guardrail.WithSegmentZones(ctx, ex.ZoneMap())
 		c.Request = c.Request.WithContext(ctx)
 
 		guardCtx, cancel := context.WithTimeout(ctx, time.Duration(svc.RequestBudgetMs())*time.Millisecond)
@@ -191,6 +200,16 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 			OrgID:     orgID,
 		})
 		if err != nil {
+			// kb enforce 失败关闭(P1-5,冻结件 C13/R12):类型化错误越过全局
+			// fail-open——强制模式规则故障不得放行待检请求。
+			if errors.Is(err, guardrail.ErrKbEnforceFailClosed) {
+				slog.Error("guardrail: kb_poisoning enforce failure, failing closed", "error", err)
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": gin.H{"type": "guardrail_error", "message": "kb poisoning enforcement unavailable (fail-closed)"},
+				})
+				c.Abort()
+				return
+			}
 			if svc.IsFailOpen() {
 				slog.Warn("guardrail check failed, failing open", "error", err)
 				next()
@@ -217,14 +236,86 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 			setSecurityEvent(c, result, "partial coverage: content exceeded inspection limit; only the prefix was scanned")
 		}
 
+		// applyRequestSanitize:冻结件 C3 的 sanitize 机制(社区层)。改写复用
+		// mask 通道(C1 共享 span);改写后对消毒正文**复检**(共享 guardCtx
+		// 预算)。复检仍需阻断/再次 sanitize → 升级 block(级联上限由组合层
+		// 控制,机制层单轮);复检命中 mask → 按 mask 语义补一轮改写;任一
+		// 步失败 fail-closed。返回消毒(可能再 mask)后的检测文本供流式护栏。
+		applyRequestSanitize := func(result *guardrail.CheckResponse) string {
+			if len(result.MaskedSpans) == 0 {
+				setSecurityEvent(c, result, "sanitize not applied: engine returned no field spans")
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "guardrail sanitize could not be applied safely"}})
+				return ""
+			}
+			newBody, allApplied := ex.ApplyMask(result.MaskedSpans)
+			if !allApplied || newBody == nil {
+				setSecurityEvent(c, result, "sanitize could not be applied safely; request rejected")
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "guardrail_blocked", "message": "guardrail sanitize could not be applied safely"}})
+				return ""
+			}
+			if !SetBodyBytes(c, newBody) {
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+					"error": gin.H{"type": "request_too_large", "message": "sanitized request body exceeds the body-size ceiling"},
+				})
+				return ""
+			}
+			// 复检:对消毒后正文重新提取 + 全量检查(同一 deadline,复检开
+			// 销计入请求预算)。
+			ex2 := guardrail.ExtractContent(newBody, c.Request.URL.Path)
+			sanitized := ""
+			if ex2 != nil {
+				sanitized = ex2.Text
+			}
+			if ex2 != nil && ex2.Text != "" {
+				re, err := svc.Check(guardCtx, &guardrail.CheckRequest{
+					Content:   ex2.Text,
+					Direction: guardrail.DirectionRequest,
+					Model:     probe.Model,
+					APIKeyID:  apiKeyID,
+					TeamID:    teamID,
+					OrgID:     orgID,
+				})
+				if err != nil {
+					// enforce 路径 fail-closed(冻结件 C13/R12):检查失败
+					// 不得放行已处置请求。
+					setSecurityEvent(c, result, "sanitize re-check failed; request rejected")
+					writeGuardrailError(c, result, c.Request.URL.Path)
+					c.Abort()
+					return ""
+				}
+				if re != nil && re.Blocked {
+					setSecurityEvent(c, re, "sanitize re-check blocked; escalating")
+					writeGuardrailError(c, re, c.Request.URL.Path)
+					c.Abort()
+					return ""
+				}
+				if re != nil && re.Action == "sanitize" {
+					setSecurityEvent(c, re, "sanitize re-check requires another pass; escalating to block")
+					writeGuardrailError(c, re, c.Request.URL.Path)
+					c.Abort()
+					return ""
+				}
+				if re != nil && re.Action == "mask" && len(re.MaskedSpans) > 0 {
+					applyRequestMask(c, ex2, re)
+					sanitized = re.MaskedContent
+				}
+			}
+			c.Header("X-Guardrail-Action", "sanitize")
+			setSecurityEvent(c, result, "sanitized: content rewritten and re-checked")
+			return sanitized
+		}
+
 		if result == nil || !result.Blocked {
-			if result != nil && (result.Action == "log" || result.Action == "mask") {
+			if result != nil && (result.Action == "log" || result.Action == "mask" || result.Action == "sanitize") {
 				c.Set("guardrail_triggered", true)
 				c.Set("guardrail_rule", result.RuleName)
 				setSecurityEvent(c, result, "")
-				if result.Action == "mask" {
+				switch result.Action {
+				case "mask":
 					applyRequestMask(c, ex, result)
 					streamContent = result.MaskedContent
+				case "sanitize":
+					streamContent = applyRequestSanitize(result)
 				}
 			}
 			next()

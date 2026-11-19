@@ -1,6 +1,7 @@
 package guardrail
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 )
@@ -55,6 +56,7 @@ type contentSegment struct {
 	end   int
 	zone  string // protocol position (Zone* constants)
 	role  string // message role where applicable ("" for non-message fields)
+	item  int    // embeddings input item index (-1 = not an embeddings item)
 	apply maskApply
 }
 
@@ -82,6 +84,10 @@ func newContentBuilder() *contentBuilder {
 }
 
 func (cb *contentBuilder) add(text string, zone, role string, apply maskApply) {
+	cb.addItem(text, zone, role, -1, apply)
+}
+
+func (cb *contentBuilder) addItem(text string, zone, role string, item int, apply maskApply) {
 	if text == "" || apply == nil {
 		return
 	}
@@ -90,7 +96,7 @@ func (cb *contentBuilder) add(text string, zone, role string, apply maskApply) {
 	}
 	start := cb.b.Len()
 	cb.b.WriteString(text)
-	cb.segs = append(cb.segs, contentSegment{start: start, end: start + len(text), zone: zone, role: role, apply: apply})
+	cb.segs = append(cb.segs, contentSegment{start: start, end: start + len(text), zone: zone, role: role, item: item, apply: apply})
 }
 
 func (cb *contentBuilder) build(commit func() []byte) *ExtractedContent {
@@ -98,6 +104,88 @@ func (cb *contentBuilder) build(commit func() []byte) *ExtractedContent {
 		return nil
 	}
 	return &ExtractedContent{Text: cb.b.String(), segs: cb.segs, commit: commit, maskOK: &cb.maskOK, Uninspectable: cb.uninspectable}
+}
+
+// SegmentZone is one protocol-segment zone extent in ExtractedContent.Text
+// byte coordinates — the plumbing kb_poisoning (M1) consumes for zw-v2 zone
+// weighting: engines read it from the check context and map hit spans to
+// zones without any interface change.
+type SegmentZone struct {
+	Start int
+	End   int
+	Zone  string
+}
+
+// ZoneMap returns the segment zone extents in e.Text byte order.
+func (e *ExtractedContent) ZoneMap() []SegmentZone {
+	if e == nil {
+		return nil
+	}
+	out := make([]SegmentZone, 0, len(e.segs))
+	for _, seg := range e.segs {
+		out = append(out, SegmentZone{Start: seg.start, End: seg.end, Zone: seg.zone})
+	}
+	return out
+}
+
+// SpanItems returns the embeddings input item indices of segments intersecting
+// any span (M2 per-item verdicts). Returns -1-items filtered out. Span offsets
+// are byte ranges in e.Text.
+func (e *ExtractedContent) SpanItems(spans []Span) []int {
+	if e == nil {
+		return nil
+	}
+	var items []int
+	seen := make(map[int]bool)
+	for _, seg := range e.segs {
+		if seg.item < 0 {
+			continue
+		}
+		for _, sp := range spans {
+			if sp.End > seg.start && sp.Start < seg.end {
+				if !seen[seg.item] {
+					seen[seg.item] = true
+					items = append(items, seg.item)
+				}
+				break
+			}
+		}
+	}
+	return items
+}
+
+// EmbeddingItemCount returns the number of embeddings input items extracted.
+func (e *ExtractedContent) EmbeddingItemCount() int {
+	if e == nil {
+		return 0
+	}
+	max := -1
+	for _, seg := range e.segs {
+		if seg.item > max {
+			max = seg.item
+		}
+	}
+	return max + 1
+}
+
+type ctxKeySegmentZones struct{}
+
+// WithSegmentZones attaches protocol-segment zones (ExtractedContent.Text
+// coordinates) to the check context; guardrail engines (kb_poisoning, M1)
+// read them via SegmentZonesFromContext for zone-weighted scoring.
+func WithSegmentZones(ctx context.Context, zones []SegmentZone) context.Context {
+	return context.WithValue(ctx, ctxKeySegmentZones{}, zones)
+}
+
+// SegmentZonesFromContext returns the attached segment zones, or nil.
+func SegmentZonesFromContext(ctx context.Context) []SegmentZone {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(ctxKeySegmentZones{}).([]SegmentZone); ok {
+		return v
+	}
+	return nil
 }
 
 // SpanZones returns the zones of segments intersecting any span, in segment
@@ -547,6 +635,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 }
 
 // extractEmbeddingsContent covers string input and string-array input.
+// Per-item indices are tracked for M2 batch rejection (SpanItems).
 func extractEmbeddingsContent(body []byte) *ExtractedContent {
 	var root map[string]json.RawMessage
 	if json.Unmarshal(body, &root) != nil {
@@ -561,7 +650,7 @@ func extractEmbeddingsContent(body []byte) *ExtractedContent {
 		if s == "" {
 			return nil
 		}
-		cb.add(s, ZoneEmbeddingInput, "", func(masked string) {
+		cb.addItem(s, ZoneEmbeddingInput, "", 0, func(masked string) {
 			root["input"], _ = json.Marshal(masked)
 		})
 	} else {
@@ -579,7 +668,7 @@ func extractEmbeddingsContent(body []byte) *ExtractedContent {
 			if s == "" {
 				continue
 			}
-			cb.add(s, ZoneEmbeddingInput, "", func(masked string) {
+			cb.addItem(s, ZoneEmbeddingInput, "", i, func(masked string) {
 				arr[i], _ = json.Marshal(masked)
 				root["input"], _ = json.Marshal(arr)
 			})

@@ -3,6 +3,7 @@ package guardrail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -17,6 +18,17 @@ import (
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
+
+// ErrKbEnforceFailClosed:kb_poisoning enforce 规则(action≠log)引擎故障的
+// 类型化失败关闭错误。社区语义:Check 循环对 kb enforce 规则故障返回此错
+// (商业冻结件 C13/R12 的社区侧基线;社区构建通常无 kb enforce 规则,该
+// 路径不触发);中间件据此越过全局 fail-open 拒绝请求(P1-5)。
+var ErrKbEnforceFailClosed = errors.New("guardrail: kb_poisoning enforce engine failure (fail-closed)")
+
+// kbEnforceFailClosed:该规则是否为 kb_poisoning 强制模式。
+func kbEnforceFailClosed(rule GuardrailRule) bool {
+	return rule.Type == "kb_poisoning" && rule.Action != "log" && rule.Action != ""
+}
 
 var severityOrder = map[string]int{
 	"critical": 4,
@@ -535,6 +547,9 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 	var maskedRuleName string
 	var logRuleName string
 	var maskedSpans []Span
+	// sanitizeComposed: 任一贡献改写的规则 action=sanitize 时,组合结果的
+	// 动作标签为 sanitize(机制与 mask 同通道;冻结件 C1/C3)。
+	var sanitizeComposed bool
 	// matched collects every participating rule (evaluated and matched) for
 	// decision attribution: the FINAL decision carries this list so no record
 	// ever smears one rule's version across all rules.
@@ -568,6 +583,11 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 				Timestamp:   time.Now(),
 				AgentType:   readAgentType(),
 			})
+			// kb enforce 失败关闭(P1-5):不受全局 EngineErrorAction/fail-open
+			// 影响(冻结件 C13/R12 社区基线)。
+			if kbEnforceFailClosed(rule) {
+				return nil, fmt.Errorf("%w (engine creation): %v", ErrKbEnforceFailClosed, err)
+			}
 			if s.EngineErrorAction() == "block" && !s.failOpen.Load() {
 				return nil, fmt.Errorf("guardrail: engine failure under block-on-error policy (%s): %w", rule.Type, err)
 			}
@@ -601,6 +621,10 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 				Timestamp:   time.Now(),
 				AgentType:   readAgentType(),
 			})
+			// kb enforce 失败关闭(P1-5,同 creation 分支)。
+			if kbEnforceFailClosed(rule) {
+				return nil, fmt.Errorf("%w (engine check): %v", ErrKbEnforceFailClosed, err)
+			}
 			if s.EngineErrorAction() == "block" && !s.failOpen.Load() {
 				return nil, fmt.Errorf("guardrail: engine failure under block-on-error policy (%s): %w", eng.Name(), err)
 			}
@@ -677,7 +701,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 			logRuleName = rule.Name
 			continue
 		}
-		if action == "mask" {
+		if action == "mask" || action == "sanitize" {
 			if len(result.MaskedSpans) > 0 {
 				// Span-based masking: the engine located its matches; collect
 				// for cross-rule composition. Spans are offsets into the
@@ -686,9 +710,15 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 				// valid for protocol-aware callers.
 				maskedSpans = append(maskedSpans, result.MaskedSpans...)
 				maskedRuleName = rule.Name
+				if action == "sanitize" {
+					sanitizeComposed = true
+				}
 			} else if result.MaskedContent != "" {
 				maskedContent = result.MaskedContent
 				maskedRuleName = rule.Name
+				if action == "sanitize" {
+					sanitizeComposed = true
+				}
 			}
 			continue
 		}
@@ -711,9 +741,13 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 				vault.maskSpans(req.Content, composed)
 			}
 		}
+		composedAction := "mask"
+		if sanitizeComposed {
+			composedAction = "sanitize"
+		}
 		return &CheckResponse{
 			Blocked:       false,
-			Action:        "mask",
+			Action:        composedAction,
 			RuleName:      maskedRuleName,
 			MaskedContent: applySpans(req.Content, composed),
 			MaskedSpans:   composed,
@@ -722,9 +756,13 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 		}, nil
 	}
 	if maskedContent != "" {
+		composedAction := "mask"
+		if sanitizeComposed {
+			composedAction = "sanitize"
+		}
 		return &CheckResponse{
 			Blocked:       false,
-			Action:        "mask",
+			Action:        composedAction,
 			RuleName:      maskedRuleName,
 			MaskedContent: maskedContent,
 			Truncated:     truncated,

@@ -85,6 +85,10 @@ var ValidActions = map[string]bool{
 	"fingerprint:list":            true,
 	"fingerprint:view":            true,
 	"fingerprint:manage":          true,
+	// RAG 知识库投毒防御台账(M4):视图为 Pro 档路由引用,审批/重扫为
+	// Enterprise 档——动作位在社区注册,商业路由引用(与 fingerprint 同模式)。
+	"rag:view":                    true,
+	"rag:manage":                  true,
 	"mcp:list":                    true,
 	"mcp:view":                    true,
 	"mcp:create":                  true,
