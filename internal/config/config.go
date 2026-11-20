@@ -37,6 +37,13 @@ type Config struct {
 	Usage          UsageConfig          `mapstructure:"usage"`
 	Guard          GuardConfig          `mapstructure:"guard"`
 	Toolset        ToolsetConfig        `mapstructure:"toolset"`
+	Behavior       BehaviorConfig       `mapstructure:"behavior"`
+}
+
+// BehaviorConfig 控制实体行为基线聚合作业（docs/plans/2026-11-19-behavior-baseline-defense.md，
+// 冻结 v4.0）。M1 仅暴露开关（默认关）；作业周期冻结为小时/日轮，运行参数不开放配置。
+type BehaviorConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // UsageConfig sizes the async usage-logging worker pool. Tasks carry billing

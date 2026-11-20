@@ -4,35 +4,35 @@ import "sort"
 
 // communityActions defines the base set of actions available to the Community tier.
 var communityActions = map[string]bool{
-	"provider:list":     true,
-	"provider:create":   true,
-	"provider:update":   true,
-	"provider:delete":   true,
-	"provider:test":     true,
-	"model:list":        true,
-	"model:create":      true,
-	"model:update":      true,
-	"model:delete":      true,
-	"key:list":          true,
-	"key:create":        true,
-	"key:update":        true,
-	"key:delete":        true,
-	"key:regenerate":    true,
-	"key:import":        true,
-	"usage:list":        true,
-	"usage:stats":       true,
-	"routing:stats":     true,
-	"system:password":   true,
-	"license:view":      true,
-	"license:manage":    true,
-	"mcp:list":          true,
-	"mcp:view":          true,
-	"mcp:create":        true,
-	"mcp:update":        true,
-	"mcp:delete":        true,
-	"mcp:permission":    true,
-	"mcp:logs":          true,
-	"mcp:stats":         true,
+	"provider:list":   true,
+	"provider:create": true,
+	"provider:update": true,
+	"provider:delete": true,
+	"provider:test":   true,
+	"model:list":      true,
+	"model:create":    true,
+	"model:update":    true,
+	"model:delete":    true,
+	"key:list":        true,
+	"key:create":      true,
+	"key:update":      true,
+	"key:delete":      true,
+	"key:regenerate":  true,
+	"key:import":      true,
+	"usage:list":      true,
+	"usage:stats":     true,
+	"routing:stats":   true,
+	"system:password": true,
+	"license:view":    true,
+	"license:manage":  true,
+	"mcp:list":        true,
+	"mcp:view":        true,
+	"mcp:create":      true,
+	"mcp:update":      true,
+	"mcp:delete":      true,
+	"mcp:permission":  true,
+	"mcp:logs":        true,
+	"mcp:stats":       true,
 	// System settings — community-core. Powers the Settings page (sidebar +
 	// route guard use system:view) and the dedicated /system/content-log
 	// endpoint. The aggregate /system/settings endpoint itself stays Pro
@@ -69,27 +69,27 @@ var proExtraActions = map[string]bool{
 	// and admin handler all live in the commercial overlay, which is only built
 	// into Pro/Enterprise. Runtime usage is additionally gated via the alias
 	// resolver's RequirePro check.
-	"capability:list":             true,
-	"capability:create":           true,
-	"capability:update":           true,
-	"capability:delete":           true,
-	"guardrail_alert:list":        true,
-	"guardrail_alert:create":      true,
-	"guardrail_alert:update":      true,
-	"guardrail_alert:delete":      true,
-	"guardrail_alert:logs":        true,
+	"capability:list":        true,
+	"capability:create":      true,
+	"capability:update":      true,
+	"capability:delete":      true,
+	"guardrail_alert:list":   true,
+	"guardrail_alert:create": true,
+	"guardrail_alert:update": true,
+	"guardrail_alert:delete": true,
+	"guardrail_alert:logs":   true,
 	// 护栏 CRUD 与容灾错误分类 —— Pro 及以上（产品决策 2026-11-09：社区版整体
 	// 隐藏「安全与治理」模块；护栏 CRUD 与 error_rule:* 原为 community-core，
 	// 自该决策起上移至 Pro）。
-	"guardrail:list":    true,
-	"guardrail:create":  true,
-	"guardrail:update":  true,
-	"guardrail:delete":  true,
-	"guardrail:test":    true,
-	"error_rule:list":   true,
-	"error_rule:create": true,
-	"error_rule:update": true,
-	"error_rule:delete": true,
+	"guardrail:list":              true,
+	"guardrail:create":            true,
+	"guardrail:update":            true,
+	"guardrail:delete":            true,
+	"guardrail:test":              true,
+	"error_rule:list":             true,
+	"error_rule:create":           true,
+	"error_rule:update":           true,
+	"error_rule:delete":           true,
 	"secret:test":                 true,
 	"secret:manage":               true,
 	"agent_shield:view":           true,
@@ -109,10 +109,10 @@ var proExtraActions = map[string]bool{
 	"audit:list":   true,
 	"audit:export": true,
 	// 内容合规（content_compliance 引擎、事件与人工复核）—— Pro 及以上。
-	"compliance:policy":  true,
-	"compliance:check":   true,
-	"compliance:logs":    true,
-	"compliance:review":  true,
+	"compliance:policy": true,
+	"compliance:check":  true,
+	"compliance:logs":   true,
+	"compliance:review": true,
 	// Agent 工具集画像（按 key 观测 tools 声明与 tool 调用）—— Pro 及以上。
 	// 采集器与查询端点均在商业 overlay（社区仅留 ToolObserver seam 与空表）；
 	// 迁移侧已把该动作种子进 admin/member/viewer 角色。
@@ -122,6 +122,16 @@ var proExtraActions = map[string]bool{
 	"toolset_alert:create": true,
 	"toolset_alert:update": true,
 	"toolset_alert:delete": true,
+	// RAG 知识库投毒防御台账（M4，端点在商业 overlay）—— Pro 及以上。
+	// role.go 已注册动作位；审批/重扫等 Enterprise 专属端点由路由闭包
+	// RequireEnterprise 再加一层门（与 fingerprint 同模式：动作位定档，
+	// 路由闭包收紧）。
+	"rag:view":   true,
+	"rag:manage": true,
+	// 实体行为基线防护台账（M2，端点在社区 app.go，冻结 v4.0 D4：台账 CRUD
+	// 属 Community 机制）—— Pro 及以上；observe-only，不含处置动作（D2）。
+	"behavior:view":   true,
+	"behavior:manage": true,
 }
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).

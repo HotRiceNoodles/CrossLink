@@ -21,6 +21,7 @@ import (
 
 	"github.com/crosslink/internal/admin"
 	"github.com/crosslink/internal/apidoc"
+	"github.com/crosslink/internal/behavior"
 	"github.com/crosslink/internal/billingintegrity"
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
@@ -698,6 +699,21 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		adminGroup.GET("/guardrails/config", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.GetConfig)
 		adminGroup.PUT("/guardrails/config", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.UpdateConfig)
 
+		// Behavior baseline anomalies (M2, frozen v4.0 D4 — ledger CRUD is
+		// Community mechanism; action bits are Pro-tier so Community builds 403).
+		// observe-only: confirm/dismiss are terminal verdicts + tolerance feedback
+		// (D10/D14), never enforcement.
+		behaviorHandler := admin.NewBehaviorHandler(db, ext.Deps.AuditSvc)
+		adminGroup.GET("/behavior/anomalies", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.ListAnomalies)
+		adminGroup.GET("/behavior/anomalies/:id", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.GetAnomaly)
+		adminGroup.GET("/behavior/coverage", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.Coverage)
+		adminGroup.POST("/behavior/anomalies/:id/confirm", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.Confirm)
+		adminGroup.POST("/behavior/anomalies/:id/dismiss", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.Dismiss)
+		// M3 反馈闭环：行为指纹候选复核（人在环；approve 不自动生效，D2）。
+		adminGroup.GET("/behavior/fingerprints", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.ListFingerprints)
+		adminGroup.POST("/behavior/fingerprints/:id/approve", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.ApproveFingerprint)
+		adminGroup.POST("/behavior/fingerprints/:id/retire", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.RetireFingerprint)
+
 		// Playground (community-core) — interactive testing for all modes
 		// (chat/stream/image/tts/stt/video/responses). Multimodal modes
 		// capability-probe providers via type assertion.
@@ -1015,6 +1031,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 			svcs.DataLensAggSvc.SetSettingsProvider(settingsProvider)
 			go svcs.DataLensAggSvc.Run(appCtx)
 		}
+	}
+	// Behavior baseline aggregation M1 (docs/plans/2026-11-19-behavior-baseline-defense.md,
+	// frozen v4.0). Background-only per D6: rollups/baselines are computed off the
+	// request path entirely; unlike DataLens this aggregation is portable SQL
+	// (WHERE range + Go-side bucketing, D9), so it runs on every dialect.
+	if cfg.Behavior.Enabled {
+		go behavior.Run(appCtx, db)
 	}
 	// Update cache size gauge periodically via approximate counter
 	go func() {
