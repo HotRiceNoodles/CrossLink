@@ -10,6 +10,7 @@ import (
 func intPtrBridge(v int) *int { return &v }
 
 func TestBuildContextAnalysisResult_Anthropic(t *testing.T) {
+	t.Parallel()
 	var req domain.AnthropicRequest
 	json.Unmarshal([]byte(`{"model":"claude-3","max_tokens":500,"system":"a reasonably long system prompt","messages":[{"role":"user","content":"q"}]}`), &req)
 
@@ -27,6 +28,7 @@ func TestBuildContextAnalysisResult_Anthropic(t *testing.T) {
 }
 
 func TestBuildContextAnalysisResult_WindowFallbackToDefaultTable(t *testing.T) {
+	t.Parallel()
 	// maxContext nil -> fall back to built-in table for modelUsed
 	var req domain.OpenAIRequest
 	json.Unmarshal([]byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello world question"}]}`), &req)
@@ -37,12 +39,14 @@ func TestBuildContextAnalysisResult_WindowFallbackToDefaultTable(t *testing.T) {
 }
 
 func TestBuildContextAnalysisResult_NilReq(t *testing.T) {
+	t.Parallel()
 	if res := BuildContextAnalysisResult(contextAnalysisInput{}); res != nil {
 		t.Errorf("nil request -> nil result (unanalyzed path)")
 	}
 }
 
 func TestBuildContextAnalysisResult_PanicRecovered(t *testing.T) {
+	t.Parallel()
 	// A panicking observe hook must not escape.
 	var r domain.AnthropicRequest
 	json.Unmarshal([]byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`), &r)

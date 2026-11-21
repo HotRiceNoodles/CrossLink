@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
@@ -22,10 +23,22 @@ import (
 // being "rejected as internal" while the real cause is an invisible trailing
 // space.
 
+// shortProbeTimeout 缩短探针传输超时（见 onboarding.go 的
+// probeTransportTimeout 注释）：本机 LAN 上 10.99.x 等不可达目标每次拨号
+// 等满 15s；URL 策略准入在任何拨号之前裁定、拨号结果从不被断言，50ms
+// 不改变断言语义。
+func shortProbeTimeout(t *testing.T) {
+	t.Helper()
+	prev := probeTransportTimeout
+	probeTransportTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { probeTransportTimeout = prev })
+}
+
 // probeWith runs the onboarding probe entry with the given base_url and
 // returns (status, body).
 func probeWith(t *testing.T, baseURL string) (int, string) {
 	t.Helper()
+	shortProbeTimeout(t)
 	h := newOnboardingHandlerForTest(setupOnboardingTestDB(t))
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/providers/probe", gin.H{
 		"adapter_type": "openai_compatible",

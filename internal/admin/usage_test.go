@@ -11,6 +11,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestParseID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -41,6 +42,7 @@ func TestParseID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVerifyPassword_Bcrypt(t *testing.T) {
+	t.Parallel()
 	t.Run("correct password matches bcrypt hash", func(t *testing.T) {
 		hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
 		if err != nil {

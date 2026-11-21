@@ -34,7 +34,7 @@ import (
 // tokenSigner is one algorithm family's mint capability.
 type tokenSigner interface {
 	alg() string
-	material() string          // whitelist entry (PEM or b64 raw)
+	material() string                    // whitelist entry (PEM or b64 raw)
 	sign(t *testing.T, ss string) string // signature, base64url
 }
 

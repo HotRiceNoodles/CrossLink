@@ -11,6 +11,7 @@ import (
 )
 
 func TestOpenAPI_Serve(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/openapi.json", OpenAPIHandler)

@@ -29,7 +29,8 @@ func (f *fakeBudgetSvc) SettleScope(ctx context.Context, scope, targetID, period
 func (f *fakeBudgetSvc) CheckBudget(ctx context.Context, scope, targetID, period string, budgetLimit float64) (float64, float64, bool) {
 	return 0, budgetLimit, false
 }
-func (f *fakeBudgetSvc) ReportUsage(ctx context.Context, scope, targetID, period string, cost float64) {}
+func (f *fakeBudgetSvc) ReportUsage(ctx context.Context, scope, targetID, period string, cost float64) {
+}
 func (f *fakeBudgetSvc) AdjustBudget(ctx context.Context, scope, targetID, period string, delta float64) {
 }
 func (f *fakeBudgetSvc) AdjustBudgetKeyed(ctx context.Context, scope, targetID, period, periodKey string, delta float64) {

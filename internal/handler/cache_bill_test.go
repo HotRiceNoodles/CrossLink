@@ -21,16 +21,17 @@ import (
 )
 
 func TestCacheHitBiller_OneDurableRowPerHit(t *testing.T) {
+	t.Parallel()
 	db := newUsageDB(t)
 	bill := NewCacheHitBiller(db.svc)
 
 	cached := &service.CacheEntry{
-		Model:       "mock-r63",
-		InputTokens: 12,
+		Model:        "mock-r63",
+		InputTokens:  12,
 		OutputTokens: 6,
-		InputPrice:  3,
-		OutputPrice: 12,
-		Currency:    "CNY",
+		InputPrice:   3,
+		OutputPrice:  12,
+		Currency:     "CNY",
 	}
 
 	const hits = 3
@@ -99,6 +100,7 @@ func TestCacheHitBiller_OneDurableRowPerHit(t *testing.T) {
 
 // The biller signature must stay compatible with the middleware wiring.
 func TestCacheHitBiller_Interface(t *testing.T) {
+	t.Parallel()
 	var _ middleware.CacheHitBiller = NewCacheHitBiller(nil)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	NewCacheHitBiller(nil)(c, nil) // nil entry: no-op, no panic

@@ -14,8 +14,8 @@ import (
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 	sqlite "github.com/glebarez/sqlite"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 

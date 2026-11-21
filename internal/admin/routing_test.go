@@ -7,6 +7,7 @@ import (
 )
 
 func TestComputeRoutingDistribution_BasicSplit(t *testing.T) {
+	t.Parallel()
 	// provider A weight 7, provider B weight 3
 	// actual: A=70 requests (7 errors), B=30 requests (0 errors)
 	cfg := []providerConfigWeight{
@@ -30,6 +31,7 @@ func TestComputeRoutingDistribution_BasicSplit(t *testing.T) {
 }
 
 func TestComputeRoutingDistribution_IncludesZeroTrafficProvider(t *testing.T) {
+	t.Parallel()
 	cfg := []providerConfigWeight{
 		{ProviderID: 1, Weight: 5, DisplayName: "A"},
 		{ProviderID: 2, Weight: 5, DisplayName: "B"}, // configured but unused
@@ -57,6 +59,7 @@ func TestComputeRoutingDistribution_IncludesZeroTrafficProvider(t *testing.T) {
 }
 
 func TestComputeRoutingDistribution_ZeroDivisionGuard(t *testing.T) {
+	t.Parallel()
 	// no config, no traffic -> empty
 	assert.Empty(t, computeRoutingDistribution(nil, nil))
 
@@ -72,6 +75,7 @@ func TestComputeRoutingDistribution_ZeroDivisionGuard(t *testing.T) {
 }
 
 func TestComputeRoutingDistribution_ActualWithNoConfig(t *testing.T) {
+	t.Parallel()
 	// traffic to a provider with no weight config (orphan)
 	cfg := []providerConfigWeight{}
 	actual := map[int64]providerActual{
@@ -86,6 +90,7 @@ func TestComputeRoutingDistribution_ActualWithNoConfig(t *testing.T) {
 }
 
 func TestComputeRoutingDistribution_OrphansStillGetConfigIfPresent(t *testing.T) {
+	t.Parallel()
 	// If a provider appears in both cfg and actual, emit once with both.
 	cfg := []providerConfigWeight{{ProviderID: 1, Weight: 10, DisplayName: "A"}}
 	actual := map[int64]providerActual{1: {Requests: 5}}

@@ -35,6 +35,7 @@ import (
 //
 // Gated on CL_TEST_PG_DSN (real isolation semantics; sqlite serializes
 // writers and cannot reproduce). Run:
+//
 //	docker network + postgres, then
 //	CL_TEST_PG_DSN="host=... user=postgres password=lab dbname=x9 sslmode=disable" \
 //	  go test ./internal/service -run X9 -count=1 -v

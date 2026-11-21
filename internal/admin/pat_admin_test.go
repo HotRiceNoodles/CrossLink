@@ -93,6 +93,7 @@ func defaultPATMocks() (*mockPatSvc, *mockPatLister) {
 // --- Create tests ---
 
 func TestPATAdmin_Create_Success(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	var gotAllowed []string
 	patSvc.createFn = func(ctx context.Context, userID int64, allowedActions []string, name string, scopes []string) (*service.CreatePatResult, error) {
@@ -135,6 +136,7 @@ func TestPATAdmin_Create_Success(t *testing.T) {
 }
 
 func TestPATAdmin_Create_ScopeExceeded(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	patSvc.createFn = func(ctx context.Context, userID int64, allowedActions []string, name string, scopes []string) (*service.CreatePatResult, error) {
 		return nil, service.ErrScopeExceeded
@@ -159,6 +161,7 @@ func TestPATAdmin_Create_ScopeExceeded(t *testing.T) {
 }
 
 func TestPATAdmin_Create_EmptyName(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	patSvc.createFn = func(ctx context.Context, userID int64, allowedActions []string, name string, scopes []string) (*service.CreatePatResult, error) {
 		return nil, service.ErrInvalidName
@@ -185,6 +188,7 @@ func TestPATAdmin_Create_EmptyName(t *testing.T) {
 // GetPermissions errors, the handler must pass nil allowedActions to the
 // service (which the real service rejects — see the real-service test below).
 func TestPATAdmin_Create_RolePermError_PassesNilAllowedActions(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	var gotAllowed []string
 	called := false
@@ -220,6 +224,7 @@ func TestPATAdmin_Create_RolePermError_PassesNilAllowedActions(t *testing.T) {
 // production PatService is fail-closed: nil/empty allowedActions rejects any
 // requested scope (and empty-scope PATs are rejected as meaningless).
 func TestPATAdmin_Create_AllowedActionsNil_RejectedByRealService(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		scopes []string
@@ -276,6 +281,7 @@ func (m *patHandlerTestRepo) TouchLastUsed(ctx context.Context, id int64) error 
 // --- List tests ---
 
 func TestPATAdmin_List_DTOWhitelist(t *testing.T) {
+	t.Parallel()
 	_, lister := defaultPATMocks()
 	h := newPATHandler(nil, lister)
 
@@ -325,6 +331,7 @@ func keysOf(m map[string]any) []string {
 // --- Revoke tests ---
 
 func TestPATAdmin_Revoke_Success(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	h := newPATHandler(patSvc, nil)
 
@@ -344,6 +351,7 @@ func TestPATAdmin_Revoke_Success(t *testing.T) {
 }
 
 func TestPATAdmin_Revoke_NotFound(t *testing.T) {
+	t.Parallel()
 	patSvc, _ := defaultPATMocks()
 	patSvc.revokeFn = func(ctx context.Context, id, userID int64) error {
 		return errors.Join(service.ErrPatTokenNotFound, errors.New("wrapped"))

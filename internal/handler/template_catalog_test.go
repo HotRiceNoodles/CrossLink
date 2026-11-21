@@ -25,6 +25,7 @@ func setupCatalogDB(t *testing.T) *gorm.DB {
 }
 
 func TestTemplateCatalog_ListReturnsMetadataOnly(t *testing.T) {
+	t.Parallel()
 	db := setupCatalogDB(t)
 	require.NoError(t, db.Create(&model.PromptTemplate{
 		Name: "summarize", Description: "Summarize text",

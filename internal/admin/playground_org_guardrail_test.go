@@ -35,6 +35,7 @@ func (*pgOrgPhoneProvider) StreamChat(context.Context, *domain.OpenAIRequest, st
 }
 
 func TestPlaygroundOrganizationResponseRules(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	for _, surface := range []string{"chat", "stream", "responses-json", "responses-stream", "responses-native"} {
 		for _, orgID := range []int64{7, 8} {
@@ -96,6 +97,7 @@ func TestPlaygroundOrganizationResponseRules(t *testing.T) {
 }
 
 func TestPlaygroundChatAppliesNonBlockingMaskResult(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "incremental")
 	for _, statement := range []string{

@@ -15,6 +15,7 @@ import (
 // re-submit, which during a port-exhaustion outage self-sustained into an
 // 87k-attempt dial storm. The 503 must carry Retry-After.
 func TestResolveRetryAfterHeader(t *testing.T) {
+	t.Parallel()
 	degraded := fmt.Errorf("%w: query model mappings: dial refused", router.ErrResolveDegraded)
 	noActive := fmt.Errorf("%w: all routes circuit-open", router.ErrNoActiveProvider)
 

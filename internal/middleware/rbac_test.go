@@ -129,7 +129,7 @@ func TestRequireAction_TierBlocked(t *testing.T) {
 	cache := NewPermissionCache(nil)
 	cache.mu.Lock()
 	cache.perms = map[int64]map[string]bool{
-		1: {"guardrail:list": true, "provider:list": true},
+		1: {"guardrail:list": true, "provider:list": true, "rag:view": true},
 	}
 	cache.mu.Unlock()
 
@@ -139,9 +139,8 @@ func TestRequireAction_TierBlocked(t *testing.T) {
 		expected int
 	}{
 		{"community allows provider:list", "provider:list", 200},
-		// 2026-11-09 产品决策：护栏 CRUD 上移 Pro——社区版（tier gate 为空=社区）
-		// 对 guardrail:list 403，与 error_rule:* 同待遇。
 		{"community blocks guardrail:list (Pro since 2026-11-09)", "guardrail:list", 403},
+		{"community blocks rag:view (Pro since M4 ledger)", "rag:view", 403},
 		{"db missing blocks audit:list", "audit:list", 403},
 	}
 

@@ -2,6 +2,7 @@ package behavior
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,16 +14,9 @@ import (
 
 func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	// 内存库：G0 回填按小时逐桶 upsert（672 桶 × 每桶多个事务），文件库每次
-	// 事务 fsync 在 Windows/CI 盘上把套件拖到分钟级甚至超时；内存库同进程
-	// 锁语义不变（D15 行锁不依赖跨进程文件锁）。单连接避免 :memory: 每连接
-	// 各自一个空库。
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "behavior.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
-	}
-	if sqlDB, err := db.DB(); err == nil {
-		sqlDB.SetMaxOpenConns(1)
 	}
 	if err := db.AutoMigrate(
 		&model.UsageLog{}, &model.BehaviorRollup{}, &model.BehaviorBaseline{},

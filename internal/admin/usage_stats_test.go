@@ -7,6 +7,7 @@ import (
 )
 
 func TestStats_ZeroDivisionProtection(t *testing.T) {
+	t.Parallel()
 	// Verify the zero-division guard logic that runs in Stats()
 	// When total_requests is 0, all rates must be 0, not NaN
 
@@ -39,6 +40,7 @@ func TestStats_ZeroDivisionProtection(t *testing.T) {
 }
 
 func TestStats_NonZeroCalculations(t *testing.T) {
+	t.Parallel()
 	// Verify correct calculations with actual values
 	totalRequests := int64(1000)
 	totalTokens := int64(500000)
@@ -67,6 +69,7 @@ func TestStats_NonZeroCalculations(t *testing.T) {
 }
 
 func TestDailyStat_FieldsMatchScanOrder(t *testing.T) {
+	t.Parallel()
 	// Verify DailyStat struct has the correct field count and order.
 	// The SELECT order in DailyTrend is:
 	// date, count, tokens, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,

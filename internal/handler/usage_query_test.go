@@ -59,6 +59,7 @@ func parseUsageBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestUsageQuery_PostAuthNilKey(t *testing.T) {
+	t.Parallel()
 	h := NewUsageQueryHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(nil) // config-authkey fallback: no *model.APIKey in context
 	h.GetUsage(c)
@@ -71,6 +72,7 @@ func TestUsageQuery_PostAuthNilKey(t *testing.T) {
 }
 
 func TestUsageQuery_NilBudgetSvc(t *testing.T) {
+	t.Parallel()
 	h := NewUsageQueryHandler(nil)
 	c, w := newUsageCtx(&model.APIKey{ID: 1})
 	h.GetUsage(c)
@@ -82,6 +84,7 @@ func TestUsageQuery_NilBudgetSvc(t *testing.T) {
 }
 
 func TestUsageQuery_BudgetActive(t *testing.T) {
+	t.Parallel()
 	exp := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
 	h := NewUsageQueryHandler(&mockBudgetSvc{
 		budgetSpent: 37.5231, budgetLimit: 100, budgetExceeded: false,
@@ -128,6 +131,7 @@ func TestUsageQuery_BudgetActive(t *testing.T) {
 }
 
 func TestUsageQuery_BudgetAtExactlyLimit(t *testing.T) {
+	t.Parallel()
 	// >= semantics: spent == limit => exceeded=true, remaining=0.
 	h := NewUsageQueryHandler(&mockBudgetSvc{
 		budgetSpent: 100, budgetLimit: 100, budgetExceeded: true,
@@ -142,6 +146,7 @@ func TestUsageQuery_BudgetAtExactlyLimit(t *testing.T) {
 }
 
 func TestUsageQuery_UnlimitedBudget(t *testing.T) {
+	t.Parallel()
 	// MaxBudget=0 => CheckBudget returns (0,0,false); limit is the unlimited sentinel.
 	h := NewUsageQueryHandler(&mockBudgetSvc{}) // zero-value: spent=0, limit=0, exceeded=false
 	c, w := newUsageCtx(&model.APIKey{ID: 1, MaxBudget: 0, BudgetPeriod: "monthly"})
@@ -156,6 +161,7 @@ func TestUsageQuery_UnlimitedBudget(t *testing.T) {
 }
 
 func TestUsageQuery_UnlimitedCalls(t *testing.T) {
+	t.Parallel()
 	h := NewUsageQueryHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(&model.APIKey{ID: 1, MaxCalls: 0, CallPeriod: "daily"})
 	h.GetUsage(c)
@@ -169,6 +175,7 @@ func TestUsageQuery_UnlimitedCalls(t *testing.T) {
 }
 
 func TestUsageQuery_NilExpiresAt(t *testing.T) {
+	t.Parallel()
 	h := NewUsageQueryHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(&model.APIKey{ID: 1, ExpiresAt: nil})
 	h.GetUsage(c)

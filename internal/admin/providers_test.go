@@ -1,15 +1,15 @@
 package admin
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
@@ -480,7 +480,7 @@ func TestProviderCircuits_OpenAndHalfOpen(t *testing.T) {
 	tracker.RecordTransientFailure("half-prov", "m2", 0) // 阈值未到不开 —— 需 3 次
 	tracker.RecordTransientFailure("half-prov", "m2", 0)
 	tracker.RecordTransientFailure("half-prov", "m2", 0) // 第 3 次 → open（40ms 冷却）
-	time.Sleep(60 * time.Millisecond)                     // 过期 → half_open
+	time.Sleep(60 * time.Millisecond)                    // 过期 → half_open
 
 	h := newHealthTestHandler(t, tracker)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/providers/health", nil)
@@ -493,13 +493,13 @@ func TestProviderCircuits_OpenAndHalfOpen(t *testing.T) {
 	var resp struct {
 		Data struct {
 			ServerNow time.Time `json:"server_now"`
-			Circuits []struct {
-				Provider string `json:"provider"`
-				Model    string `json:"model"`
-				State    string `json:"state"`
-				Kind     string `json:"kind"`
-				RecoverInSeconds int64 `json:"recover_in_seconds"`
-				ErrorType string `json:"error_type"`
+			Circuits  []struct {
+				Provider         string `json:"provider"`
+				Model            string `json:"model"`
+				State            string `json:"state"`
+				Kind             string `json:"kind"`
+				RecoverInSeconds int64  `json:"recover_in_seconds"`
+				ErrorType        string `json:"error_type"`
 			} `json:"circuits"`
 		} `json:"data"`
 	}
@@ -511,12 +511,12 @@ func TestProviderCircuits_OpenAndHalfOpen(t *testing.T) {
 		t.Fatalf("circuits = %+v, want 2 (open + half_open)", resp.Data.Circuits)
 	}
 	byProv := map[string]struct {
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-		State    string `json:"state"`
-		Kind     string `json:"kind"`
-		RecoverInSeconds int64 `json:"recover_in_seconds"`
-		ErrorType string `json:"error_type"`
+		Provider         string `json:"provider"`
+		Model            string `json:"model"`
+		State            string `json:"state"`
+		Kind             string `json:"kind"`
+		RecoverInSeconds int64  `json:"recover_in_seconds"`
+		ErrorType        string `json:"error_type"`
 	}{}
 	for _, r := range resp.Data.Circuits {
 		byProv[r.Provider] = r

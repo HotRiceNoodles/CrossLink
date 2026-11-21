@@ -61,6 +61,7 @@ func doProfile(t *testing.T, r *gin.Engine, method, path, body string) (int, map
 }
 
 func TestProfileGetWhitelist(t *testing.T) {
+	t.Parallel()
 	r, _ := setupProfileTest(t)
 	code, body := doProfile(t, r, http.MethodGet, "/user/profile", "")
 	require.Equal(t, 200, code)
@@ -76,6 +77,7 @@ func TestProfileGetWhitelist(t *testing.T) {
 }
 
 func TestProfileUpdateDisplayNameAndEmail(t *testing.T) {
+	t.Parallel()
 	r, db := setupProfileTest(t)
 	code, body := doProfile(t, r, http.MethodPut, "/user/profile",
 		`{"display_name":"平台管理员","email":"new@crosslink.com"}`)
@@ -94,6 +96,7 @@ func TestProfileUpdateDisplayNameAndEmail(t *testing.T) {
 }
 
 func TestProfileUpdateValidation(t *testing.T) {
+	t.Parallel()
 	r, _ := setupProfileTest(t)
 	// display_name 空 / 超长
 	code, b := doProfile(t, r, http.MethodPut, "/user/profile", `{"display_name":"  "}`)

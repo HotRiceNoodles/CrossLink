@@ -14,6 +14,7 @@ import (
 )
 
 func TestIncrementalStreamModePersistsAndReloads(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration test-integration-oceanbase lint fmt fmt-check clean release release-snapshot changelog
+.PHONY: build run test test-ci test-e2e test-g0-eval test-usage-soak test-integration test-integration-oceanbase lint fmt fmt-check clean release release-snapshot changelog
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -15,8 +15,27 @@ build:
 run:
 	go run ./cmd/server
 
+# 测试分层（2026-11-20 提速）：默认 `make test` 只跑单元层——重型验收件由
+# env 门控自动跳过（BEHAVIOR_G0_EVAL / BEHAVIOR_PERF_TEST / KB_POISON_*）。
+# CI（.github/workflows/test.yml）= test-ci + test-e2e，master 另跑 test-g0-eval。
 test:
 	go test ./...
+
+# CI 口径：禁缓存 + 乱序（失败日志带 -shuffle=<seed> 复现种子）。
+test-ci:
+	go test -count=1 -shuffle=on -timeout 25m ./internal/... ./pkg/... ./cmd/...
+
+test-e2e:
+	go test -count=1 -timeout 10m ./e2e/
+
+# usage WAL soak 件（fsync 停滞恢复/大文件 fsync 吞吐/持续负载台面，
+# Windows 本机 ~168s；默认全量测试跳过，CI soak 作业每次 push 必跑）。
+test-usage-soak:
+	USAGE_SOAK_TEST=1 go test -count=1 -timeout 12m ./internal/handler/
+
+# G0 验收评测（门槛 2/3/4 证据件，默认全量测试跳过）。
+test-g0-eval:
+	BEHAVIOR_G0_EVAL=1 go test -count=1 -run 'TestG0' -v -timeout 20m ./internal/behavior/
 
 test-integration:
 	docker compose -f deployments/docker-compose.test.yaml up -d --wait

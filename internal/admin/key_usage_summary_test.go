@@ -45,6 +45,7 @@ func callKeyUsageSummary(t *testing.T, h *UsageHandler, orgID int64) (*httptest.
 // basis as reconciliation), excludes other months, ignores key-less rows and
 // is org-scoped.
 func TestKeyUsageSummary_MonthWindowAndOrgScope(t *testing.T) {
+	t.Parallel()
 	db := setupKeyUsageDB(t)
 	h := NewUsageHandler(db, "", nil)
 
@@ -104,6 +105,7 @@ func TestKeyUsageSummary_MonthWindowAndOrgScope(t *testing.T) {
 }
 
 func TestKeyUsageSummary_EmptyReturnsArray(t *testing.T) {
+	t.Parallel()
 	db := setupKeyUsageDB(t)
 	h := NewUsageHandler(db, "", nil)
 	w, _ := callKeyUsageSummary(t, h, 7)

@@ -121,6 +121,7 @@ func TestSetupApply_URLPolicy(t *testing.T) {
 
 func TestOnboardingProbe_URLPolicy(t *testing.T) {
 	probe := func(t *testing.T) int {
+		shortProbeTimeout(t)
 		h := newOnboardingHandlerForTest(setupOnboardingTestDB(t))
 		c, w := newTestContext(t, http.MethodPost, "/admin/api/providers/probe", gin.H{
 			"adapter_type": "openai_compatible",

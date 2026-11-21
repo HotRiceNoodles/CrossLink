@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/glebarez/sqlite"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/crosslink/internal/model"
@@ -160,7 +160,7 @@ func TestCalibrateCross_X2_ExpiredForeignIntentConvergesViaFar(t *testing.T) {
 	if err := s.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.CloseSettleJournal)
+	t.Cleanup(s.CloseSettleJournal) // Windows: release the journal handle for TempDir cleanup
 	cal := NewBudgetCalibrationService(db, rdb)
 	cal.SetLiveIntentCheck(func(time.Duration) int64 { return 0 })
 

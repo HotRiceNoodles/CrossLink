@@ -17,6 +17,7 @@ import (
 // decoupling boundary.
 
 func TestPortalUsage_PostAuthNilKey(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(nil)
 	h.GetUsage(c)
@@ -27,6 +28,7 @@ func TestPortalUsage_PostAuthNilKey(t *testing.T) {
 }
 
 func TestPortalUsage_NilBudgetSvc(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(nil)
 	c, w := newUsageCtx(&model.APIKey{ID: 1})
 	h.GetUsage(c)
@@ -34,6 +36,7 @@ func TestPortalUsage_NilBudgetSvc(t *testing.T) {
 }
 
 func TestPortalUsage_ActiveKeyCleanContract(t *testing.T) {
+	t.Parallel()
 	exp := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
 	h := NewPortalUsageHandler(&mockBudgetSvc{
 		budgetSpent: 37.5, budgetLimit: 100,
@@ -79,6 +82,7 @@ func TestPortalUsage_ActiveKeyCleanContract(t *testing.T) {
 }
 
 func TestPortalUsage_DisabledKeyActiveFalse(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(&model.APIKey{ID: 1, Status: 2}) // status != 1 → not active
 	h.GetUsage(c)
@@ -88,6 +92,7 @@ func TestPortalUsage_DisabledKeyActiveFalse(t *testing.T) {
 }
 
 func TestPortalUsage_UnlimitedBudgetAndCalls(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(&mockBudgetSvc{}) // zero → spent=0, limit=0
 	c, w := newUsageCtx(&model.APIKey{
 		ID: 1, MaxBudget: 0, BudgetPeriod: "monthly",
@@ -101,6 +106,7 @@ func TestPortalUsage_UnlimitedBudgetAndCalls(t *testing.T) {
 }
 
 func TestPortalUsage_UnlimitedLimits(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(&model.APIKey{ID: 1, TPMLimit: 0, RPMLimit: 0})
 	h.GetUsage(c)
@@ -111,6 +117,7 @@ func TestPortalUsage_UnlimitedLimits(t *testing.T) {
 }
 
 func TestPortalUsage_NilExpiresAt(t *testing.T) {
+	t.Parallel()
 	h := NewPortalUsageHandler(&mockBudgetSvc{})
 	c, w := newUsageCtx(&model.APIKey{ID: 1, ExpiresAt: nil})
 	h.GetUsage(c)

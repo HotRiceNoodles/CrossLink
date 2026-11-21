@@ -12,6 +12,7 @@ import (
 )
 
 func TestGuardrailStreamCapabilitiesDescribeConfigurationAndNotAction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		kind, config, strategy, reason string
 		mask                           bool
@@ -58,6 +59,7 @@ func TestGuardrailStreamCapabilitiesDescribeConfigurationAndNotAction(t *testing
 }
 
 func TestGuardrailRequestDirectionDoesNotHoldResponse(t *testing.T) {
+	t.Parallel()
 	raw, err := json.Marshal(sanitizeRule(guardrail.GuardrailRule{Type: "keyword_filter", Direction: "request", Config: datatypes.JSON(`{}`), Action: "mask"}))
 	require.NoError(t, err)
 	var value map[string]any
@@ -67,6 +69,7 @@ func TestGuardrailRequestDirectionDoesNotHoldResponse(t *testing.T) {
 }
 
 func TestGuardrailCreateRejectsLengthMaskWithoutHistory(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	w := env.req(t, http.MethodPost, "/guardrails", map[string]any{
 		"name": "非法长度脱敏", "type": "content_length", "direction": "response", "config": map[string]any{"max_output_chars": 10}, "action": "mask",
@@ -80,6 +83,7 @@ func TestGuardrailCreateRejectsLengthMaskWithoutHistory(t *testing.T) {
 }
 
 func TestGuardrailUpdateValidatesMergedTypeAndAction(t *testing.T) {
+	t.Parallel()
 	for _, patch := range []map[string]any{
 		{"action": "mask"},
 		{"type": "content_length", "action": "mask", "config": map[string]any{"max_output_chars": 10}},
@@ -100,6 +104,7 @@ func TestGuardrailUpdateValidatesMergedTypeAndAction(t *testing.T) {
 }
 
 func TestGuardrailUpdateRejectsTypeOnlyConversionToLengthMask(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	rule := guardrail.GuardrailRule{Name: "原关键词脱敏", Type: "keyword_filter", Direction: "response", Config: datatypes.JSON(`{"blocklist":["secret"]}`), Action: "mask", Version: 1}
 	require.NoError(t, env.db.Create(&rule).Error)
@@ -112,6 +117,7 @@ func TestGuardrailUpdateRejectsTypeOnlyConversionToLengthMask(t *testing.T) {
 }
 
 func TestGuardrailLegacyInvalidLengthCanOnlyDisableOrRepair(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	rule := guardrail.GuardrailRule{Name: "历史长度脱敏", Type: "content_length", Direction: "response", Enabled: true, Config: datatypes.JSON(`{}`), Action: "mask", Version: 1}
 	require.NoError(t, env.db.Create(&rule).Error)
@@ -135,6 +141,7 @@ func TestGuardrailLegacyInvalidLengthCanOnlyDisableOrRepair(t *testing.T) {
 }
 
 func TestGuardrailRollbackRejectsInvalidHistoricalLengthMask(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	rule := guardrail.GuardrailRule{Name: "长度限制", Type: "content_length", Direction: "response", Enabled: true, Config: datatypes.JSON(`{}`), Action: "block", Version: 2}
 	require.NoError(t, env.db.Create(&rule).Error)
@@ -152,6 +159,7 @@ func TestGuardrailRollbackRejectsInvalidHistoricalLengthMask(t *testing.T) {
 }
 
 func TestGuardrailCapabilityReadOnlyAndTenantScoped(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 7)
 	handler := NewGuardrailHandler(env.db, env.svcA, nil)
 	env.router.GET("/guardrails", handler.List)

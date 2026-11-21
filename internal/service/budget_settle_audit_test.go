@@ -349,5 +349,3 @@ func TestSettleAudit_T16_IndependentRequestsEachBilledOnce(t *testing.T) {
 		t.Fatalf("settled = %q, want 0.005984 (each independent request billed once)", settled)
 	}
 }
-
-

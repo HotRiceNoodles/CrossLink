@@ -211,6 +211,7 @@ func doPAT(r *gin.Engine, path, token string) *httptest.ResponseRecorder {
 // 1. Lifecycle: full-permission PAT works on all four endpoints; after
 // Revoke the same token gets 401 everywhere.
 func TestPATE2E_Lifecycle(t *testing.T) {
+	t.Parallel()
 	r, repo, svc := buildPATRouter(t, map[string]bool{
 		"key:list": true, "usage:list": true, "budget:read": true, "health:read": true,
 	})
@@ -241,6 +242,7 @@ func TestPATE2E_Lifecycle(t *testing.T) {
 // 2. Scope enforcement (PAT layer of the triple intersection): a PAT scoped
 // to usage:list only cannot reach /pat/keys.
 func TestPATE2E_ScopeExceeded(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{
 		"key:list": true, "usage:list": true,
 	})
@@ -262,6 +264,7 @@ func TestPATE2E_ScopeExceeded(t *testing.T) {
 // 3. Role layer: role 1 lacks usage:list in PermissionCache even though the
 // PAT scope grants it → 403.
 func TestPATE2E_RoleDowngrade(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{"key:list": true}) // no usage:list
 
 	res, err := svc.Create(context.Background(), 1, []string{"key:list", "usage:list"},
@@ -283,6 +286,7 @@ func TestPATE2E_RoleDowngrade(t *testing.T) {
 // 4. Tier layer: budget:read is registered in communityActions so
 // license.TierAllowsAction passes on Community; scope+role both grant it.
 func TestPATE2E_TierCommunityAllowsBudgetRead(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{"budget:read": true})
 
 	res, err := svc.Create(context.Background(), 1, []string{"budget:read"},
@@ -301,6 +305,7 @@ func TestPATE2E_TierCommunityAllowsBudgetRead(t *testing.T) {
 // routes — a PAT token against any other admin path has no route to hit
 // (covers "no routes outside the whitelist"; app.go wiring is T13).
 func TestPATE2E_DefaultDenyOutsideWhitelist(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{"key:list": true})
 	res, err := svc.Create(context.Background(), 1, []string{"key:list"}, "dd", []string{"key:list"})
 	if err != nil {
@@ -329,6 +334,7 @@ func TestPATE2E_DefaultDenyOutsideWhitelist(t *testing.T) {
 // 6. Cookie rejection: PATAuthMiddleware must ignore cookies entirely — an
 // admin_token cookie without an Authorization header is 401.
 func TestPATE2E_CookieRejected(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{"key:list": true})
 	res, err := svc.Create(context.Background(), 1, []string{"key:list"}, "cookie", []string{"key:list"})
 	if err != nil {
@@ -347,6 +353,7 @@ func TestPATE2E_CookieRejected(t *testing.T) {
 // 7. Field whitelist: successful responses from all four endpoints never
 // contain sensitive field substrings (case-sensitive).
 func TestPATE2E_FieldWhitelist(t *testing.T) {
+	t.Parallel()
 	r, _, svc := buildPATRouter(t, map[string]bool{
 		"key:list": true, "usage:list": true, "budget:read": true, "health:read": true,
 	})
@@ -412,6 +419,7 @@ func deepAssertNoSubstring(t *testing.T, ep string, node any, forbidden []string
 // ErrPatTokenNotFound must equal repository.ErrPatTokenNotFound so the mock
 // repo behaves like the real one.
 func TestPATE2E_MockRepoNotFoundSemantics(t *testing.T) {
+	t.Parallel()
 	if !errors.Is(repository.ErrPatTokenNotFound, gorm.ErrRecordNotFound) {
 		t.Fatal("repository.ErrPatTokenNotFound must wrap gorm.ErrRecordNotFound for Validate to map it")
 	}

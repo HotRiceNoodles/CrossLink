@@ -91,6 +91,7 @@ func v5MiddlewarePut(t *testing.T, cfg config.AdminConfig, cp crypto.CryptoProvi
 // user must NOT collapse onto SHA256("") — each binds to its own verified
 // credential, so one session's re-auth token is unusable in the other.
 func TestSessionBinding_RealMiddleware_CookieLegacyLogins(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 	cfg, cp := v5TestAuth(t)
 	tokenA, tokenB := v5LegacyLogin(t, cp, cfg.JWTSecret, 0), v5LegacyLogin(t, cp, cfg.JWTSecret, time.Second)
@@ -123,6 +124,7 @@ func TestSessionBinding_RealMiddleware_CookieLegacyLogins(t *testing.T) {
 // authenticated the COOKIE — the Authorization header is not the verified
 // credential and must not define (or shift) the session identity.
 func TestSessionBinding_RealMiddleware_CookieHeaderConflict(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 	cfg, cp := v5TestAuth(t)
 	tokenA, tokenB := v5LegacyLogin(t, cp, cfg.JWTSecret, 0), v5LegacyLogin(t, cp, cfg.JWTSecret, time.Second)
@@ -154,6 +156,7 @@ func TestSessionBinding_RealMiddleware_CookieHeaderConflict(t *testing.T) {
 // before the refresh survives the browser adopting the refreshed cookie.
 // Full chain: near-expiry login → refresh → re-auth → save → replay-fail.
 func TestSessionBinding_RealMiddleware_RefreshPreservesSession(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 	cfg, cp := v5TestAuth(t)
 	now := time.Now()

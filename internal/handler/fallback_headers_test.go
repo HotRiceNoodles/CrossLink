@@ -11,6 +11,7 @@ import (
 )
 
 func TestSetFallbackHeaders(t *testing.T) {
+	t.Parallel()
 	// Fallback occurred: both headers set.
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	setFallbackHeaders(c, "gpt-fallback", 2)
@@ -31,6 +32,7 @@ func TestSetFallbackHeaders(t *testing.T) {
 }
 
 func TestWriteStreamInterrupted(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	writeStreamInterrupted(&buf)
 	out := buf.String()
@@ -41,6 +43,7 @@ func TestWriteStreamInterrupted(t *testing.T) {
 }
 
 func TestWriteStreamInterruptedAnthropic(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	writeStreamInterruptedAnthropic(&buf)
 	out := buf.String()

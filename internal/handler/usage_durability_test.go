@@ -355,6 +355,7 @@ func (c *captureLogger) LogChecked(ctx context.Context, entry *service.UsageEntr
 // old cleanup limit (200/30s = 6.7 rows/s) must PLATEAU, not accumulate:
 // ack-driven compaction strips committed lines continuously.
 func TestUsageWAL_PlateauUnderSustainedLoad(t *testing.T) {
+	usageSoakGate(t)
 	db := newUsageDB(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
@@ -685,6 +686,7 @@ func TestUsageWAL_EmergencyHighWater_BlocksBeforeLossAndRecovers(t *testing.T) {
 		t.Fatalf("db rows = %d, want 1 (the emergency-held row drained)", rows)
 	}
 }
+
 // ③ Triple failure — DB down, main WAL at cap, emergency tier NOT armed
 // (or its own cap/disk also failed): the row IS a real loss, counted and
 // block-engaging. The emergency tier narrows the loss window; it does not

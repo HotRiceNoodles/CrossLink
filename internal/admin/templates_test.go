@@ -24,6 +24,7 @@ func setupTemplateHandlerDB(t *testing.T) (*gorm.DB, *service.TemplateRegistry) 
 }
 
 func TestTemplateHandler_CreatePreviewDelete(t *testing.T) {
+	t.Parallel()
 	db, reg := setupTemplateHandlerDB(t)
 	h := NewTemplateHandler(db, reg, nil, nil, nil) // sync/cache/audit nil for unit
 
@@ -75,6 +76,7 @@ func TestTemplateHandler_CreatePreviewDelete(t *testing.T) {
 }
 
 func TestTemplateHandler_PreviewUntrustedInSystem(t *testing.T) {
+	t.Parallel()
 	db, reg := setupTemplateHandlerDB(t)
 	h := NewTemplateHandler(db, reg, nil, nil, nil)
 	require.NoError(t, db.Create(&model.PromptTemplate{

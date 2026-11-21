@@ -21,7 +21,8 @@ func newBehaviorTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.BehaviorAnomaly{}, &model.BehaviorTolerance{}, &model.BehaviorFingerprint{}); err != nil {
+	if err := db.AutoMigrate(&model.BehaviorAnomaly{}, &model.BehaviorTolerance{}, &model.BehaviorFingerprint{}, &model.BehaviorBaseline{},
+		&model.BehaviorRollup{}, &model.BehaviorJobLock{}, &model.BehaviorSeenCategory{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	t.Cleanup(func() {
@@ -33,6 +34,7 @@ func newBehaviorTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestBehaviorAnomalyLedgerEndpoints(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db := newBehaviorTestDB(t)
 	now := time.Now().UTC()
@@ -49,7 +51,7 @@ func TestBehaviorAnomalyLedgerEndpoints(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	h := NewBehaviorHandler(db, nil)
+	h := NewBehaviorHandler(db, nil, func() bool { return true })
 	r := gin.New()
 	r.GET("/behavior/anomalies", h.ListAnomalies)
 	r.GET("/behavior/anomalies/:id", h.GetAnomaly)
@@ -58,12 +60,43 @@ func TestBehaviorAnomalyLedgerEndpoints(t *testing.T) {
 	r.GET("/behavior/fingerprints", h.ListFingerprints)
 	r.POST("/behavior/fingerprints/:id/approve", h.ApproveFingerprint)
 	r.POST("/behavior/fingerprints/:id/retire", h.RetireFingerprint)
+	r.GET("/behavior/status", h.Status)
+
+	// 状态诊断的前置：新鲜基线快照（否则 learning_stale 判真）。
+	db.Create(&model.BehaviorBaseline{
+		EntityType: "key", EntityID: 7, Metric: "request_rate", BucketKey: "9",
+		P50: 10, P90: 20, ObsCount: 28, WindowStart: now, WindowEnd: now,
+		ModelVersion: 1, ComputedAt: now,
+	})
 
 	do := func(method, path string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, nil)
 		r.ServeHTTP(w, req)
 		return w
+	}
+
+	// 状态诊断：enabled=true + 新鲜快照 → learning_stale=false；计数在位。
+	wst := do("GET", "/behavior/status")
+	if wst.Code != http.StatusOK {
+		t.Fatalf("status: %d %s", wst.Code, wst.Body.String())
+	}
+	var st struct {
+		Data struct {
+			Enabled       bool             `json:"enabled"`
+			LearningStale bool             `json:"learning_stale"`
+			Counts        map[string]int64 `json:"counts"`
+			Jobs          []map[string]any `json:"jobs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wst.Body.Bytes(), &st); err != nil {
+		t.Fatalf("status body: %v", err)
+	}
+	if !st.Data.Enabled || st.Data.LearningStale {
+		t.Fatalf("status: enabled=%v stale=%v (seeded baseline exists → not stale)", st.Data.Enabled, st.Data.LearningStale)
+	}
+	if st.Data.Counts["anomalies_total"] < 1 {
+		t.Fatalf("status counts: %+v", st.Data.Counts)
 	}
 
 	// 列表筛选 + 分页信封。

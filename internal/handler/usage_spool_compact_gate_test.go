@@ -34,6 +34,7 @@ func TestCompactIfWorthwhile_SmallFileCompacts(t *testing.T) {
 }
 
 func TestCompactIfWorthwhile_LargeFileDefersUntilHalvingOrStale(t *testing.T) {
+	usageSoakGate(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
 	t.Cleanup(spool.Close)

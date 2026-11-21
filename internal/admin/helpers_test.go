@@ -7,6 +7,7 @@ import (
 )
 
 func TestSanitizeURL(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		raw  string
@@ -30,6 +31,7 @@ func TestSanitizeURL(t *testing.T) {
 }
 
 func TestIsAdminUser(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		user *model.User

@@ -20,6 +20,7 @@ import (
 // trend charts empty. This runs the real handler against a real (sqlite)
 // database so column-count drift fails loudly.
 func TestDailyTrend_ScanMatchesSelect(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

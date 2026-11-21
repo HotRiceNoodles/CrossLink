@@ -57,6 +57,7 @@ func TestGroupCommit_SyncStallWriteIsBoundedFalse(t *testing.T) {
 // entries), and after the WAL recovers, replaying whatever bytes DID reach
 // the file must not duplicate any event (EventID idempotent flush).
 func TestGroupCommit_StallThenFallbackThenReplay_NoDuplicates(t *testing.T) {
+	usageSoakGate(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 8<<20)
 	stallSync(t, 500*time.Millisecond)

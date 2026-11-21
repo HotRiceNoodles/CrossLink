@@ -93,13 +93,13 @@ func TestImport_PerItemResults(t *testing.T) {
 	results := svc.Import(context.Background(), &ImportKeysInput{
 		Items: []ImportKeyItem{
 			{Key: "sk-good-vendor-key-000001", Vendor: "openai", Protocol: "openai", AllowedModels: []string{"gpt-4o"}},
-			{Key: "sk-good-vendor-key-000001"},                                 // duplicate of item 0 (vendor/protocol optional now)
-			{Key: "sk-good-vendor-key-000002", Vendor: "not-a-vendor"},         // invalid vendor (must be valid when provided)
-			{Key: "sk-short", Vendor: "anthropic"},                             // invalid format
+			{Key: "sk-good-vendor-key-000001"},                                                            // duplicate of item 0 (vendor/protocol optional now)
+			{Key: "sk-good-vendor-key-000002", Vendor: "not-a-vendor"},                                    // invalid vendor (must be valid when provided)
+			{Key: "sk-short", Vendor: "anthropic"},                                                        // invalid format
 			{Key: "sk-good-vendor-key-000003", Vendor: "azure", AllowedModels: []string{"no-such-model"}}, // model missing
-			{Key: "sk-good-vendor-key-000004", Vendor: "gemini"},               // no allowlist -> no model check
-			{Key: "sk-good-vendor-key-000005", Protocol: "bogus"},              // invalid protocol
-			{Key: "sk-good-vendor-key-000006"},                                 // no vendor, no protocol -> unrestricted
+			{Key: "sk-good-vendor-key-000004", Vendor: "gemini"},                                          // no allowlist -> no model check
+			{Key: "sk-good-vendor-key-000005", Protocol: "bogus"},                                         // invalid protocol
+			{Key: "sk-good-vendor-key-000006"},                                                            // no vendor, no protocol -> unrestricted
 		},
 	})
 

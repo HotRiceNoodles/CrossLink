@@ -60,6 +60,7 @@ func withSession(c *gin.Context, authHeader string) *gin.Context {
 }
 
 func TestSsrfAllowlistHandler_Get(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/system/ssrf-allowlist", nil)
 	setAdminContext(c, 1, 1, "admin")
@@ -72,6 +73,7 @@ func TestSsrfAllowlistHandler_Get(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	t.Run("org admin forbidden", func(t *testing.T) {
@@ -235,6 +237,7 @@ func TestSsrfAllowlistHandler_Put_MissingCIDRsVsExplicitEmpty(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_InvalidAndConflict(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	// Invalid CIDR: 400 with the shared validator's reason; nothing applied.
@@ -316,6 +319,7 @@ func TestSsrfAllowlistHandler_Delete_ResetSemantics(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_AuditFields_NoSecretLeak(t *testing.T) {
+	t.Parallel()
 	h, db := setupSsrfAllowlistHandler(t)
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/ssrf-allowlist", gin.H{"cidrs": []string{"10.30.0.0/16"}, "expected_version": 0})
 	setAdminContext(c, 1, 1, "admin")
@@ -340,6 +344,7 @@ const fpA = "fingerprint-session-a"
 const fpB = "fingerprint-session-b"
 
 func TestReauthManager_Lifecycle(t *testing.T) {
+	t.Parallel()
 	m := NewReauthManager(nil)
 	base := time.Unix(1700000000, 0)
 	m.now = func() time.Time { return base }
@@ -389,6 +394,7 @@ func TestReauthManager_Lifecycle(t *testing.T) {
 // (slow) verification, so concurrent issues cannot all slip past the limit —
 // the number of actual verifications is bounded by reauthMaxFails per window.
 func TestReauthManager_ConcurrentIssue_RateLimitNotBypassed(t *testing.T) {
+	t.Parallel()
 	m := NewReauthManager(nil)
 	var verifications int64
 	var mu sync.Mutex
@@ -424,6 +430,7 @@ func TestReauthManager_ConcurrentIssue_RateLimitNotBypassed(t *testing.T) {
 
 // Redis mode: SHARED state across replicas with ATOMIC consume and limits.
 func TestReauthManager_RedisSharedState(t *testing.T) {
+	t.Parallel()
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
@@ -517,6 +524,7 @@ func TestReauthManager_RedisSharedState(t *testing.T) {
 // Reauth endpoint shape: wrong password → 401 with a FIXED message that
 // never echoes the credential; success mints a token usable on writes.
 func TestSsrfAllowlistHandler_ReauthEndpoint(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/ssrf-allowlist/reauth", gin.H{"password": "super-secret-pw"})
@@ -537,6 +545,7 @@ func TestSsrfAllowlistHandler_ReauthEndpoint(t *testing.T) {
 // ── v4: per-login JTI — same-second/concurrent logins mint DISTINCT tokens ──
 
 func TestGenerateToken_UniqueSessionIDPerLogin(t *testing.T) {
+	t.Parallel()
 	cp, err := crypto.NewProvider("standard")
 	require.NoError(t, err)
 	cfg := config.AdminConfig{TokenExpiry: 24, JWTSecret: "unit-test-secret-0123456789abcdef"}
@@ -574,6 +583,7 @@ func TestGenerateToken_UniqueSessionIDPerLogin(t *testing.T) {
 // A's re-auth token cannot be consumed by B (a second login), A consumes it
 // exactly once.
 func TestSsrfAllowlistHandler_JTI_SessionBinding(t *testing.T) {
+	t.Parallel()
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	// Two "logins" → two distinct jtis (as JWTAuthMiddleware would set).
@@ -661,6 +671,7 @@ func TestSsrfAllowlistHandler_LocalMode_RefusesWrites(t *testing.T) {
 // window expiry starts fresh, success resets the window ──
 
 func TestReauthManager_RedisLimiter_TTLAndRepair(t *testing.T) {
+	t.Parallel()
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()

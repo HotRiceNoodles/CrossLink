@@ -98,6 +98,7 @@ func runStreamOverHTTP(t *testing.T, ssePayload string, gs *guardrail.GuardrailS
 }
 
 func TestHandleStream_NoDONE_AllFinished_CompletesNormally(t *testing.T) {
+	t.Parallel()
 	payload := chunkLine(contentChunk("Hello")) +
 		chunkLine(contentChunk(" world")) +
 		`data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":5,"total_tokens":14}}` + "\n\n"
@@ -118,6 +119,7 @@ func TestHandleStream_NoDONE_AllFinished_CompletesNormally(t *testing.T) {
 }
 
 func TestHandleStream_NoDONE_Truncated_StillEmitsStreamInterrupted(t *testing.T) {
+	t.Parallel()
 	payload := chunkLine(contentChunk("partial answer")) // no finish_reason, no [DONE]
 
 	body, c, calls := runStreamOverHTTP(t, payload, nil)
@@ -134,6 +136,7 @@ func TestHandleStream_NoDONE_Truncated_StillEmitsStreamInterrupted(t *testing.T)
 }
 
 func TestHandleStream_NoDONE_ToolCallArgsCompleteAndSingleTerminal(t *testing.T) {
+	t.Parallel()
 	header := `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`
 	frag1 := `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}]}`
 	frag2 := `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Osaka\"}"}}]},"finish_reason":null}]}`
@@ -220,6 +223,7 @@ func newStrictGuardrail(t *testing.T, blocklist []string) *guardrail.GuardrailSe
 }
 
 func TestHandleStream_NoDONE_StrictGuardrail_Allowed_ReleasesAfterFinalCheck(t *testing.T) {
+	t.Parallel()
 	gs := newStrictGuardrail(t, []string{"forbidden-token"})
 
 	payload := chunkLine(contentChunk("a perfectly")) +
@@ -236,6 +240,7 @@ func TestHandleStream_NoDONE_StrictGuardrail_Allowed_ReleasesAfterFinalCheck(t *
 }
 
 func TestHandleStream_NoDONE_StrictGuardrail_Blocked_NeverReleases(t *testing.T) {
+	t.Parallel()
 	gs := newStrictGuardrail(t, []string{"forbidden-token"})
 
 	payload := chunkLine(contentChunk("this contains forbidden")) +

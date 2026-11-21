@@ -14,9 +14,9 @@ package service
 //       watermark and completes (idempotent raise+SET).
 
 import (
-	"strings"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -399,7 +399,7 @@ func TestCalibrateTarget_R4_LateRowNotAbsorbedByFarSum(t *testing.T) {
 	if err := bs.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(bs.CloseSettleJournal)
+	t.Cleanup(bs.CloseSettleJournal) // Windows: release the journal handle for TempDir cleanup
 	appendJournalLine(t, bs.journal.path, "team", "44", "r4-late", 9.0, time.Now().Unix())
 	if _, rerr := bs.SettleJournalRound(context.Background(), cal, 5*time.Second); rerr != nil {
 		t.Fatalf("R4 journal round: %v", rerr)
@@ -520,7 +520,7 @@ func TestCalibrateTarget_R7_FarSegmentExactlyOnce(t *testing.T) {
 	if err := bs.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(bs.CloseSettleJournal)
+	t.Cleanup(bs.CloseSettleJournal) // Windows: release the journal handle for TempDir cleanup
 	appendJournalLine(t, bs.journal.path, "team", "47", "far-1", 6.0, time.Now().Add(-72*time.Hour).Unix())
 	st, rerr := bs.SettleJournalRound(context.Background(), cal, 5*time.Second)
 	if rerr != nil {
@@ -553,7 +553,7 @@ func TestCalibrateTarget_B1_UpgradeDefersFarWhenJournalLive(t *testing.T) {
 	if err := bs.OpenSettleJournal(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(bs.CloseSettleJournal)
+	t.Cleanup(bs.CloseSettleJournal) // Windows: release the journal handle for TempDir cleanup
 	if err := bs.journal.append(settleRetryTask{scope: "team", targetID: "51", period: "monthly", pk: pk, reqID: "live-1", cost: 4.0}); err != nil {
 		t.Fatal(err)
 	}

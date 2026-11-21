@@ -61,6 +61,7 @@ var _ provider.Provider = (*fakeStreamProvider)(nil)
 // can reconcile, and that the request was still recorded in usage_logs.
 // On the pre-fix code these assertions fail (tokens never set, no usage row).
 func TestHandleStream_GuardrailBlock_PublishesTokensForTPMReconcile(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	// Real sqlite, but do NOT migrate the guardrail tables — so Find on

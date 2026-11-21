@@ -84,6 +84,7 @@ func defaultKeyMocks() (*mockKeySvc, *mockTeamRepo) {
 // --- Import tests ---
 
 func TestKeyHandler_Import_PerItemResultsAndPlaintextNotInResponse(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	keySvc.importFn = func(ctx context.Context, input *service.ImportKeysInput) []service.ImportKeyResult {
 		return []service.ImportKeyResult{
@@ -111,8 +112,8 @@ func TestKeyHandler_Import_PerItemResultsAndPlaintextNotInResponse(t *testing.T)
 	}
 	var resp struct {
 		Data struct {
-			Created int                        `json:"created"`
-			Results []service.ImportKeyResult  `json:"results"`
+			Created int                       `json:"created"`
+			Results []service.ImportKeyResult `json:"results"`
 		} `json:"data"`
 	}
 	decodeResponse(t, w, &resp)
@@ -135,6 +136,7 @@ func TestKeyHandler_Import_PerItemResultsAndPlaintextNotInResponse(t *testing.T)
 }
 
 func TestKeyHandler_Import_EmptyBatchRejected(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	h := newKeyHandler(keySvc, nil)
 
@@ -149,6 +151,7 @@ func TestKeyHandler_Import_EmptyBatchRejected(t *testing.T) {
 }
 
 func TestKeyHandler_Create_InvalidBudgetPeriod(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	h := newKeyHandler(keySvc, nil)
 
@@ -172,6 +175,7 @@ func TestKeyHandler_Create_InvalidBudgetPeriod(t *testing.T) {
 }
 
 func TestKeyHandler_Create_NegativeBudget(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	h := newKeyHandler(keySvc, nil)
 
@@ -195,6 +199,7 @@ func TestKeyHandler_Create_NegativeBudget(t *testing.T) {
 }
 
 func TestKeyHandler_Create_Success(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	h := newKeyHandler(keySvc, nil)
 
@@ -225,6 +230,7 @@ func TestKeyHandler_Create_Success(t *testing.T) {
 // --- Update ownership tests ---
 
 func TestKeyHandler_Update_NonOwnerForbidden(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, but request is from user 42 (non-admin, no team)
 	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
@@ -258,6 +264,7 @@ func TestKeyHandler_Update_NonOwnerForbidden(t *testing.T) {
 }
 
 func TestKeyHandler_Update_OwnerSuccess(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from same user
 	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
@@ -288,6 +295,7 @@ func TestKeyHandler_Update_OwnerSuccess(t *testing.T) {
 // --- Delete ownership tests ---
 
 func TestKeyHandler_Delete_Success(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from same user
 	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
@@ -318,6 +326,7 @@ func TestKeyHandler_Delete_Success(t *testing.T) {
 }
 
 func TestKeyHandler_Delete_NonOwnerForbidden(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	// Key created by user 10, request from user 42 (non-admin)
 	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
@@ -348,6 +357,7 @@ func TestKeyHandler_Delete_NonOwnerForbidden(t *testing.T) {
 }
 
 func TestKeyHandler_Delete_TeamMemberAllowed(t *testing.T) {
+	t.Parallel()
 	keySvc, teamRepo := defaultKeyMocks()
 	// Key belongs to team 5, user 42 is a member of that team
 	teamID := int64(5)
@@ -377,6 +387,7 @@ func TestKeyHandler_Delete_TeamMemberAllowed(t *testing.T) {
 }
 
 func TestKeyHandler_Delete_TeamNonMemberForbidden(t *testing.T) {
+	t.Parallel()
 	keySvc, teamRepo := defaultKeyMocks()
 	// Key belongs to team 5, user 42 is NOT a member
 	teamID := int64(5)
@@ -411,6 +422,7 @@ func TestKeyHandler_Delete_TeamNonMemberForbidden(t *testing.T) {
 }
 
 func TestKeyHandler_Delete_NotFound(t *testing.T) {
+	t.Parallel()
 	keySvc, _ := defaultKeyMocks()
 	keySvc.getByIDFn = func(ctx context.Context, orgID int64, id int64) (*model.APIKey, error) {
 		return nil, errors.New("not found")

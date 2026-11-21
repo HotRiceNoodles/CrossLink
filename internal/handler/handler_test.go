@@ -21,6 +21,7 @@ import (
 )
 
 func TestTruncateContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -53,6 +54,7 @@ func TestTruncateContent(t *testing.T) {
 }
 
 func TestExtractLastUserMessage(t *testing.T) {
+	t.Parallel()
 	contentText := func(s string) json.RawMessage {
 		b, _ := json.Marshal([]domain.ContentBlock{{Type: "text", Text: s}})
 		return b
@@ -85,6 +87,7 @@ func TestExtractLastUserMessage(t *testing.T) {
 }
 
 func TestExtractLastOpenAIUserMessage(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		messages []domain.OpenAIMessage
@@ -112,6 +115,7 @@ func TestExtractLastOpenAIUserMessage(t *testing.T) {
 }
 
 func TestMapProviderErrorStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -137,6 +141,7 @@ func TestMapProviderErrorStatus(t *testing.T) {
 // gatewayErrorStatus replaces the logFailure-hardcoded 502: the usage log must
 // record the same class the client saw (upstream 400 → 400, not 502).
 func TestGatewayErrorStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -166,6 +171,7 @@ func TestGatewayErrorStatus(t *testing.T) {
 }
 
 func TestErrorInfo(t *testing.T) {
+	t.Parallel()
 	t.Run("provider error carries upstream fields and stage", func(t *testing.T) {
 		pe := &provider.ProviderError{
 			StatusCode: 400, Message: "provider bad request: Invalid value org-abc123456",
@@ -199,6 +205,7 @@ func TestErrorInfo(t *testing.T) {
 }
 
 func TestSanitizeMessageRuneSafe(t *testing.T) {
+	t.Parallel()
 	// 300 CJK runes: byte-length 900 > 200, rune-length 300 > 200. A byte
 	// slice would cut the last character in half and leave invalid UTF-8.
 	long := strings.Repeat("错", 300)
@@ -217,6 +224,7 @@ func TestSanitizeMessageRuneSafe(t *testing.T) {
 }
 
 func TestAttemptsJSON(t *testing.T) {
+	t.Parallel()
 	t.Run("clean single-attempt success stays nil", func(t *testing.T) {
 		if got := attemptsJSON([]service.FallbackAttempt{{ProviderName: "p", ProviderModel: "m", Success: true}}); got != nil {
 			t.Errorf("attemptsJSON() = %s, want nil", got)
@@ -254,6 +262,7 @@ func TestAttemptsJSON(t *testing.T) {
 // Upstream 429 must surface as rate_limit_error with Retry-After so clients
 // back off correctly instead of treating it as a generic API failure.
 func TestAnthropicWriteError_UpstreamRateLimit(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	newCtx := func() (*gin.Context, *httptest.ResponseRecorder) {
@@ -322,6 +331,7 @@ func TestAnthropicWriteError_UpstreamRateLimit(t *testing.T) {
 }
 
 func TestResolveErrorStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -357,6 +367,7 @@ func TestResolveErrorStatus(t *testing.T) {
 }
 
 func TestResolveErrorMessage(t *testing.T) {
+	t.Parallel()
 	if msg := resolveErrorMessage(fmt.Errorf("%w for model: m (mockup circuit open, last error: rate_limit: secret)", router.ErrNoActiveProvider)); msg != "model temporarily unavailable: all provider routes are circuit-open or disabled; retry later" {
 		t.Errorf("sentinel message must state the condition without upstream detail, got %q", msg)
 	}
@@ -366,6 +377,7 @@ func TestResolveErrorMessage(t *testing.T) {
 }
 
 func TestSafeProviderError(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -386,6 +398,7 @@ func TestSafeProviderError(t *testing.T) {
 }
 
 func TestFirstTokenMsValue(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
 
 	tests := []struct {

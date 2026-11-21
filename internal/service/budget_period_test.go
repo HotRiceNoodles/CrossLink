@@ -40,9 +40,9 @@ func TestPeriodStartBucketsLikePeriodKey(t *testing.T) {
 func TestPeriodStartWeeklyISOBoundaries(t *testing.T) {
 	// 2026-01-05 is a Monday (ISO week 2 of 2026); Jan 4 (Sunday) is week 1.
 	for _, tc := range []struct {
-		now      string // ISO date at noon UTC
-		period   string
-		wantYMD  string
+		now     string // ISO date at noon UTC
+		period  string
+		wantYMD string
 	}{
 		{"2026-01-05", "weekly", "2026-01-05"}, // Monday itself
 		{"2026-01-07", "weekly", "2026-01-05"},

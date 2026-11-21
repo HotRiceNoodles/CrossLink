@@ -19,6 +19,7 @@ func openAIToolReq(tools []domain.OpenAITool) *domain.OpenAIRequest {
 }
 
 func TestBuildOpenAIToolObservation(t *testing.T) {
+	t.Parallel()
 	req := openAIToolReq([]domain.OpenAITool{
 		{Type: "function", Function: domain.OpenAIFunctionDef{
 			Name: "search", Description: "web search",
@@ -53,6 +54,7 @@ func TestBuildOpenAIToolObservation(t *testing.T) {
 }
 
 func TestBuildOpenAIToolObservation_CacheHitSkipsInvoked(t *testing.T) {
+	t.Parallel()
 	req := openAIToolReq([]domain.OpenAITool{
 		{Function: domain.OpenAIFunctionDef{Name: "search"}},
 	})
@@ -73,6 +75,7 @@ func TestBuildOpenAIToolObservation_CacheHitSkipsInvoked(t *testing.T) {
 }
 
 func TestBuildOpenAIToolObservation_DeclaredCap(t *testing.T) {
+	t.Parallel()
 	tools := make([]domain.OpenAITool, 200)
 	for i := range tools {
 		tools[i].Function.Name = "t" + strconv.Itoa(i)
@@ -84,6 +87,7 @@ func TestBuildOpenAIToolObservation_DeclaredCap(t *testing.T) {
 }
 
 func TestBuildAnthropicToolObservation(t *testing.T) {
+	t.Parallel()
 	req := &domain.AnthropicRequest{
 		Model: "claude-3-5",
 		Tools: json.RawMessage(`[
@@ -110,6 +114,7 @@ func TestBuildAnthropicToolObservation(t *testing.T) {
 }
 
 func TestBuildAnthropicToolObservation_BadToolsJSON(t *testing.T) {
+	t.Parallel()
 	req := &domain.AnthropicRequest{Tools: json.RawMessage(`{not-json}`)}
 	resp := &domain.AnthropicResponse{Content: []domain.ContentBlock{{Type: "tool_use", Name: "x"}}}
 
@@ -124,6 +129,7 @@ func TestBuildAnthropicToolObservation_BadToolsJSON(t *testing.T) {
 }
 
 func TestObserveToolsGuards(t *testing.T) {
+	t.Parallel()
 	full := domain.ToolObservation{APIKeyID: 5, Declared: []domain.DeclaredTool{{Name: "a"}}}
 	empty := domain.ToolObservation{APIKeyID: 5}
 	noKey := domain.ToolObservation{Declared: []domain.DeclaredTool{{Name: "a"}}}
@@ -144,6 +150,7 @@ func TestObserveToolsGuards(t *testing.T) {
 }
 
 func TestStreamToolCallNames(t *testing.T) {
+	t.Parallel()
 	delta := domain.OpenAIChunkDelta{ToolCalls: []domain.OpenAIChunkToolCall{
 		{Index: 0, Function: domain.OpenAIChunkFunctionCall{Name: "search"}},
 		{Index: 1, Function: domain.OpenAIChunkFunctionCall{Name: ""}}, // argument fragment

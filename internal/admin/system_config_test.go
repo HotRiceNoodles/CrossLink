@@ -22,6 +22,7 @@ func newSystemConfigHandlerForTest(t *testing.T) (*SystemHandler, *settings.Prov
 }
 
 func TestSystemConfig_GetDefaults(t *testing.T) {
+	t.Parallel()
 	h, _ := newSystemConfigHandlerForTest(t)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/system/config", nil)
 	h.GetConfig(c)
@@ -50,6 +51,7 @@ func TestSystemConfig_GetDefaults(t *testing.T) {
 }
 
 func TestSystemConfig_UpdateAppliesAndHotReloads(t *testing.T) {
+	t.Parallel()
 	h, provider := newSystemConfigHandlerForTest(t)
 	db := h.db
 
@@ -72,6 +74,7 @@ func TestSystemConfig_UpdateAppliesAndHotReloads(t *testing.T) {
 }
 
 func TestSystemConfig_UpdateValidation(t *testing.T) {
+	t.Parallel()
 	h, _ := newSystemConfigHandlerForTest(t)
 
 	cases := []struct {
@@ -95,6 +98,7 @@ func TestSystemConfig_UpdateValidation(t *testing.T) {
 }
 
 func TestSystemConfig_NullDeletesAndFallsBack(t *testing.T) {
+	t.Parallel()
 	h, provider := newSystemConfigHandlerForTest(t)
 	db := h.db
 
@@ -114,6 +118,7 @@ func TestSystemConfig_NullDeletesAndFallsBack(t *testing.T) {
 }
 
 func TestSystemConfig_SensitiveWriteOnly(t *testing.T) {
+	t.Parallel()
 	h, provider := newSystemConfigHandlerForTest(t)
 	db := h.db
 
@@ -148,6 +153,7 @@ func TestSystemConfig_SensitiveWriteOnly(t *testing.T) {
 }
 
 func TestSystemConfig_RestartRequiredEcho(t *testing.T) {
+	t.Parallel()
 	h, _ := newSystemConfigHandlerForTest(t)
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{
 		"mcp_enabled":                 true,
@@ -168,6 +174,7 @@ func TestSystemConfig_RestartRequiredEcho(t *testing.T) {
 }
 
 func TestSystemConfig_CORSSelfLockoutGuard(t *testing.T) {
+	t.Parallel()
 	h, provider := newSystemConfigHandlerForTest(t)
 
 	// Caller's Origin not in the new list → refused.
@@ -188,6 +195,7 @@ func TestSystemConfig_CORSSelfLockoutGuard(t *testing.T) {
 }
 
 func TestSystemConfig_ProviderMissingIsHandled(t *testing.T) {
+	t.Parallel()
 	db := setupSystemTestDB(t)
 	h := NewSystemHandler(db, nil, config.AdminConfig{}, nil, nil, nil, nil, nil)
 

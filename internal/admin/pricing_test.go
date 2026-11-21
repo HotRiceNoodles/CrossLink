@@ -21,6 +21,7 @@ func floatPtr(v float64) *float64 { return &v }
 // --- Key Create/Update with PriceMultiplier ---
 
 func TestKey_Create_WithPriceMultiplier(t *testing.T) {
+	t.Parallel()
 	var capturedInput *service.CreateKeyInput
 	keySvc, _ := defaultKeyMocks()
 	keySvc.createFn = func(_ context.Context, input *service.CreateKeyInput) (*service.CreateKeyResult, error) {
@@ -42,6 +43,7 @@ func TestKey_Create_WithPriceMultiplier(t *testing.T) {
 }
 
 func TestKey_Create_DefaultPriceMultiplier(t *testing.T) {
+	t.Parallel()
 	var capturedInput *service.CreateKeyInput
 	keySvc, _ := defaultKeyMocks()
 	keySvc.createFn = func(_ context.Context, input *service.CreateKeyInput) (*service.CreateKeyResult, error) {
@@ -59,6 +61,7 @@ func TestKey_Create_DefaultPriceMultiplier(t *testing.T) {
 }
 
 func TestKey_PriceMultiplier_Validation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		val  float64
@@ -84,6 +87,7 @@ func TestKey_PriceMultiplier_Validation(t *testing.T) {
 }
 
 func TestKey_PriceMultiplier_ValidRange(t *testing.T) {
+	t.Parallel()
 	for _, val := range []float64{0.01, 0.5, 1.0, 1.3, 5.0, 10.0} {
 		t.Run("", func(t *testing.T) {
 			keySvc, _ := defaultKeyMocks()
@@ -100,6 +104,7 @@ func TestKey_PriceMultiplier_ValidRange(t *testing.T) {
 }
 
 func TestKey_Update_PriceMultiplier(t *testing.T) {
+	t.Parallel()
 	var updatedKey *model.APIKey
 	keySvc, _ := defaultKeyMocks()
 	keySvc.getByIDFn = func(_ context.Context, _ int64, id int64) (*model.APIKey, error) {
@@ -126,6 +131,7 @@ func TestKey_Update_PriceMultiplier(t *testing.T) {
 // --- UsageService billable_cost ---
 
 func TestUsage_LogBillableCost(t *testing.T) {
+	t.Parallel()
 	db := setupUsagePricingDB(t)
 	svc := service.NewUsageService(repository.NewUsageLogRepo(db))
 
@@ -150,6 +156,7 @@ func TestUsage_LogBillableCost(t *testing.T) {
 }
 
 func TestUsage_BillableCost_DefaultMultiplier(t *testing.T) {
+	t.Parallel()
 	db := setupUsagePricingDB(t)
 	svc := service.NewUsageService(repository.NewUsageLogRepo(db))
 
@@ -174,6 +181,7 @@ func TestUsage_BillableCost_DefaultMultiplier(t *testing.T) {
 // --- Reconciliation Export ---
 
 func TestUsage_ReconciliationExport_CSV(t *testing.T) {
+	t.Parallel()
 	db := setupUsagePricingDB(t)
 	keyID := int64(1)
 	require.NoError(t, db.Create(&model.APIKey{ID: keyID, Name: "cust-a", KeyPrefix: "cl-ab", KeyHash: "h1", Status: 1, PriceMultiplier: 1.5}).Error)
@@ -202,6 +210,7 @@ func TestUsage_ReconciliationExport_CSV(t *testing.T) {
 }
 
 func TestUsage_ReconciliationExport_KeyFilter(t *testing.T) {
+	t.Parallel()
 	db := setupUsagePricingDB(t)
 	key1, key2 := int64(1), int64(2)
 	require.NoError(t, db.Create(&model.APIKey{ID: key1, Name: "a", KeyPrefix: "cl-a", KeyHash: "h1", Status: 1}).Error)

@@ -45,16 +45,16 @@ func seedUsageRow(t *testing.T, db *gorm.DB, org int64, currency string, cost fl
 	orgID := org
 	eventID := time.Now().Format("150405.000000000") + currency + string(rune('A'+org)) + string(rune('a'+inTok%26))
 	row := model.UsageLog{
-		EventID:        &eventID,
-		OrgID:          &orgID,
-		Currency:       currency,
-		Cost:           cost,
-		InputTokens:    int(inTok),
-		OutputTokens:   int(outTok),
-		StatusCode:     int(status),
-		LatencyMs:      100,
-		FallbackCount:  int(fallback),
-		CreatedAt:      time.Now().UTC(),
+		EventID:       &eventID,
+		OrgID:         &orgID,
+		Currency:      currency,
+		Cost:          cost,
+		InputTokens:   int(inTok),
+		OutputTokens:  int(outTok),
+		StatusCode:    int(status),
+		LatencyMs:     100,
+		FallbackCount: int(fallback),
+		CreatedAt:     time.Now().UTC(),
 	}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatalf("seed row: %v", err)
@@ -87,6 +87,7 @@ func runStats(t *testing.T, db *gorm.DB, orgID int64) map[string]any {
 }
 
 func TestStats_MultiCurrencyChainIsolation(t *testing.T) {
+	t.Parallel()
 	db := newStatsTestDB(t)
 
 	// Org 7: CNY rows (3) with one error + one fallback, and USD rows (2)
@@ -133,6 +134,7 @@ func TestStats_MultiCurrencyChainIsolation(t *testing.T) {
 }
 
 func TestStats_EmptyScopeNoNaN(t *testing.T) {
+	t.Parallel()
 	db := newStatsTestDB(t) // no rows at all
 	data := runStats(t, db, 42)
 	if got := data["total_requests"]; got != float64(0) {

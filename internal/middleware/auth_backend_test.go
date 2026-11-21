@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	sqlite "github.com/glebarez/sqlite"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
+	sqlite "github.com/glebarez/sqlite"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

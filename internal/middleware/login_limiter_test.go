@@ -63,7 +63,7 @@ func TestLoginRateLimit_SuccessResetsCounter(t *testing.T) {
 	}
 
 	assert.Equal(t, http.StatusUnauthorized, doRequest("/login-fail"))
-	assert.Equal(t, http.StatusOK, doRequest("/login-ok")) // success clears the key
+	assert.Equal(t, http.StatusOK, doRequest("/login-ok"))             // success clears the key
 	assert.Equal(t, http.StatusUnauthorized, doRequest("/login-fail")) // attempt 1 after reset
 	assert.Equal(t, http.StatusUnauthorized, doRequest("/login-fail")) // attempt 2 = max
 	assert.Equal(t, http.StatusTooManyRequests, doRequest("/login-fail"))

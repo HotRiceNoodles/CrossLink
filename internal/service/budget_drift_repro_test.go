@@ -242,9 +242,10 @@ func TestDriftRepro_T4_DualInstanceSettleVsCalibration(t *testing.T) {
 // Redis pause a request's reserve script and its deferred settle replay can
 // execute in EITHER order once the server drains. Both orders must leave NO
 // hang (mark/member) and exact counters.
-//   Order A: reserve lands first -> replay is mode0 (releases + ZREM).
-//   Order B: replay lands first (mode1, settledmark set) -> the LATE queued
-//            reserve must be REFUSED by the settledmark guard (no mark).
+//
+//	Order A: reserve lands first -> replay is mode0 (releases + ZREM).
+//	Order B: replay lands first (mode1, settledmark set) -> the LATE queued
+//	         reserve must be REFUSED by the settledmark guard (no mark).
 func TestDriftRepro_T5_FaultWindowQueueDrainOrders(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -282,9 +283,12 @@ func TestDriftRepro_T5_FaultWindowQueueDrainOrders(t *testing.T) {
 
 // T6 — independent reap loop safety (2026-10-21 authorized stability work):
 // (a) two replicas racing on the SAME expired member must decrement exactly
-//     once (ZREM-first claim; the old "mark absent" check double-decremented);
+//
+//	once (ZREM-first claim; the old "mark absent" check double-decremented);
+//
 // (b) the loop must never remove a LIVE mark (long streams safe — only the
-//     TTL releases, the interval only bounds detection latency).
+//
+//	TTL releases, the interval only bounds detection latency).
 func TestDriftRepro_T6_ConcurrentReapExactlyOnce(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -305,7 +309,10 @@ func TestDriftRepro_T6_ConcurrentReapExactlyOnce(t *testing.T) {
 	reaped := make([]int, 2)
 	for i, s := range []*BudgetService{s1, s2} {
 		wg.Add(1)
-		go func(i int, s *BudgetService) { defer wg.Done(); reaped[i] = s.ReapExpiredReservations(ctx, time.Now().Add(3*time.Hour)) }(i, s)
+		go func(i int, s *BudgetService) {
+			defer wg.Done()
+			reaped[i] = s.ReapExpiredReservations(ctx, time.Now().Add(3*time.Hour))
+		}(i, s)
 	}
 	wg.Wait()
 	total := reaped[0] + reaped[1]

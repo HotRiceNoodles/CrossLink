@@ -60,6 +60,7 @@ type patHealthFunc func() []provider.ProviderHealthSnapshot
 func (f patHealthFunc) Snapshot() []provider.ProviderHealthSnapshot { return f() }
 
 func TestPATReadBudgets_Success(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return []model.APIKey{
 			{ID: 1, Name: "budgeted", MaxBudget: 10, BudgetPeriod: "monthly"},
@@ -103,6 +104,7 @@ func TestPATReadBudgets_Success(t *testing.T) {
 }
 
 func TestPATReadBudgets_StatusThresholds(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return []model.APIKey{
 			{ID: 1, Name: "over", MaxBudget: 10, BudgetPeriod: "monthly"},
@@ -136,6 +138,7 @@ func TestPATReadBudgets_StatusThresholds(t *testing.T) {
 }
 
 func TestPATReadBudgets_Empty(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return nil, nil
 	})
@@ -158,6 +161,7 @@ func TestPATReadBudgets_Empty(t *testing.T) {
 }
 
 func TestPATReadBudgets_ListerError(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return nil, errors.New("db down")
 	})
@@ -173,6 +177,7 @@ func TestPATReadBudgets_ListerError(t *testing.T) {
 }
 
 func TestPATReadHealth_Success(t *testing.T) {
+	t.Parallel()
 	health := patHealthFunc(func() []provider.ProviderHealthSnapshot {
 		return []provider.ProviderHealthSnapshot{
 			{Provider: "openai", Model: "", State: "closed"},
@@ -217,6 +222,7 @@ func TestPATReadHealth_Success(t *testing.T) {
 }
 
 func TestPATReadHealth_Empty(t *testing.T) {
+	t.Parallel()
 	health := patHealthFunc(func() []provider.ProviderHealthSnapshot { return nil })
 
 	c, w := newTestContext(t, http.MethodGet, "/health", nil)
@@ -238,6 +244,7 @@ func TestPATReadHealth_Empty(t *testing.T) {
 }
 
 func TestPATReadKeys_Success(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, orgID int64) ([]model.APIKey, error) {
 		if orgID != 0 {
 			t.Errorf("orgID = %d, want 0", orgID)
@@ -287,6 +294,7 @@ func TestPATReadKeys_Success(t *testing.T) {
 }
 
 func TestPATReadKeys_NoKeyPrefixLeak(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return []model.APIKey{{ID: 1, Name: "k1", KeyPrefix: "sk-leak", KeyHash: "hash"}}, nil
 	})
@@ -309,6 +317,7 @@ func TestPATReadKeys_NoKeyPrefixLeak(t *testing.T) {
 }
 
 func TestPATReadKeys_EmptyList(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return nil, nil
 	})
@@ -339,6 +348,7 @@ func TestPATReadKeys_EmptyList(t *testing.T) {
 }
 
 func TestPATReadKeys_ListerError(t *testing.T) {
+	t.Parallel()
 	lister := patKeyListerFunc(func(_ context.Context, _ int64) ([]model.APIKey, error) {
 		return nil, errors.New("db down")
 	})
@@ -356,6 +366,7 @@ func TestPATReadKeys_ListerError(t *testing.T) {
 }
 
 func TestPATReadUsage_Success(t *testing.T) {
+	t.Parallel()
 	agg := patUsageAggFunc(func(_ context.Context, _ int64, since time.Time) ([]DailyAgg, error) {
 		if time.Since(since) < 6*24*time.Hour || time.Since(since) > 8*24*time.Hour {
 			t.Errorf("since = %v, want ~now-7d", since)
@@ -401,6 +412,7 @@ func TestPATReadUsage_Success(t *testing.T) {
 }
 
 func TestPATReadUsage_DaysParamFallback(t *testing.T) {
+	t.Parallel()
 	for _, q := range []string{"?days=-1", "?days=abc", "?days=200"} {
 		var gotSince time.Time
 		agg := patUsageAggFunc(func(_ context.Context, _ int64, since time.Time) ([]DailyAgg, error) {
@@ -419,6 +431,7 @@ func TestPATReadUsage_DaysParamFallback(t *testing.T) {
 }
 
 func TestPATReadUsage_AggregatorError(t *testing.T) {
+	t.Parallel()
 	agg := patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 		return nil, errors.New("db down")
 	})
@@ -429,6 +442,7 @@ func TestPATReadUsage_AggregatorError(t *testing.T) {
 }
 
 func TestPATReadUsage_EmptyDays(t *testing.T) {
+	t.Parallel()
 	agg := patUsageAggFunc(func(_ context.Context, _ int64, _ time.Time) ([]DailyAgg, error) {
 		return nil, nil
 	})

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/domain"
+	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 )
 
@@ -21,7 +21,7 @@ import (
 func TestCircuitProber_ModelScopeRequiresChatEvenWhenModelsHealthy(t *testing.T) {
 	health := provider.NewHealthTrackerWithConfig(1, time.Hour)
 	prov := &probeProvider{scriptedProvider: scriptedProvider{name: "minimax"}}
-	prov.outcomes = []bool{false} // target model chat FAILS (e.g. model dequota'd)
+	prov.outcomes = []bool{false}                             // target model chat FAILS (e.g. model dequota'd)
 	health.RecordRateLimitFailure("minimax", "MiniMax-M3", 0) // opens name|model key
 
 	p := newTestProber(health, prov)

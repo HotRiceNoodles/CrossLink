@@ -84,6 +84,7 @@ func callLogin(t *testing.T, h gin.HandlerFunc, body map[string]any) *httptest.R
 }
 
 func TestLoginHandler_CaptchaRequired_NoEnumeration(t *testing.T) {
+	t.Parallel()
 	db := setupLoginTestDB(t)
 	seedLoginUser(t, db, "alice", "pass1234")
 	userRepo := repository.NewUserRepo(db)
@@ -106,6 +107,7 @@ func TestLoginHandler_CaptchaRequired_NoEnumeration(t *testing.T) {
 }
 
 func TestLoginHandler_CaptchaSatisfied_LogsInAndSetsTrustCookie(t *testing.T) {
+	t.Parallel()
 	db := setupLoginTestDB(t)
 	seedLoginUser(t, db, "alice", "pass1234")
 	userRepo := repository.NewUserRepo(db)
@@ -136,6 +138,7 @@ func TestLoginHandler_CaptchaSatisfied_LogsInAndSetsTrustCookie(t *testing.T) {
 }
 
 func TestLoginHandler_CaptchaDisabled_OldFlow(t *testing.T) {
+	t.Parallel()
 	db := setupLoginTestDB(t)
 	seedLoginUser(t, db, "alice", "pass1234")
 	userRepo := repository.NewUserRepo(db)

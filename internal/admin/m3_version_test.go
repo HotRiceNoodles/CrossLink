@@ -175,6 +175,7 @@ func (e *m3aEnv) history(t *testing.T, ruleID int64) map[int64]guardrail.Guardra
 // winner per version step; losers get 409; the history chain records every
 // winner in order and no update is silently lost.
 func TestM3AConcurrentUpdatesNoLostUpdate(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	id, _ := env.seed(t, "MARKERBASE")
 
@@ -221,6 +222,7 @@ func TestM3AConcurrentUpdatesNoLostUpdate(t *testing.T) {
 // TestM3ARollbackEquivalence: rollback re-publishes the historical snapshot
 // as a NEW version; config is byte-identical and detection behavior matches.
 func TestM3ARollbackEquivalence(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	id, v1Cfg := env.seed(t, "MARKERONE")
 
@@ -270,6 +272,7 @@ func TestM3ARollbackEquivalence(t *testing.T) {
 // TestM3ATxFailureNoSideEffects: a failed history INSERT rolls back the rule
 // update too — no version bump, no history row, no reload broadcast.
 func TestM3ATxFailureNoSideEffects(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, true, 0)
 	id, _ := env.seed(t, "MARKERONE")
 
@@ -316,6 +319,7 @@ func TestM3ATxFailureNoSideEffects(t *testing.T) {
 // TestM3ADualInstanceRollbackConvergence: instance B (subscribed) converges
 // after A's committed rollback; measured time, no TTL sleep.
 func TestM3ADualInstanceRollbackConvergence(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, true, 0)
 	id, _ := env.seed(t, "MARKERONE")
 	require.Equal(t, http.StatusOK, env.updateCfg(t, id, "MARKERTWO"))
@@ -348,6 +352,7 @@ func TestM3ADualInstanceRollbackConvergence(t *testing.T) {
 // TestM3ATenantIsolation: another tenant can neither read a rule's history
 // nor roll it back (404 before any history access).
 func TestM3ATenantIsolation(t *testing.T) {
+	t.Parallel()
 	org1 := newM3AEnv(t, false, 7)
 	id, _ := org1.seed(t, "MARKERONE")
 	require.Equal(t, http.StatusOK, org1.updateCfg(t, id, "MARKERTWO"))
@@ -371,6 +376,7 @@ func TestM3ATenantIsolation(t *testing.T) {
 // response (create/update/rollback/versions); history rows keep the raw value
 // server-side so rollback still restores it byte-exact.
 func TestM3AConfigSanitization(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	cfg, _ := json.Marshal(map[string]any{"blocklist": []string{"MARKERONE"}, "token": "SUPERSECRETTOKEN"})
 	w := env.req(t, "POST", "/guardrails", map[string]any{
@@ -413,6 +419,7 @@ func TestM3AConfigSanitization(t *testing.T) {
 // TestM3AHistoryImmutable: earlier history rows are byte-identical after
 // later operations (append-only by construction; verified against drift).
 func TestM3AHistoryImmutable(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	id, _ := env.seed(t, "MARKERONE")
 	env.updateCfg(t, id, "MARKERTWO")
@@ -433,6 +440,7 @@ func TestM3AHistoryImmutable(t *testing.T) {
 // exact participating (rule_id, version, action) list with each rule's own
 // version; non-participating rules are absent.
 func TestM3AAttributionList(t *testing.T) {
+	t.Parallel()
 	env := newM3AEnv(t, false, 0)
 	mk := func(name, keyword, severity, action string, ver *int64) int64 {
 		cfg, _ := json.Marshal(map[string]any{"blocklist": []string{keyword}})

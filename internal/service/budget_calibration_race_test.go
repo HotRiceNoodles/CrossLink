@@ -252,6 +252,7 @@ func TestReserveForRequest_DefinitelyNotSent_RecordsNothing_FullCostSettleExact(
 //     applies the remainder, no double count;
 //   - not landed: UNDER-count by the estimate — the divergence direction
 //     the hourly raise-only calibration heals.
+//
 // Not recording this class double-counts the landed case (reserve + full
 // cost) into an OVER-count that raise-only calibration can never remove.
 func TestReserveForRequest_Indeterminate_RecordsReservation(t *testing.T) {

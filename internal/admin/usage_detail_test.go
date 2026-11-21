@@ -57,6 +57,7 @@ func seedUsageLog(t *testing.T, db *gorm.DB, mutate func(*model.UsageLog)) {
 }
 
 func TestUsageGet_ReturnsFullRow(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 	seedUsageLog(t, db, nil)
 
@@ -90,6 +91,7 @@ func TestUsageGet_ReturnsFullRow(t *testing.T) {
 }
 
 func TestUsageGet_NotFound(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 
 	h := NewUsageHandler(db, "", nil)
@@ -113,6 +115,7 @@ func TestUsageGet_NotFound(t *testing.T) {
 }
 
 func TestUsageGet_InvalidID(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 
 	h := NewUsageHandler(db, "", nil)
@@ -129,6 +132,7 @@ func TestUsageGet_InvalidID(t *testing.T) {
 }
 
 func TestUsageGet_TeamScopeMismatch(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 	teamID := int64(8)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.TeamID = &teamID })
@@ -148,6 +152,7 @@ func TestUsageGet_TeamScopeMismatch(t *testing.T) {
 }
 
 func TestUsageGet_OrgScopeMismatch(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 	orgID := int64(1)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.OrgID = &orgID })
@@ -171,6 +176,7 @@ func TestUsageGet_OrgScopeMismatch(t *testing.T) {
 // each) in every list row; full rows are served by Get. Decoding into maps
 // (not the model struct) is what makes "key absent" assertable.
 func TestUsageList_OmitsContentColumns(t *testing.T) {
+	t.Parallel()
 	db := newUsageTestDB(t)
 	seedUsageLog(t, db, nil)
 	seedUsageLog(t, db, func(l *model.UsageLog) { l.RequestID = "efgh5678" })

@@ -12,6 +12,7 @@ import (
 )
 
 func TestGenerateAndValidateToken(t *testing.T) {
+	t.Parallel()
 	cfg := config.AdminConfig{
 		Username:    "admin",
 		Password:    "test",
@@ -31,6 +32,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 }
 
 func TestVerifyPassword(t *testing.T) {
+	t.Parallel()
 	hash, err := bcrypt.GenerateFromPassword([]byte("testpass"), bcrypt.DefaultCost)
 	if err != nil {
 		t.Fatalf("bcrypt hash failed: %v", err)
@@ -44,6 +46,7 @@ func TestVerifyPassword(t *testing.T) {
 }
 
 func TestIsLegacyHash(t *testing.T) {
+	t.Parallel()
 	h := sha256.Sum256([]byte("test"))
 	shaHash := hex.EncodeToString(h[:])
 	if !isLegacyHash(shaHash) {
@@ -55,6 +58,7 @@ func TestIsLegacyHash(t *testing.T) {
 }
 
 func TestVerifyPasswordLegacyUpgrade(t *testing.T) {
+	t.Parallel()
 	h := sha256.Sum256([]byte("mypassword"))
 	legacyHash := hex.EncodeToString(h[:])
 	if !verifyPassword("mypassword", legacyHash) {

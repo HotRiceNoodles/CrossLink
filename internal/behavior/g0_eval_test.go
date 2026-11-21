@@ -9,6 +9,7 @@ package behavior
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,16 @@ import (
 
 	"github.com/crosslink/internal/model"
 )
+
+// g0EvalGate env 门控（BEHAVIOR_PERF_TEST=1 同款纪律）：G0 评测每个剧本种
+// 28-30 天数据并跑全链回填（本机整套约 2 分钟），属验收证据件——默认全量
+// 测试跳过，由 `make test-g0-eval` 或 CI master 评测作业显式执行。
+func g0EvalGate(t *testing.T) {
+	t.Helper()
+	if os.Getenv("BEHAVIOR_G0_EVAL") != "1" {
+		t.Skip("g0 acceptance eval: set BEHAVIOR_G0_EVAL=1 (or `make test-g0-eval`; CI master job runs it)")
+	}
+}
 
 var g0Now = time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC) // 固定时钟：H0=10:00(基线内 hour-of-day)
 
@@ -140,6 +151,7 @@ func g0Band(evs []model.BehaviorAnomaly) string {
 // TestG0ScenarioDetection 门槛 2：五类合成剧本检出（剧本值独立于调参——10×、
 // 全量陌生模型、休眠时段、全错探刺、护栏全触发）。
 func TestG0ScenarioDetection(t *testing.T) {
+	g0EvalGate(t)
 	db := testDB(t)
 	agg := &Aggregator{DB: db, Now: func() time.Time { return g0Now }}
 	ctx := context.Background()
@@ -187,6 +199,7 @@ func TestG0ScenarioDetection(t *testing.T) {
 // TestG0ColdStartSafety 门槛 3：新 key 首小时按 org 常态用量运行 → 零事件
 // （继承打分 s≈1 → 无维度）；同量级 10× 才应触发（继承通道的检出语义）。
 func TestG0ColdStartSafety(t *testing.T) {
+	g0EvalGate(t)
 	db := testDB(t)
 	agg := &Aggregator{DB: db, Now: func() time.Time { return g0Now }}
 	hours := []int{8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
@@ -224,6 +237,7 @@ func TestG0ColdStartSafety(t *testing.T) {
 // TestG0GroomingPeerChannel 门槛 4：30 天渐进 3×（grooming）——自身基线已适应、
 // 自身维度全灭，P 通道（org 内 ≥5 稳定同伴的群体对比）必须独立开案。
 func TestG0GroomingPeerChannel(t *testing.T) {
+	g0EvalGate(t)
 	db := testDB(t)
 	agg := &Aggregator{DB: db, Now: func() time.Time { return g0Now }}
 	hours := []int{8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}

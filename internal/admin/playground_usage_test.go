@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"fmt"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,6 +71,7 @@ func (m *pgModelRepo) FindByModelName(_ context.Context, name string, _ int64) (
 // logUsage. It also asserts OrgID is stamped so org-scoped dashboards count
 // playground rows.
 func TestPlaygroundStreamChat_ClientDisconnect_StillRecordsUsage(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
@@ -129,6 +130,7 @@ func TestPlaygroundStreamChat_ClientDisconnect_StillRecordsUsage(t *testing.T) {
 // playgroundFallback 序列化（2026-11-10 容灾链可见性）：count + 逐行尝试，
 // skipped 区分熔断跳过，失败行带 error_type/upstream_status/latency，成功行仅耗时。
 func TestPlaygroundFallback_Serialization(t *testing.T) {
+	t.Parallel()
 	result := &service.FallbackResult{
 		FallbackCount: 1,
 		Attempts: []service.FallbackAttempt{

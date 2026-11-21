@@ -14,6 +14,7 @@ import (
 // drain only moved when the 30s staleness strip fired (observed live: exactly
 // one 200-row round per 30s tick on a 158k-line backlog).
 func TestReplay_CursorAdvancesPastAckedUnstrippedLines(t *testing.T) {
+	usageSoakGate(t)
 	dir := t.TempDir()
 	spool := NewUsageSpool(dir, 64<<20)
 	t.Cleanup(spool.Close)

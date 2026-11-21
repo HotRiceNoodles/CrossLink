@@ -39,6 +39,7 @@ func findCheck(report *ReadinessReport, id string) *ReadinessCheck {
 }
 
 func TestReadiness_FreshInstall(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	report, err := newReadinessCheckerForTest(db, nil).Evaluate(context.Background())
 	require.NoError(t, err)
@@ -66,6 +67,7 @@ func TestReadiness_FreshInstall(t *testing.T) {
 }
 
 func TestReadiness_PlaintextProvidersWithoutKeyIsDanger(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	require.NoError(t, db.Create(&model.Provider{Name: "p1", DisplayName: "P1", AdapterType: "openai", BaseURL: "https://api.example.com", APIKey: "sk-plaintext"}).Error)
 
@@ -77,6 +79,7 @@ func TestReadiness_PlaintextProvidersWithoutKeyIsDanger(t *testing.T) {
 }
 
 func TestReadiness_EncryptedAndReferenceSecretsNotPlaintext(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	require.NoError(t, db.Create(&model.SystemSetting{Key: "encryption_key", Value: "dGVzdA=="}).Error)
 	require.NoError(t, db.Create(&model.Provider{Name: "p1", DisplayName: "P1", AdapterType: "openai", BaseURL: "https://a.example.com", APIKey: "enc2://ciphertext"}).Error)
@@ -89,6 +92,7 @@ func TestReadiness_EncryptedAndReferenceSecretsNotPlaintext(t *testing.T) {
 }
 
 func TestReadiness_ConfigKeyCountsAsActive(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	cfg := &config.Config{}
 	cfg.SecretManager.EncryptionKey = "dGVzdA=="
@@ -98,6 +102,7 @@ func TestReadiness_ConfigKeyCountsAsActive(t *testing.T) {
 }
 
 func TestReadiness_ExistingInstallNotForced(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	require.NoError(t, db.Create(&model.Provider{Name: "p1", DisplayName: "P1", AdapterType: "openai", BaseURL: "https://api.example.com", APIKey: "sk-x"}).Error)
 
@@ -107,6 +112,7 @@ func TestReadiness_ExistingInstallNotForced(t *testing.T) {
 }
 
 func TestReadiness_SetupStatusVariants(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	require.NoError(t, db.Create(&model.SystemSetting{Key: "setup_wizard_status", Value: "skipped"}).Error)
 	report, err := newReadinessCheckerForTest(db, nil).Evaluate(context.Background())
@@ -123,6 +129,7 @@ func TestReadiness_SetupStatusVariants(t *testing.T) {
 }
 
 func TestReadiness_TimezoneMatrix(t *testing.T) {
+	t.Parallel()
 	// Both unset → info.
 	db := setupReadinessTestDB(t)
 	report, err := newReadinessCheckerForTest(db, nil).Evaluate(context.Background())
@@ -153,6 +160,7 @@ func TestReadiness_TimezoneMatrix(t *testing.T) {
 }
 
 func TestReadiness_SMTPAndMiscConfigChecks(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	cfg := &config.Config{}
 	report, err := newReadinessCheckerForTest(db, cfg).Evaluate(context.Background())
@@ -177,6 +185,7 @@ func TestReadiness_SMTPAndMiscConfigChecks(t *testing.T) {
 }
 
 func TestReadiness_ContentLog(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	require.NoError(t, db.Create(&model.SystemSetting{Key: "log_content", Value: "true"}).Error)
 	report, err := newReadinessCheckerForTest(db, nil).Evaluate(context.Background())
@@ -185,6 +194,7 @@ func TestReadiness_ContentLog(t *testing.T) {
 }
 
 func TestSetupNeeded_FalseOnError(t *testing.T) {
+	t.Parallel()
 	// DB without migrated tables must not blow up or force the wizard.
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
@@ -192,6 +202,7 @@ func TestSetupNeeded_FalseOnError(t *testing.T) {
 }
 
 func TestReadinessHandler_Report(t *testing.T) {
+	t.Parallel()
 	db := setupReadinessTestDB(t)
 	h := NewReadinessHandler(newReadinessCheckerForTest(db, nil))
 

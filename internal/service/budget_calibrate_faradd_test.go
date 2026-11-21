@@ -63,8 +63,8 @@ func TestCalibrateFar_X4_NearBaselinePlusFarAdds(t *testing.T) {
 	cal, rdb, db := newFarHarness(t)
 	tid := int64(81)
 	pk := PeriodKey("monthly")
-	farSeed(t, db, tid, 10, 1.0, 2*time.Hour, "x4-old")  // ids 1-10: FAR domain, total 10
-	farSeed(t, db, tid, 10, 10.0, 0, "x4-new")           // ids 11-20: NEAR domain, total 100
+	farSeed(t, db, tid, 10, 1.0, 2*time.Hour, "x4-old") // ids 1-10: FAR domain, total 10
+	farSeed(t, db, tid, 10, 10.0, 0, "x4-new")          // ids 11-20: NEAR domain, total 100
 	token, rel, _ := cal.acquireCalibrationLock(context.Background())
 	if rel == nil {
 		t.Fatal("X4 lock")

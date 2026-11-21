@@ -388,9 +388,9 @@ func TestDBAuditReplay_ConvergesArbitraryUndercount(t *testing.T) {
 	// holding a phantom overhang of 2 whose reservation marker EXPIRED (the
 	// post-crash shape: counters written, recovery tasks lost).
 	bk, rk, sk := markedKeys("team", tk, pk)
-	rdb.Set(ctx, bk, 5.0, time.Hour)   // DB says 10
-	rdb.Set(ctx, sk, 3.0, time.Hour)   // DB says 10
-	rdb.Set(ctx, rk, 2.0, time.Hour)   // phantom overhang (mark long gone)
+	rdb.Set(ctx, bk, 5.0, time.Hour) // DB says 10
+	rdb.Set(ctx, sk, 3.0, time.Hour) // DB says 10
+	rdb.Set(ctx, rk, 2.0, time.Hour) // phantom overhang (mark long gone)
 	// Its ZSET entry (reserve-created) is due for reaping:
 	rdb.ZAdd(ctx, budgetResvExpZSet, redis.Z{Score: float64(time.Now().Add(-time.Minute).Unix()),
 		Member: resvExpMember("team", tk, "req-crash-1", "monthly", pk, "2.000000000")})

@@ -25,6 +25,7 @@ func setupSystemTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestLoadResilienceConfig_NewKeysDefaultAndOverridden(t *testing.T) {
+	t.Parallel()
 	db := setupSystemTestDB(t)
 
 	// Defaults apply when keys are unset.
@@ -51,6 +52,7 @@ func TestLoadResilienceConfig_NewKeysDefaultAndOverridden(t *testing.T) {
 }
 
 func TestRunResilienceRefreshLoop_RunsAndStops(t *testing.T) {
+	t.Parallel()
 	db := setupSystemTestDB(t)
 	health := provider.NewHealthTracker()
 
@@ -73,6 +75,7 @@ func TestRunResilienceRefreshLoop_RunsAndStops(t *testing.T) {
 }
 
 func TestContentLogGetUpdate(t *testing.T) {
+	t.Parallel()
 	db := setupSystemTestDB(t)
 	usageSvc := service.NewUsageService(nil)
 	h := NewSystemHandler(db, nil, config.AdminConfig{}, usageSvc, nil, nil, nil, nil)

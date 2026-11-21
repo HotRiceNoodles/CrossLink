@@ -112,6 +112,7 @@ func pgRespGuardRequest(t *testing.T, h *PlaygroundHandler, stream bool) *httpte
 // SECRET for the tool; the playground Responses output check must block on the
 // decoded form (round-10 class: escaped JSON bypass).
 func TestCodexRetestPlaygroundResponsesNonStreamBlocksDecodedToolArgs(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "window")
 	h := pgRespGuardHandler(t, db, gs)
@@ -124,6 +125,7 @@ func TestCodexRetestPlaygroundResponsesNonStreamBlocksDecodedToolArgs(t *testing
 // Strict stream: the split "SE"/"CRET" content must NOT be released before
 // the final check — the recorder receives only the guardrail error.
 func TestCodexRetestPlaygroundResponsesStrictStreamWithholdsBlockedContent(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "strict")
 	h := pgRespGuardHandler(t, db, gs)
@@ -140,6 +142,7 @@ func TestCodexRetestPlaygroundResponsesStrictStreamWithholdsBlockedContent(t *te
 // Window stream: already-emitted content is not retractable (documented
 // tradeoff) but the hit still terminates the stream with a guardrail error.
 func TestCodexRetestPlaygroundResponsesWindowStreamTerminatesOnHit(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "window")
 	h := pgRespGuardHandler(t, db, gs)
@@ -151,6 +154,7 @@ func TestCodexRetestPlaygroundResponsesWindowStreamTerminatesOnHit(t *testing.T)
 }
 
 func TestCodexRetestPgExtractResponsesTextDecodesEscapedLeaves(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		payload string
@@ -282,6 +286,7 @@ func pgUsageDB(t *testing.T) *gorm.DB {
 // released before the final check, so the withheld buffer plus zero content
 // leakage is assertable end-to-end.
 func TestCodexRetestPlaygroundResponsesNativeStrictBlocksCompletedOnly(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "strict")
 	p := &pgRespNativeProvider{name: "native", sse: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"SECRET\"}]}]}}\n\n"}
@@ -302,6 +307,7 @@ func TestCodexRetestPlaygroundResponsesNativeStrictBlocksCompletedOnly(t *testin
 // Detector failure (fail-closed) on the native 3A strict stream: the buffered
 // benign content must NOT be released — only the guardrail error event.
 func TestCodexRetestPlaygroundResponsesNativeFailClosedReleasesNothing(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	gs := pgFailingGuardrailSvc(t, false)
 	p := &pgRespNativeProvider{name: "native", sse: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"benign hello\"}\n\n"}
@@ -319,6 +325,7 @@ func TestCodexRetestPlaygroundResponsesNativeFailClosedReleasesNothing(t *testin
 // Request-context cancellation mid-stream takes the same fail-closed branch:
 // the strict buffer is withheld entirely.
 func TestCodexRetestPlaygroundResponsesNativeCtxCancelFailClosed(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "strict")
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -339,6 +346,7 @@ func TestCodexRetestPlaygroundResponsesNativeCtxCancelFailClosed(t *testing.T) {
 // Non-stream 3A raw body with escaped tool arguments: decoded detection on the
 // real native path.
 func TestCodexRetestPlaygroundResponsesNativeNonStreamBlocksDecodedArgs(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := pgRespGuardSetup(t, "window")
 	p := &pgRespNativeProvider{name: "native", body: `{"output":[{"type":"function_call","arguments":"{\"value\":\"SE\u0043RET\"}"}]}`}
@@ -352,6 +360,7 @@ func TestCodexRetestPlaygroundResponsesNativeNonStreamBlocksDecodedArgs(t *testi
 // Non-stream detector failure (fail-closed): 503, body withheld. The 3B
 // translation path uses the same helper.
 func TestCodexRetestPlaygroundResponsesNonStreamFailClosed(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	gs := pgFailingGuardrailSvc(t, false)
 	reg := provider.NewRegistry()
@@ -377,6 +386,7 @@ func TestCodexRetestPlaygroundResponsesNonStreamFailClosed(t *testing.T) {
 // 3B translated strict stream with a failing detector: the buffered events
 // are withheld — only the guardrail error reaches the client.
 func TestCodexRetestPlaygroundResponses3BStreamFailClosed(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	gs := pgFailingGuardrailSvc(t, false) // strict + fail-closed
 	db := pgUsageDB(t)
@@ -403,6 +413,7 @@ func TestCodexRetestPlaygroundResponses3BStreamFailClosed(t *testing.T) {
 
 // Explicit fail-open with a failing detector: content is released per policy.
 func TestCodexRetestPlaygroundResponsesFailOpenReleasesPerPolicy(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	gs := pgFailingGuardrailSvc(t, true)
 	p := &pgRespNativeProvider{name: "native", sse: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"benign hello\"}\n\n"}

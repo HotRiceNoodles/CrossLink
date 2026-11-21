@@ -83,6 +83,7 @@ func addEntry(t *testing.T, store *debug.Store, path string, body []byte, stream
 }
 
 func TestDebug_Replay_EntryNotFound(t *testing.T) {
+	t.Parallel()
 	h := newReplayHandler(t, 8080, nil)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/999/replay", gin.H{
 		"key_id": 1,
@@ -94,6 +95,7 @@ func TestDebug_Replay_EntryNotFound(t *testing.T) {
 }
 
 func TestDebug_Replay_MissingKeyID(t *testing.T) {
+	t.Parallel()
 	h := newReplayHandler(t, 8080, nil)
 	seq := addEntry(t, h.store, "/v1/chat/completions", []byte(`{"model":"m","messages":[]}`), false, false)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{})
@@ -104,6 +106,7 @@ func TestDebug_Replay_MissingKeyID(t *testing.T) {
 }
 
 func TestDebug_Replay_TruncatedRejected(t *testing.T) {
+	t.Parallel()
 	h := newReplayHandler(t, 8080, nil)
 	seq := addEntry(t, h.store, "/v1/chat/completions", []byte(`{"model":"m"}`), false, true)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
@@ -117,6 +120,7 @@ func TestDebug_Replay_TruncatedRejected(t *testing.T) {
 }
 
 func TestDebug_Replay_StreamAutoStripped(t *testing.T) {
+	t.Parallel()
 	var capturedBody map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -142,6 +146,7 @@ func TestDebug_Replay_StreamAutoStripped(t *testing.T) {
 }
 
 func TestDebug_Replay_PathNotAllowed(t *testing.T) {
+	t.Parallel()
 	h := newReplayHandler(t, 8080, nil)
 	seq := addEntry(t, h.store, "/v1/videos", []byte(`{}`), false, false)
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/debug/entries/"+itoa(seq)+"/replay", gin.H{
@@ -155,6 +160,7 @@ func TestDebug_Replay_PathNotAllowed(t *testing.T) {
 }
 
 func TestDebug_Replay_RemovesXContext(t *testing.T) {
+	t.Parallel()
 	// Start a test HTTP server that captures the incoming body.
 	var capturedBody map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +193,7 @@ func TestDebug_Replay_RemovesXContext(t *testing.T) {
 }
 
 func TestDebug_Replay_HappyPath(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -259,6 +266,7 @@ func addOrgEntry(t *testing.T, store *debug.Store, orgID int64) int64 {
 }
 
 func TestDebug_Replay_OrgAdminCannotReplayForeignOrgKey(t *testing.T) {
+	t.Parallel()
 	foreignOrg := int64(8)
 	keySvc := newReplayKeySvc(t, model.APIKey{
 		ID: 5, Name: "foreign-key", KeyHash: "hash-5", KeyPrefix: "sk-x", Status: 1, OrgID: &foreignOrg,
@@ -282,6 +290,7 @@ func TestDebug_Replay_OrgAdminCannotReplayForeignOrgKey(t *testing.T) {
 }
 
 func TestDebug_Replay_OrgAdminSameOrgKeyMintsTokenNotKeyID(t *testing.T) {
+	t.Parallel()
 	var gotReplayToken, gotLegacyKeyID string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotReplayToken = r.Header.Get("X-Replay-Token")
@@ -321,6 +330,7 @@ func TestDebug_Replay_OrgAdminSameOrgKeyMintsTokenNotKeyID(t *testing.T) {
 // minted key. Proves the admin replay feature still works AND that nothing
 // but the minted token gets through.
 func TestDebug_Replay_EndToEndThroughRealAuth(t *testing.T) {
+	t.Parallel()
 	keySvc := newReplayKeySvc(t, model.APIKey{
 		ID: 5, Name: "victim-key", KeyHash: "hash-5", KeyPrefix: "sk-x", Status: 1,
 	})

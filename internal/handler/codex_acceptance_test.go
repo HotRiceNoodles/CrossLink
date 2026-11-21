@@ -20,6 +20,7 @@ import (
 )
 
 func TestCodexAcceptanceOpenAIHandlerStrictBlocksShortSplitMarker(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

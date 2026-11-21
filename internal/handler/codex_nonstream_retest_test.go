@@ -87,6 +87,7 @@ func retestRoutes(p provider.Provider) []*router.RouteResult {
 const escapedToolArgs = `{"value":"SE\u0043RET"}`
 
 func TestCodexRetestNonStreamBlocksDecodedToolArguments(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "keyword_filter", "block", `{"blocklist":["SECRET"]}`)
 	p := &fakeNonStreamProvider{name: "retest", resp: &domain.OpenAIResponse{
@@ -114,6 +115,7 @@ func TestCodexRetestNonStreamBlocksDecodedToolArguments(t *testing.T) {
 }
 
 func TestCodexRetestNonStreamMasksDecodedToolArguments(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "credential_detection", "mask", `{}`)
 	escapedCred := `{"value":"sk_liv\u0065_` + strings.Repeat("a", 30) + `"}` // decodes to sk_live_aaa…
@@ -153,6 +155,7 @@ func TestCodexRetestNonStreamMasksDecodedToolArguments(t *testing.T) {
 }
 
 func TestCodexRetestIdemReplayRejectsDecodedToolArgumentsWithoutReexec(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "keyword_filter", "block", `{"blocklist":["SECRET"]}`)
 
@@ -195,6 +198,7 @@ func TestCodexRetestIdemReplayRejectsDecodedToolArgumentsWithoutReexec(t *testin
 }
 
 func TestCodexRetestNonStreamSurfacesTruncatedFlag(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "keyword_filter", "log", `{"blocklist":["SECRET"]}`)
 	huge := strings.Repeat("x", 500001+10) // > maxCheckContent (500K runes)
@@ -260,6 +264,7 @@ func retestMessagesPost(t *testing.T, h *AnthropicHandler, idemKey string) *http
 }
 
 func TestCodexRetestMessagesNonStreamBlocksDecodedToolUseInput(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "keyword_filter", "block", `{"blocklist":["SECRET"]}`)
 	p := &fakeNonStreamProvider{name: "retest", resp: &domain.OpenAIResponse{
@@ -284,6 +289,7 @@ func TestCodexRetestMessagesNonStreamBlocksDecodedToolUseInput(t *testing.T) {
 }
 
 func TestCodexRetestMessagesNonStreamMasksDecodedToolUseInput(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "credential_detection", "mask", `{}`)
 	escapedCred := `{"value":"sk_liv\u0065_` + strings.Repeat("a", 30) + `"}` // decodes to sk_live_aaa…
@@ -323,6 +329,7 @@ func TestCodexRetestMessagesNonStreamMasksDecodedToolUseInput(t *testing.T) {
 }
 
 func TestCodexRetestMessagesIdemReplayRejectsWithoutReexec(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	db, gs := retestSetup(t, "keyword_filter", "block", `{"blocklist":["SECRET"]}`)
 

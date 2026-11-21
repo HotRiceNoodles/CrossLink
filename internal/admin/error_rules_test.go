@@ -27,6 +27,7 @@ func newErrorRuleHandler(db *gorm.DB) *ErrorRuleHandler {
 }
 
 func TestErrorRule_CreateDefaultsAndList(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/error-rules", gin.H{
@@ -65,6 +66,7 @@ func TestErrorRule_CreateDefaultsAndList(t *testing.T) {
 }
 
 func TestErrorRule_Update(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 	require.NoError(t, h.repo.Create(nil, &model.ErrorClassificationRule{
 		MatchField: "code", Pattern: "old", Classification: "quota", Scope: "account", Priority: 100, Enabled: true,
@@ -93,6 +95,7 @@ func TestErrorRule_Update(t *testing.T) {
 }
 
 func TestErrorRule_Delete(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 	require.NoError(t, h.repo.Create(nil, &model.ErrorClassificationRule{
 		MatchField: "code", Pattern: "x", Classification: "quota", Scope: "account", Priority: 100, Enabled: true,
@@ -116,6 +119,7 @@ func TestErrorRule_Delete(t *testing.T) {
 }
 
 func TestErrorRule_Create_InvalidMatchField(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/error-rules", gin.H{
@@ -128,6 +132,7 @@ func TestErrorRule_Create_InvalidMatchField(t *testing.T) {
 }
 
 func TestErrorRule_Create_InvalidScope(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/error-rules", gin.H{
@@ -141,6 +146,7 @@ func TestErrorRule_Create_InvalidScope(t *testing.T) {
 }
 
 func TestErrorRule_Update_NotFound(t *testing.T) {
+	t.Parallel()
 	h := newErrorRuleHandler(setupErrorRuleTestDB(t))
 
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/error-rules/999", gin.H{"pattern": "x"})

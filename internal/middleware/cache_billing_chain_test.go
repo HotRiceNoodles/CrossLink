@@ -25,8 +25,8 @@ import (
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
-	"github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	glogger "gorm.io/gorm/logger"
@@ -34,12 +34,13 @@ import (
 
 type nopAlertSvc struct{}
 
-func (nopAlertSvc) CheckAndAlert(ctx context.Context, scope, targetID, periodType string, spent, budget float64) {}
+func (nopAlertSvc) CheckAndAlert(ctx context.Context, scope, targetID, periodType string, spent, budget float64) {
+}
 
 type hitBillRecorder struct {
-	mu     sync.Mutex
-	calls  int
-	lastMu sync.Mutex
+	mu              sync.Mutex
+	calls           int
+	lastMu          sync.Mutex
 	lastIn, lastOut float64
 }
 
@@ -72,8 +73,8 @@ func buildChain(t *testing.T, apiKey *model.APIKey) (*gin.Engine, *redis.Client,
 		t.Fatalf("automigrate: %v", err)
 	}
 	cacheSvc := service.NewCacheService(rdb, gdb, config.CacheConfig{
-		Enabled:    true,
-		DefaultTTL: 5 * time.Minute,
+		Enabled:     true,
+		DefaultTTL:  5 * time.Minute,
 		MaxBodySize: 1 << 20,
 	})
 	cp, _ := crypto.NewProvider("standard")
