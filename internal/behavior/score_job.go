@@ -3,9 +3,11 @@ package behavior
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -51,6 +53,7 @@ type hourRollupRow struct {
 
 // ScoreHour 对 hourStart 所在小时打分并写台账。
 func (a *Aggregator) ScoreHour(ctx context.Context, hourStart time.Time) error {
+	scoreStart := time.Now()
 	hour := hourStart.Truncate(time.Hour)
 	dayStart := hour.Truncate(24 * time.Hour)
 
@@ -150,6 +153,9 @@ WHERE granularity = 'hour' AND bucket_ts = ?`, hour).Scan(&rows).Error; err != n
 			return fmt.Errorf("score: record anomaly %v: %w", e, err)
 		}
 	}
+	slog.Info("behavior score hour",
+		"hour", hour.Format(time.RFC3339), "entities", len(entities),
+		"elapsed", time.Since(scoreStart).Round(time.Millisecond))
 	return nil
 }
 
@@ -459,24 +465,11 @@ func (a *Aggregator) loadTolerances(ctx context.Context, entities []EntityRef) (
 }
 
 // hourLatencyMedians 流式计算该小时各实体的 log₂ 延迟中位数（B 类比较窗，
-// D11：比较窗分布由作业内存直算，不落库）。
+// D11：比较窗分布由作业内存直算，不落库）。database/sql 直连流式（gorm
+// Rows+ScanRows 千万行表怪癖同 ReaggregateDayHistograms 注释）。
 func (a *Aggregator) hourLatencyMedians(ctx context.Context, hour time.Time) map[EntityRef]map[string]float64 {
 	lat := map[EntityRef][]float64{}
 	ft := map[EntityRef][]float64{}
-	rows, err := raw(a.DB, ctx, `
-SELECT api_key_id AS key_id, org_id, latency_ms AS latency, first_token_ms AS first_token
-FROM usage_logs
-WHERE created_at >= ? AND created_at < ? AND NOT cache_hit`, hour, hour.Add(time.Hour)).Rows()
-	if err != nil {
-		return map[EntityRef]map[string]float64{}
-	}
-	defer rows.Close()
-	type lr struct {
-		KeyID      *int64
-		OrgID      *int64
-		Latency    int64
-		FirstToken *int64
-	}
 	med := func(xs []float64) float64 {
 		if len(xs) == 0 {
 			return 0
@@ -491,28 +484,33 @@ WHERE created_at >= ? AND created_at < ? AND NOT cache_hit`, hour, hour.Add(time
 		}
 		return (ls[len(ls)/2-1] + ls[len(ls)/2]) / 2
 	}
-	for rows.Next() {
-		var r lr
-		if err := a.DB.ScanRows(rows, &r); err != nil {
-			continue
-		}
-		if r.Latency > 0 {
-			if r.KeyID != nil {
-				lat[EntityRef{EntityTypeKey, *r.KeyID}] = append(lat[EntityRef{EntityTypeKey, *r.KeyID}], float64(r.Latency))
+	_ = a.streamQuery(ctx, `
+SELECT api_key_id, org_id, latency_ms, first_token_ms
+FROM usage_logs
+WHERE created_at >= ? AND created_at < ? AND NOT cache_hit`,
+		[]any{hour, hour.Add(time.Hour)}, func(rows *sql.Rows) error {
+			var keyID, orgID, latency, firstToken sql.NullInt64
+			if err := rows.Scan(&keyID, &orgID, &latency, &firstToken); err != nil {
+				return nil // 单行扫描失败跳过（噪声方向安全）
 			}
-			if r.OrgID != nil {
-				lat[EntityRef{EntityTypeOrg, *r.OrgID}] = append(lat[EntityRef{EntityTypeOrg, *r.OrgID}], float64(r.Latency))
+			if latency.Valid && latency.Int64 > 0 {
+				if keyID.Valid {
+					lat[EntityRef{EntityTypeKey, keyID.Int64}] = append(lat[EntityRef{EntityTypeKey, keyID.Int64}], float64(latency.Int64))
+				}
+				if orgID.Valid {
+					lat[EntityRef{EntityTypeOrg, orgID.Int64}] = append(lat[EntityRef{EntityTypeOrg, orgID.Int64}], float64(latency.Int64))
+				}
 			}
-		}
-		if r.FirstToken != nil && *r.FirstToken > 0 {
-			if r.KeyID != nil {
-				ft[EntityRef{EntityTypeKey, *r.KeyID}] = append(ft[EntityRef{EntityTypeKey, *r.KeyID}], float64(*r.FirstToken))
+			if firstToken.Valid && firstToken.Int64 > 0 {
+				if keyID.Valid {
+					ft[EntityRef{EntityTypeKey, keyID.Int64}] = append(ft[EntityRef{EntityTypeKey, keyID.Int64}], float64(firstToken.Int64))
+				}
+				if orgID.Valid {
+					ft[EntityRef{EntityTypeOrg, orgID.Int64}] = append(ft[EntityRef{EntityTypeOrg, orgID.Int64}], float64(firstToken.Int64))
+				}
 			}
-			if r.OrgID != nil {
-				ft[EntityRef{EntityTypeOrg, *r.OrgID}] = append(ft[EntityRef{EntityTypeOrg, *r.OrgID}], float64(*r.FirstToken))
-			}
-		}
-	}
+			return nil
+		})
 	out := map[EntityRef]map[string]float64{}
 	for e, xs := range lat {
 		if m := med(xs); m > 0 {

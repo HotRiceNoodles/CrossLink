@@ -28,17 +28,25 @@ const (
 // ErrLeaseLost 表示作业运行中租约被抢占（本轮回滚语义由幂等写承担，§5.3 取舍表）。
 var ErrLeaseLost = errors.New("behavior job lease lost")
 
-// Run 启动小时/日作业循环（每个立即先跑一轮，之后按周期）。阻塞直到 ctx 取消。
-func Run(ctx context.Context, db *gorm.DB) {
-	go loop(ctx, db, JobHourly, hourlyPeriod, runHourlyJob)
-	go loop(ctx, db, JobDaily, dailyPeriod, runDailyJob)
+// Run 启动小时/日作业循环（每个立即先跑一轮，之后按周期）。enabledFn（可选）
+// 是运行时开关源——每个 tick 读取，false 时本轮静默跳过（循环与锁保持活着，
+// 页面热开启后下一 tick 即开始工作，无需重启）。阻塞直到 ctx 取消。
+func Run(ctx context.Context, db *gorm.DB, enabledFn ...func() bool) {
+	var enabled func() bool
+	if len(enabledFn) > 0 {
+		enabled = enabledFn[0]
+	}
+	go loop(ctx, db, JobHourly, hourlyPeriod, runHourlyJob, enabled)
+	go loop(ctx, db, JobDaily, dailyPeriod, runDailyJob, enabled)
 	<-ctx.Done()
 }
 
-func loop(ctx context.Context, db *gorm.DB, job string, period time.Duration, fn func(context.Context, *Aggregator) error) {
+func loop(ctx context.Context, db *gorm.DB, job string, period time.Duration, fn func(context.Context, *Aggregator) error, enabled func() bool) {
 	agg := &Aggregator{DB: db}
 	// 启动即跑一轮（小部署上让基线尽快开始积累；抢不到锁则等下个周期）。
-	runOnce(ctx, db, agg, job, fn)
+	if enabled == nil || enabled() {
+		runOnce(ctx, db, agg, job, fn)
+	}
 	t := time.NewTicker(period)
 	defer t.Stop()
 	for {
@@ -46,6 +54,9 @@ func loop(ctx context.Context, db *gorm.DB, job string, period time.Duration, fn
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if enabled != nil && !enabled() {
+				continue // 运行时关：本轮跳过，tick 保持
+			}
 			runOnce(ctx, db, agg, job, fn)
 		}
 	}

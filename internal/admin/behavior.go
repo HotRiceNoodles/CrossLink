@@ -19,12 +19,71 @@ import (
 // confirm/dismiss 为终态裁决：只接受 open 事件（终态不可重开/改判，D16），
 // 同时按 §5.6 公式把反馈写进 behavior_tolerances（永不改写基线数据，D10）。
 type BehaviorHandler struct {
-	db       *gorm.DB
-	auditSvc *service.AuditService // nil in Community
+	db        *gorm.DB
+	auditSvc  *service.AuditService // nil in Community
+	enabledFn func() bool           // 运行时开关源（settings.behavior_enabled；nil=视为开）
 }
 
-func NewBehaviorHandler(db *gorm.DB, auditSvc *service.AuditService) *BehaviorHandler {
-	return &BehaviorHandler{db: db, auditSvc: auditSvc}
+func NewBehaviorHandler(db *gorm.DB, auditSvc *service.AuditService, enabledFn func() bool) *BehaviorHandler {
+	if enabledFn == nil {
+		enabledFn = func() bool { return true }
+	}
+	return &BehaviorHandler{db: db, auditSvc: auditSvc, enabledFn: enabledFn}
+}
+
+// Status GET /admin/api/behavior/status —— 部署诊断入口（五轮验收 ①）：
+// 回答"已安装但为什么没在学习"——enabled 开关、作业锁活性（租约是否新鲜）、
+// 各表计数、最近一轮学习时间与 staleness 判定（>2h 无新快照即 stale）。
+func (h *BehaviorHandler) Status(c *gin.Context) {
+	ctx := c.Request.Context()
+	now := time.Now().UTC()
+
+	var locks []model.BehaviorJobLock
+	_ = h.db.WithContext(ctx).Find(&locks).Error
+	jobs := make([]gin.H, 0, len(locks))
+	for _, l := range locks {
+		jobs = append(jobs, gin.H{
+			"job": l.Job, "fence": l.Fence,
+			"lease_until": l.LeaseUntil, "lease_active": l.LeaseUntil.After(now),
+		})
+	}
+	count := func(m interface{}) int64 {
+		var n int64
+		if err := h.db.WithContext(ctx).Model(m).Count(&n).Error; err != nil {
+			return -1
+		}
+		return n
+	}
+	var openAnoms, fpCandidates int64
+	h.db.WithContext(ctx).Model(&model.BehaviorAnomaly{}).Where("status = ?", "open").Count(&openAnoms)
+	h.db.WithContext(ctx).Model(&model.BehaviorFingerprint{}).Where("status = ?", "candidate").Count(&fpCandidates)
+
+	// 最近学习时间：取 computed_at 最新的一行（真实列扫描——MAX() 聚合在
+	// sqlite 下返回字符串,扫不进 *time.Time,实测踩坑）。
+	var latest model.BehaviorBaseline
+	var lastComputed *time.Time
+	if err := h.db.WithContext(ctx).
+		Select("computed_at").
+		Order("computed_at DESC").
+		First(&latest).Error; err == nil {
+		tt := latest.ComputedAt.UTC()
+		lastComputed = &tt
+	}
+	stale := h.enabledFn() && (lastComputed == nil || now.Sub(*lastComputed) > 2*time.Hour)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"enabled": h.enabledFn(),
+		"jobs":    jobs,
+		"counts": gin.H{
+			"rollups":                count(&model.BehaviorRollup{}),
+			"baselines":              count(&model.BehaviorBaseline{}),
+			"seen_categories":        count(&model.BehaviorSeenCategory{}),
+			"anomalies_total":        count(&model.BehaviorAnomaly{}),
+			"anomalies_open":         openAnoms,
+			"fingerprints_candidate": fpCandidates,
+		},
+		"last_baseline_computed_at": lastComputed,
+		"learning_stale":            stale,
+	}})
 }
 
 var validAnomalyStatus = map[string]bool{

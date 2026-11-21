@@ -68,22 +68,26 @@ type AppDeps struct {
 
 // Extensions holds Commercial-only plugins injected at startup.
 type Extensions struct {
-	ExtraProviders     []func(*config.Config, *gorm.DB)
-	ExtraStrategies    map[router.StrategyName]router.RoutingStrategy
-	AliasResolver      router.AliasResolver
-	ExtraMiddlewares   []func(*gin.RouterGroup, *Extensions)
-	ExtraRoutes        func(*gin.RouterGroup, *Extensions)
-	ExtraMCPRoutes     func(*gin.RouterGroup, *Extensions)     // mcpGroup (independent route group)
-	ExtraGatewayRoutes func(*gin.RouterGroup, *Extensions)     // gwGroup — inject multimodal/new-protocol public endpoints (e.g. /v1/images, /v1/audio, /v1/embeddings, /v1/batch)
-	ExtraPublicRoutes  func(*gin.Engine, *Extensions)          // public routes (no auth, e.g. SSO login)
-	ExtraEngineRoutes  func(*gin.Engine, *Extensions)          // main router (for docs, etc.)
-	MCPEncSetter       func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
-	MCPSettingsSetter  func(p mcp.MCPSettingsProvider)         // called by app.go after the settings provider is ready
-	IPPolicy           service.IPPolicy
-	AssemblerHook      middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
-	ToolObserver       domain.ToolObserver      // pro seam: agent toolset profiling collector; nil in Community
-	Gate               GateInterface
-	Deps               *AppDeps
+	ExtraProviders  []func(*config.Config, *gorm.DB)
+	ExtraStrategies map[router.StrategyName]router.RoutingStrategy
+	// GuardrailConfigTransform: adaptive-tuning seam (plan 2026-11-20 v1.7
+	// D1/D2). Applied per engine build in GuardrailService.getEngine; nil in
+	// Community (identity — zero behavior change, zero DB reads).
+	GuardrailConfigTransform guardrail.ConfigTransformFunc
+	AliasResolver            router.AliasResolver
+	ExtraMiddlewares         []func(*gin.RouterGroup, *Extensions)
+	ExtraRoutes              func(*gin.RouterGroup, *Extensions)
+	ExtraMCPRoutes           func(*gin.RouterGroup, *Extensions)     // mcpGroup (independent route group)
+	ExtraGatewayRoutes       func(*gin.RouterGroup, *Extensions)     // gwGroup — inject multimodal/new-protocol public endpoints (e.g. /v1/images, /v1/audio, /v1/embeddings, /v1/batch)
+	ExtraPublicRoutes        func(*gin.Engine, *Extensions)          // public routes (no auth, e.g. SSO login)
+	ExtraEngineRoutes        func(*gin.Engine, *Extensions)          // main router (for docs, etc.)
+	MCPEncSetter             func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
+	MCPSettingsSetter        func(p mcp.MCPSettingsProvider)         // called by app.go after the settings provider is ready
+	IPPolicy                 service.IPPolicy
+	AssemblerHook            middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
+	ToolObserver             domain.ToolObserver      // pro seam: agent toolset profiling collector; nil in Community
+	Gate                     GateInterface
+	Deps                     *AppDeps
 }
 
 func NoopExtensions() *Extensions {

@@ -2,6 +2,7 @@ package behavior
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"math"
@@ -208,50 +209,40 @@ type histKey struct {
 
 // ReaggregateDayHistograms 从原始行重算 B 类日直方图（D11：比较窗/日桶分布由作业
 // 内存直算，不依赖小时行合成）。§5.5 缺失约定：cache_hit 请求与 NULL first_token
-// 不入池；latency ≤ 0 由直方图 Add 丢弃。
+// 不入池；latency ≤ 0 由直方图 Add 丢弃。流式走 database/sql 直连（gorm
+// Rows+ScanRows 在千万行表上只吐 1 行——探针实测,曾致全量规格下直方图近空）。
 func (a *Aggregator) ReaggregateDayHistograms(ctx context.Context, dayStart time.Time) error {
 	from, to := dayStart.Truncate(24*time.Hour), dayStart.Truncate(24*time.Hour).Add(24*time.Hour)
 	if a.now().UTC().Before(to) {
 		to = a.now().UTC() // 今天只算到当前时刻
 	}
 	hists := map[histKey]*LogHistogram{}
-	// 列别名对齐 gorm 命名策略（key_id/latency/first_token），否则 ScanRows
-	// 按列名匹配字段，latency_ms 之类扫不进 Latency（按 0 丢弃，直方图全空）。
-	sql := `
-SELECT api_key_id AS key_id, org_id, latency_ms AS latency, first_token_ms AS first_token
+	err := a.streamQuery(ctx, `
+SELECT api_key_id, org_id, latency_ms, first_token_ms
 FROM usage_logs
-WHERE created_at >= ? AND created_at < ? AND NOT cache_hit`
-	rows, err := raw(a.DB, ctx, sql, from.UTC(), to.UTC()).Rows()
+WHERE created_at >= ? AND created_at < ? AND NOT cache_hit`,
+		[]any{from.UTC(), to.UTC()}, func(rows *sql.Rows) error {
+			var keyID, orgID, firstToken sql.NullInt64
+			var latency sql.NullInt64
+			if err := rows.Scan(&keyID, &orgID, &latency, &firstToken); err != nil {
+				return fmt.Errorf("scan latency row: %w", err)
+			}
+			if keyID.Valid && latency.Valid {
+				addHist(hists, histKey{EntityTypeKey, keyID.Int64, MetricLatency}, float64(latency.Int64))
+				if firstToken.Valid {
+					addHist(hists, histKey{EntityTypeKey, keyID.Int64, MetricFirstToken}, float64(firstToken.Int64))
+				}
+			}
+			if orgID.Valid && latency.Valid {
+				addHist(hists, histKey{EntityTypeOrg, orgID.Int64, MetricLatency}, float64(latency.Int64))
+				if firstToken.Valid {
+					addHist(hists, histKey{EntityTypeOrg, orgID.Int64, MetricFirstToken}, float64(firstToken.Int64))
+				}
+			}
+			return nil
+		})
 	if err != nil {
 		return fmt.Errorf("stream latency rows %s: %w", from.Format(time.RFC3339), err)
-	}
-	defer rows.Close()
-	type latencyRow struct {
-		KeyID      *int64
-		OrgID      *int64
-		Latency    int64
-		FirstToken *int64
-	}
-	for rows.Next() {
-		var r latencyRow
-		if err := a.DB.ScanRows(rows, &r); err != nil {
-			return fmt.Errorf("scan latency row: %w", err)
-		}
-		if r.KeyID != nil {
-			addHist(hists, histKey{EntityTypeKey, *r.KeyID, MetricLatency}, float64(r.Latency))
-			if r.FirstToken != nil {
-				addHist(hists, histKey{EntityTypeKey, *r.KeyID, MetricFirstToken}, float64(*r.FirstToken))
-			}
-		}
-		if r.OrgID != nil {
-			addHist(hists, histKey{EntityTypeOrg, *r.OrgID, MetricLatency}, float64(r.Latency))
-			if r.FirstToken != nil {
-				addHist(hists, histKey{EntityTypeOrg, *r.OrgID, MetricFirstToken}, float64(*r.FirstToken))
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate latency rows: %w", err)
 	}
 	var rollups []model.BehaviorRollup
 	for k, h := range hists {
@@ -290,15 +281,18 @@ func addHist(hists map[histKey]*LogHistogram, k histKey, x float64) {
 func (a *Aggregator) RunHourlyCycle(ctx context.Context) error {
 	now := a.now().UTC()
 	first := now.Add(-reaggregateLookback).Truncate(time.Hour)
+	// 未变小时判定批量化：两条流式查询取全窗计数（Go 侧分桶），成本与 usage 表
+	// 总大小解耦——逐小时 COUNT 在 1000 万行表上被规划器退化成每查一次全表扫
+	// （48×~1.5s：全量规格基准实测 reagg 段 74s 的主因）。
+	unchangedMap, err := a.unchangedHours(ctx, first, now)
+	if err != nil {
+		return err
+	}
 	affected := map[[2]any]bool{}
 	reaggStart := time.Now()
 	changed := 0
 	for h := first; h.Before(now); h = h.Add(time.Hour) {
-		unchanged, err := a.hourUnchanged(ctx, h)
-		if err != nil {
-			return err
-		}
-		if unchanged {
+		if unchangedMap[h] {
 			continue // 该小时无新行/无删行（usage 计数 == rollup 记账）
 		}
 		changed++
@@ -336,24 +330,108 @@ func (a *Aggregator) RunHourlyCycle(ctx context.Context) error {
 	return nil
 }
 
-// hourUnchanged 判断该小时是否无需重聚合：usage_logs 行数 == **key 层** request_rate
-// 桶的 sample_count 记账和（必须滤 entity_type='key'——org 层同指标记账会把
-// dst 翻倍，导致跳过永不生效、每小时全量重做：规格基准 changed_hours=30 实测
-// 揪出的 bug）。迟到/删除使计数分歧 → 重做；两侧皆 0（夜里无流量的空小时）也
-// 跳过。已见集语义不受影响：无新行 = 无活动，last_seen 不该前进。
-func (a *Aggregator) hourUnchanged(ctx context.Context, h time.Time) (bool, error) {
-	var src, dst int64
-	if err := raw(a.DB, ctx,
-		"SELECT COUNT(*) FROM usage_logs WHERE created_at >= ? AND created_at < ?",
-		h, h.Add(time.Hour)).Scan(&src).Error; err != nil {
-		return false, fmt.Errorf("count usage hour %s: %w", h, err)
+// unchangedHours 批量判定 [from,to) 内每个小时是否无需重聚合：流式读取窗口内
+// usage 的 created_at（Go 侧按小时分桶计数）与 **key 层** request_rate 桶的
+// sample_count，逐小时比对。必须滤 entity_type='key'——org 层同指标记账会把
+// dst 翻倍，跳过永不生效（快模式基准 changed_hours=30 实测揪出的 bug）。
+// 迟到/删除使计数分歧 → 重做；两侧皆 0 的空小时视为未变。已见集语义不受影响：
+// 无新行 = 无活动，last_seen 不该前进。
+// parseStoredTime 容错解析驱动存回的时间字符串（glebarez TEXT 列经 ScanRows
+// 进 time.Time 在部分路径静默失败——usage.created_at 全军覆没而 rollup.bucket_ts
+// 却成功，规格基准 mismatch 样本 usage_rows=0 实测；字符串+多布局解析两侧统一）。
+func parseStoredTime(s string) (time.Time, bool) {
+	layouts := []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05.999999999+07:00", "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, true
+		}
 	}
-	if err := raw(a.DB, ctx,
-		"SELECT COALESCE(SUM(sample_count), 0) FROM behavior_rollups WHERE entity_type = ? AND metric = ? AND granularity = 'hour' AND bucket_ts = ?",
-		EntityTypeKey, MetricRequestRate, h).Scan(&dst).Error; err != nil {
-		return false, fmt.Errorf("count rollup hour %s: %w", h, err)
+	return time.Time{}, false
+}
+
+// streamQuery 在底层 *sql.DB 上执行只读查询并逐行回调。绕开 gorm 的
+// Raw().Rows()+ScanRows 流式路径——后者在千万行表上只吐 1 行（探针实测：
+// 同查询 Scan 36 万行,Rows 流式 1 行），且该怪癖是表规模相关的，小表测试
+// 全绿掩盖了它。database/sql 直连无此问题。
+func (a *Aggregator) streamQuery(ctx context.Context, query string, args []any, scan func(*sql.Rows) error) error {
+	sqlDB, err := a.DB.DB()
+	if err != nil {
+		return fmt.Errorf("stream: no underlying db: %w", err)
 	}
-	return src == dst, nil
+	rows, err := sqlDB.QueryContext(ctx, translateSQL(a.DB, query), args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := scan(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (a *Aggregator) unchangedHours(ctx context.Context, from, to time.Time) (map[time.Time]bool, error) {
+	scanFailures := 0
+	src := map[time.Time]int64{}
+	err := a.streamQuery(ctx,
+		"SELECT created_at FROM usage_logs WHERE created_at >= ? AND created_at < ?",
+		[]any{from, to}, func(rows *sql.Rows) error {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				scanFailures++
+				return nil
+			}
+			if ts, ok := parseStoredTime(s); ok {
+				src[ts.UTC().Truncate(time.Hour)]++
+			} else {
+				scanFailures++
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("stream usage created_at: %w", err)
+	}
+
+	dst := map[time.Time]int64{}
+	err = a.streamQuery(ctx,
+		"SELECT bucket_ts, sample_count FROM behavior_rollups WHERE entity_type = ? AND metric = ? AND granularity = 'hour' AND bucket_ts >= ? AND bucket_ts < ?",
+		[]any{EntityTypeKey, MetricRequestRate, from, to}, func(rows *sql.Rows) error {
+			var bucket string
+			var n int64
+			if err := rows.Scan(&bucket, &n); err != nil {
+				scanFailures++
+				return nil
+			}
+			if ts, ok := parseStoredTime(bucket); ok {
+				dst[ts.UTC().Truncate(time.Hour)] += n
+			} else {
+				scanFailures++
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("stream rollup hours: %w", err)
+	}
+	if scanFailures > 0 {
+		// 不静默：扫描/解析失败会让比对失真（跳过判定偏向重做，安全方向，
+		// 但必须可见——曾在规格基准上隐藏了 74s 的真实成本归因）。
+		slog.Warn("behavior unchanged-hours scan failures", "count", scanFailures)
+	}
+
+	out := make(map[time.Time]bool, 64)
+	mismatchLogged := 0
+	for h := from; h.Before(to); h = h.Add(time.Hour) {
+		match := src[h] == dst[h]
+		out[h] = match
+		if !match && mismatchLogged < 5 {
+			// 归因观测：不匹配样本（小时/usage 计数/rollup 记账）。
+			slog.Warn("behavior unchanged-hours mismatch sample",
+				"hour", h.Format(time.RFC3339), "usage_rows", src[h], "rollup_accounted", dst[h])
+			mismatchLogged++
+		}
+	}
+	return out, nil
 }
 
 // Cleanup 执行保留期清理（小时桶 35 天、日桶与已见集 180 天）——每日全量轮调用。

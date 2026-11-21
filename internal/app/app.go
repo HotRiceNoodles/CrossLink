@@ -1,13 +1,13 @@
 package app
 
 import (
-	"strconv"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	// Registers /debug/pprof/* handlers on http.DefaultServeMux; exposed ONLY
 	// behind CL_PPROF=1 + gateway auth (see the gated route below).
 	_ "net/http/pprof"
@@ -144,6 +144,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	cacheRdb := InitCacheRedis(cfg.Cache.Redis)
 	svcs := service.ProvideServices(repos, rdb, cacheRdb, db, &cfg.Cache, cryptoProvider, cfg.DataLens, dia, cfg.Gateway.BudgetMarkerTTL, cfg.Gateway.BudgetReapInterval)
 	guardrailSvc := guardrail.NewGuardrailService(db, rdb)
+	// Adaptive-tuning seam (commercial-only; nil in Community = identity).
+	if ext != nil && ext.GuardrailConfigTransform != nil {
+		guardrailSvc.SetConfigTransform(ext.GuardrailConfigTransform)
+	}
 
 	// Seed the default credential_detection baseline rule (zero-config safety
 	// floor). Idempotent; non-fatal — guardrails are non-critical, a seed error
@@ -703,10 +707,11 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Community mechanism; action bits are Pro-tier so Community builds 403).
 		// observe-only: confirm/dismiss are terminal verdicts + tolerance feedback
 		// (D10/D14), never enforcement.
-		behaviorHandler := admin.NewBehaviorHandler(db, ext.Deps.AuditSvc)
+		behaviorHandler := admin.NewBehaviorHandler(db, ext.Deps.AuditSvc, func() bool { return settingsProvider.Behavior().Enabled })
 		adminGroup.GET("/behavior/anomalies", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.ListAnomalies)
 		adminGroup.GET("/behavior/anomalies/:id", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.GetAnomaly)
 		adminGroup.GET("/behavior/coverage", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.Coverage)
+		adminGroup.GET("/behavior/status", middleware.RequireAction(permCache, "behavior:view"), behaviorHandler.Status)
 		adminGroup.POST("/behavior/anomalies/:id/confirm", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.Confirm)
 		adminGroup.POST("/behavior/anomalies/:id/dismiss", middleware.RequireAction(permCache, "behavior:manage"), behaviorHandler.Dismiss)
 		// M3 反馈闭环：行为指纹候选复核（人在环；approve 不自动生效，D2）。
@@ -1036,9 +1041,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// frozen v4.0). Background-only per D6: rollups/baselines are computed off the
 	// request path entirely; unlike DataLens this aggregation is portable SQL
 	// (WHERE range + Go-side bucketing, D9), so it runs on every dialect.
-	if cfg.Behavior.Enabled {
-		go behavior.Run(appCtx, db)
-	}
+	// 学习开关=运行时设置（settings.behavior_enabled,页面热切换,yaml 值为基线默认）
+	// ——循环常驻,每 tick 读快照,关=本轮静默跳过。
+	go behavior.Run(appCtx, db, func() bool { return settingsProvider.Behavior().Enabled })
 	// Update cache size gauge periodically via approximate counter
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
