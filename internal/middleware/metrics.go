@@ -33,7 +33,7 @@ var (
 
 	cacheBypassUnpricedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "cl_cache_bypass_unpriced_total",
-		Help:           "Cache entries served BYPASS because they carry no price snapshot (legacy pre-pricing entries); the request re-executes upstream and re-bills at current prices.",
+		Help: "Cache entries served BYPASS because they carry no price snapshot (legacy pre-pricing entries); the request re-executes upstream and re-bills at current prices.",
 	}, []string{"model"})
 
 	providerFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{

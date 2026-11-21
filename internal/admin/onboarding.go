@@ -63,6 +63,15 @@ func (h *OnboardingHandler) SetOnRegistryChange(fn func(action, providerName str
 
 // ---- Probe: stateless upstream connectivity + model enumeration ----
 
+// probeTransportTimeout bounds the probe's HTTP client at the http.Client
+// level (DNS + dial + response). Package var as the test seam: on networks
+// where the allowlisted-but-unreachable probe targets cannot route, every
+// dial waits out the full 15s (whitespace regression alone: 6 subtests =
+// 90s). Tests shorten it without changing assertion semantics — URL-policy
+// admission is decided before any dial, and the dial outcome is never
+// asserted.
+var probeTransportTimeout = 15 * time.Second
+
 type probeRequest struct {
 	AdapterType string          `json:"adapter_type" binding:"required"`
 	BaseURL     string          `json:"base_url"`
@@ -99,7 +108,7 @@ func (h *OnboardingHandler) Probe(c *gin.Context) {
 		APIKey:      input.APIKey,
 		ExtraConfig: datatypes.JSON(input.ExtraConfig),
 	}
-	prov, err := provider.CreateProvider(tmp, 15*time.Second)
+	prov, err := provider.CreateProvider(tmp, probeTransportTimeout)
 	if err != nil {
 		// Unsupported adapter_type or construction error → connectivity failed.
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"success": false, "models_supported": false, "error": err.Error()}})

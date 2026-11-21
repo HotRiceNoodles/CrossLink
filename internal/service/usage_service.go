@@ -89,7 +89,7 @@ type UsageEntry struct {
 	// row collides on the usage_logs unique index instead of double-billing.
 	// Empty for legacy direct-Log callers (admin playground), which have no
 	// replay path and fall back to a one-shot UUID inside buildUsageLog.
-	EventID        string
+	EventID string
 	// GinRequestID carries the gateway request id (the SAME id the budget
 	// reserve/settle markers and the request log line use). Persisted into
 	// usage_logs.request_id so a row is AUDITABLY joinable to its marks,
@@ -180,7 +180,7 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		eventID = uuid.New().String()
 	}
 	log := &model.UsageLog{
-		RequestID: firstNonEmpty(entry.GinRequestID, uuid.New().String()),
+		RequestID:          firstNonEmpty(entry.GinRequestID, uuid.New().String()),
 		EventID:            &eventID,
 		RouteType:          entry.RouteType,
 		ModelRequested:     entry.ModelRequested,

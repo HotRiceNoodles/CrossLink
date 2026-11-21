@@ -1,12 +1,12 @@
 package admin
 
 import (
-	"github.com/crosslink/internal/model"
-	"gorm.io/gorm"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/crosslink/internal/model"
+	"gorm.io/gorm"
 	"io"
 	"log/slog"
 	"net/http"
@@ -47,21 +47,21 @@ func NewDebugHandler(store *debug.Store, auditSvc *service.AuditService, keySvc 
 }
 
 type debugEntrySummary struct {
-	Seq           int64  `json:"seq"`
-	ID            string `json:"id"`
-	Timestamp     string `json:"timestamp"`
-	Duration      int64  `json:"duration_ms"`
-	Method        string `json:"method"`
-	Path          string `json:"path"`
-	Model         string `json:"model"`
-	Status        int    `json:"status"`
-	Stream        bool   `json:"stream"`
-	Truncated     bool   `json:"truncated"`
-	ReqBodyLen    int    `json:"req_body_len"`
-	RespBodyLen   int    `json:"resp_body_len"`
-	UpstreamCount int    `json:"upstream_count"`
-	RetryCount    int    `json:"retry_count"`
-	FallbackCount int    `json:"fallback_count"`
+	Seq               int64  `json:"seq"`
+	ID                string `json:"id"`
+	Timestamp         string `json:"timestamp"`
+	Duration          int64  `json:"duration_ms"`
+	Method            string `json:"method"`
+	Path              string `json:"path"`
+	Model             string `json:"model"`
+	Status            int    `json:"status"`
+	Stream            bool   `json:"stream"`
+	Truncated         bool   `json:"truncated"`
+	ReqBodyLen        int    `json:"req_body_len"`
+	RespBodyLen       int    `json:"resp_body_len"`
+	UpstreamCount     int    `json:"upstream_count"`
+	RetryCount        int    `json:"retry_count"`
+	FallbackCount     int    `json:"fallback_count"`
 	LastUpstreamError string `json:"last_upstream_error,omitempty"`
 }
 
@@ -90,21 +90,21 @@ func (h *DebugHandler) List(c *gin.Context) {
 			}
 		}
 		summaries = append(summaries, debugEntrySummary{
-			Seq:           e.Seq,
-			ID:            e.ID,
-			Timestamp:     e.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
-			Duration:      e.Duration.Milliseconds(),
-			Method:        e.Method,
-			Path:          e.Path,
-			Model:         e.Model,
-			Status:        e.RespStatus,
-			Stream:        e.Stream,
-			Truncated:     e.Truncated,
-			ReqBodyLen:    len(e.ReqBody),
-			RespBodyLen:   len(e.RespBody),
-			UpstreamCount: len(e.UpstreamCalls),
-			RetryCount:    retryCount,
-			FallbackCount: fallbackCount,
+			Seq:               e.Seq,
+			ID:                e.ID,
+			Timestamp:         e.Timestamp.Format("2006-01-02T15:04:05.000Z07:00"),
+			Duration:          e.Duration.Milliseconds(),
+			Method:            e.Method,
+			Path:              e.Path,
+			Model:             e.Model,
+			Status:            e.RespStatus,
+			Stream:            e.Stream,
+			Truncated:         e.Truncated,
+			ReqBodyLen:        len(e.ReqBody),
+			RespBodyLen:       len(e.RespBody),
+			UpstreamCount:     len(e.UpstreamCalls),
+			RetryCount:        retryCount,
+			FallbackCount:     fallbackCount,
 			LastUpstreamError: lastErr,
 		})
 	}
@@ -504,16 +504,16 @@ func (h *DebugHandler) UpdateDebugConfig(c *gin.Context) {
 	h.store.SetOnlyFailed(*input.OnlyFailed)
 	// 持久化到 system_settings（app 启动时读回），重启不丢策略
 	if h.db != nil {
-	for _, kv := range []struct{ key, val string }{
-		{"debug_mode", boolStr(*input.Enabled)},
-		{"debug_sampling_rate", strconv.Itoa(*input.SamplingRate)},
-		{"debug_only_failed", boolStr(*input.OnlyFailed)},
-	} {
-		if err := h.db.Save(&model.SystemSetting{Key: kv.key, Value: kv.val, UpdatedAt: time.Now().UTC()}).Error; err != nil {
-			internalErr(c, err, "persist debug config failed")
-			return
+		for _, kv := range []struct{ key, val string }{
+			{"debug_mode", boolStr(*input.Enabled)},
+			{"debug_sampling_rate", strconv.Itoa(*input.SamplingRate)},
+			{"debug_only_failed", boolStr(*input.OnlyFailed)},
+		} {
+			if err := h.db.Save(&model.SystemSetting{Key: kv.key, Value: kv.val, UpdatedAt: time.Now().UTC()}).Error; err != nil {
+				internalErr(c, err, "persist debug config failed")
+				return
+			}
 		}
-	}
 	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "debug:update_config", "debug", "", "", service.AuditDetail(map[string]any{

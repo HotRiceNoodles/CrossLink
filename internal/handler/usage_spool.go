@@ -3,10 +3,10 @@ package handler
 import (
 	"bufio"
 	"context"
-	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -112,12 +112,12 @@ type UsageSpool struct {
 	// fsync COUNT collapses (one per batch instead of one per event). On slow
 	// disks (measured: 0.5-1s per FlushFileBuffers, ~35 events/s = >100% of
 	// one disk) per-event fsync starves everything sharing the volume.
-	appF    *os.File // persistent append handle (guarded by mu)
-	appSeq  int64    // appended-but-not-yet-synced event counter (guarded by mu)
+	appF      *os.File // persistent append handle (guarded by mu)
+	appSeq    int64    // appended-but-not-yet-synced event counter (guarded by mu)
 	syncMu    sync.Mutex
-	syncedSeq int64      // appSeq covered by a COMPLETED fsync (syncMu)
+	syncedSeq int64 // appSeq covered by a COMPLETED fsync (syncMu)
 	syncWake  chan struct{}
-	closed    bool       // Close() called (syncMu): syncer exits, waiters released
+	closed    bool // Close() called (syncMu): syncer exits, waiters released
 }
 
 // NewUsageSpool prepares the MAIN WAL directory. dir=="" disables spooling.
@@ -187,6 +187,7 @@ func (s *UsageSpool) openAppend() error {
 	s.appF = f
 	return nil
 }
+
 // Close releases the persistent append handle and stops the group-commit
 // syncer; waiters are released (the spool must not be used afterwards).
 // Tests need it so t.TempDir cleanup can delete the WAL on Windows, where an

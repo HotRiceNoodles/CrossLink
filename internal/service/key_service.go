@@ -468,14 +468,14 @@ const (
 )
 
 type ImportKeyResult struct {
-	Index          int      `json:"index"`
-	Name           string   `json:"name,omitempty"`
-	Status         string   `json:"status"`
-	KeyPrefix      string   `json:"key_prefix,omitempty"`
-	KeyID          int64    `json:"key_id,omitempty"`
-	ExistingKeyID  int64    `json:"existing_key_id,omitempty"`
-	Reason         string   `json:"reason,omitempty"`
-	MissingModels  []string `json:"missing_models,omitempty"`
+	Index         int      `json:"index"`
+	Name          string   `json:"name,omitempty"`
+	Status        string   `json:"status"`
+	KeyPrefix     string   `json:"key_prefix,omitempty"`
+	KeyID         int64    `json:"key_id,omitempty"`
+	ExistingKeyID int64    `json:"existing_key_id,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
+	MissingModels []string `json:"missing_models,omitempty"`
 }
 
 var validImportVendors = map[string]bool{

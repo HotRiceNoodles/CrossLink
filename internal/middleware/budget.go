@@ -108,7 +108,7 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 				noteBudgetScopeDegrade("team", *apiKey.TeamID)
 				c.Set("budget_metadata_unavailable", true)
 				c.JSON(http.StatusServiceUnavailable, gin.H{
-					"type": "error",
+					"type":  "error",
 					"error": gin.H{"type": "budget_metadata_unavailable", "message": "team budget metadata is temporarily unavailable (cold cache during a database outage); request rejected rather than admitted without the team limit"},
 				})
 				c.Abort()
@@ -148,7 +148,7 @@ func BudgetCheck(budgetSvc service.BudgetServiceInterface, teamCache *TeamCache,
 					noteBudgetScopeDegrade("org", orgID)
 					c.Set("budget_metadata_unavailable", true)
 					c.JSON(http.StatusServiceUnavailable, gin.H{
-						"type": "error",
+						"type":  "error",
 						"error": gin.H{"type": "budget_metadata_unavailable", "message": "organization budget metadata is temporarily unavailable (cold cache during a database outage); request rejected rather than admitted without the organization limit"},
 					})
 					c.Abort()

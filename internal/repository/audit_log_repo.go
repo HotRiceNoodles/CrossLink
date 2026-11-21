@@ -148,10 +148,13 @@ type AuditStatsResult struct {
 	Operators   []AuditOperatorCount     `json:"operators"`
 }
 
-/* Stats：审计中心概览聚合（2 条查询封顶）。
-   风险/分类计数由前端拿 ByAction 按映射求和——后端不感知风险语义；
-   失败 = status IN 三值（与 apply 归一同口径）；active_users = operators 行数
-   （LIMIT 100 截断，超限由前端标注） */
+/*
+Stats：审计中心概览聚合（2 条查询封顶）。
+
+	风险/分类计数由前端拿 ByAction 按映射求和——后端不感知风险语义；
+	失败 = status IN 三值（与 apply 归一同口径）；active_users = operators 行数
+	（LIMIT 100 截断，超限由前端标注）
+*/
 func (r *AuditLogRepo) Stats(ctx context.Context, f AuditFilter) (*AuditStatsResult, error) {
 	base := func() *gorm.DB { return f.apply(r.db.WithContext(ctx).Model(&model.AuditLog{}), r.dia) }
 

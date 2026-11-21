@@ -277,6 +277,7 @@ return created`)
 //     per-row proofs were evicted with the watermark, so the round-bound
 //     SUM is the only truth; its id ceiling excludes mid-round commits,
 //     and this round's cert-setting blanks the next round's near pass).
+//
 // budget targets settled_target + live resv + shadow quarantines (resv
 // reconciles with live per-request reserves; shadow keeps reaper-quarantined
 // expired holds counted — without it convergence would reopen headroom,
@@ -382,6 +383,7 @@ func fetchSubstituteDollar(q string) string {
 //     any query/script failure aborts the target with the watermark
 //     untouched, and the next round re-pages idempotently (raise-only +
 //     SET marks are idempotent).
+//
 // Rows committed mid-round with an id behind the cursor are neither counted
 // nor marked this round (they are owned by the normal settle path or the
 // journal replay — never silently absorbed).
@@ -778,7 +780,7 @@ func (s *BudgetCalibrationService) calibrateTarget(ctx context.Context, token, s
 			keys = append(keys, calibrationLockKey, budgetKey, resvKey,
 				budgetShadowKey(scope, tid, pk), budgetSettledKey(scope, tid, pk))
 			argv := make([]interface{}, 0, len(frows)+6)
-			argv = append(argv, token, int(ttl), int((guard+time.Hour).Seconds()),
+			argv = append(argv, token, int(ttl), int((guard + time.Hour).Seconds()),
 				int(PeriodTTL(period).Seconds()), farMode, absSum)
 			for _, r := range frows {
 				if r.RequestID != "" {
@@ -838,6 +840,7 @@ func (s *BudgetCalibrationService) calibrateTargetSync(ctx context.Context, toke
 	s.finalizeTarget(ctx, scope, id, pk, period, spent, budget)
 	return nil
 }
+
 // prevents.
 func (s *BudgetCalibrationService) finalizeTarget(ctx context.Context, scope string, id int64, pk, period string, spent, budget float64) {
 	// The budgetaudit watermark (spent|id-cursor) is written by
@@ -1040,6 +1043,7 @@ func (s *BudgetCalibrationService) calibrateKeys(ctx context.Context, token stri
 //     "in-flight wipe" hazard — every hourly round under traffic would do it).
 //   - counter BELOW the snapshot = under-count (outage fail-open residue);
 //     raising converges it to ledger truth.
+//
 // Known boundary: when the counter is below the snapshot WHILE a
 // reservation is in flight, the raise absorbs that reservation and its
 // settlement lands (cost-reserved) net-short by the reserve amount. That

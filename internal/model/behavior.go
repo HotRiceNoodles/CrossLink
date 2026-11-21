@@ -131,7 +131,7 @@ type BehaviorFingerprint struct {
 	EntityType    string    `gorm:"size:16;not null;uniqueIndex:idx_behavior_fps_dedupe,priority:1" json:"entity_type"`
 	EntityID      int64     `gorm:"not null;uniqueIndex:idx_behavior_fps_dedupe,priority:2" json:"entity_id"`
 	DimensionSet  string    `gorm:"size:256;not null;uniqueIndex:idx_behavior_fps_dedupe,priority:3" json:"dimension_set"` // 命中维度名排序 CSV
-	Template      string    `gorm:"not null" json:"template"`                                                          // 各维度取值模板 JSON（x_now/基线/s'）
+	Template      string    `gorm:"not null" json:"template"`                                                              // 各维度取值模板 JSON（x_now/基线/s'）
 	SourceEventID *int64    `json:"source_event_id,omitempty"`
 	HitCount      int       `gorm:"not null;default:1" json:"hit_count"`
 	Status        string    `gorm:"size:16;not null;default:candidate;index:idx_behavior_fps_status" json:"status"` // candidate|approved|retired

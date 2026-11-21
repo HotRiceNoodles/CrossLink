@@ -19,12 +19,13 @@ import (
 
 // F1′ request-idempotent reservation/settlement (2026-10-19 authorized).
 // Key space (s = "<scope>:<targetID>", r = request_id, pk = period key):
-//   budget:{s}:{pk}     enforcement counter (existing)
-//   budgetset:{s}:{pk}  settled sum (audit/invariant)
-//   budgetresv:{s}:{pk} outstanding reservation sum
-//   resvmark:{s}:{r}    per-(scope,request) reservation marker, value = e, TTL
-//   settledmark:{s}:{r} settle-once guard, TTL
-//   resvexp             ZSET {expiry -> member} driving the orphan reaper
+//
+//	budget:{s}:{pk}     enforcement counter (existing)
+//	budgetset:{s}:{pk}  settled sum (audit/invariant)
+//	budgetresv:{s}:{pk} outstanding reservation sum
+//	resvmark:{s}:{r}    per-(scope,request) reservation marker, value = e, TTL
+//	settledmark:{s}:{r} settle-once guard, TTL
+//	resvexp             ZSET {expiry -> member} driving the orphan reaper
 //
 // Atomicity: reserve and settle are each ONE Lua script — the mark, the
 // counters and the reaper zset move together or not at all. Idempotency:
@@ -371,7 +372,7 @@ var callReserveScript = redis.NewScript(`
 `)
 
 type BudgetService struct {
-	journal *settleJournal
+	journal      *settleJournal
 	rdb          *redis.Client
 	markerTTL    time.Duration
 	reapInterval time.Duration
@@ -549,8 +550,8 @@ func (s *BudgetService) reserveScopeMarkedE(ctx context.Context, scope, targetID
 // alertable via cl_budget_settle_lost_total.
 type settleRetryTask struct {
 	scope, targetID, period, pk, reqID string
-	cost                              float64
-	deadline                          time.Time
+	cost                               float64
+	deadline                           time.Time
 }
 
 const (
@@ -562,8 +563,8 @@ const (
 )
 
 var (
-	settleRetryQ    = make(chan settleRetryTask, settleRetryQueueCap)
-	settleRetryOnce sync.Once
+	settleRetryQ     = make(chan settleRetryTask, settleRetryQueueCap)
+	settleRetryOnce  sync.Once
 	settleLedgerOnce sync.Once
 )
 

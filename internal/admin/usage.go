@@ -227,16 +227,16 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	// Main aggregation query
 	var stats usageStats
 	newQuery().Select(
-		"COUNT(*) as total_requests, "+
-			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) as total_sessions, "+
-			"COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, "+
-			"COALESCE(SUM(input_tokens), 0) as input_tokens, "+
-			"COALESCE(SUM(output_tokens), 0) as output_tokens, "+
-			"COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, "+
-			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, "+
-			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, "+
-			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, "+
-			"COUNT(DISTINCT api_key_id) as active_api_keys, "+
+		"COUNT(*) as total_requests, " +
+			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) as total_sessions, " +
+			"COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, " +
+			"COALESCE(SUM(input_tokens), 0) as input_tokens, " +
+			"COALESCE(SUM(output_tokens), 0) as output_tokens, " +
+			"COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, " +
+			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, " +
+			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, " +
+			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, " +
+			"COUNT(DISTINCT api_key_id) as active_api_keys, " +
 			"COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as total_images",
 	).Scan(&stats)
 
@@ -248,9 +248,9 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		GuardrailCount int64
 	}
 	newQuery().Select(
-		"COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count, "+
-			"COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count, "+
-			"COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count, "+
+		"COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count, " +
+			"COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count, " +
+			"COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count, " +
 			"COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count",
 	).Scan(&rates)
 
