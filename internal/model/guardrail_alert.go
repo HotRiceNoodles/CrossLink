@@ -48,6 +48,21 @@ type GuardrailAlertLog struct {
 	Channels  string         `gorm:"size:500" json:"channels"`
 	Status    string         `gorm:"size:20" json:"status"`
 	CreatedAt time.Time      `gorm:"not null" json:"created_at"`
+	// EventID: the stable identity assigned in GuardrailService.emitEvent,
+	// shared with compliance_incidents for the same event. Rows predating this
+	// column are NULL and simply never participate in event-deduped statistics.
+	EventID string `gorm:"size:36;index" json:"event_id,omitempty"`
+	// Scores: the engine's structured decision numbers (GuardrailEvent.Scores
+	// passthrough) for engines with continuous scoring. Adaptive tuning reads
+	// THIS, never the Reason text. NULL for engines without scores.
+	Scores datatypes.JSON `json:"scores,omitempty"`
+	// Arbitration (adaptive tuning M1): a human verdict on this detection.
+	// NULL = not arbitrated; engine_error rows are never arbitratable.
+	Decision      string     `gorm:"size:16" json:"decision,omitempty"` // false_positive|confirmed
+	DecidedBy     int64      `json:"decided_by,omitempty"`
+	DecidedByName string     `gorm:"size:64" json:"decided_by_name,omitempty"`
+	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	DecisionNote  string     `gorm:"size:500" json:"decision_note,omitempty"`
 }
 
 func (GuardrailAlertLog) TableName() string { return "guardrail_alert_logs" }

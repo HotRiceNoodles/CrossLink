@@ -18,27 +18,32 @@ import (
 // confirmed/false_positive，同时落 ReviewerID/ReviewerName/ReviewedAt；
 // 不存在任何把待复核自动置为已复核的代码路径。
 type ComplianceIncident struct {
-	ID            int64  `gorm:"primaryKey" json:"id"`
-	OrgID         *int64 `gorm:"index:idx_compliance_incidents_org" json:"org_id,omitempty"`
-	RuleID        int64  `gorm:"not null;default:0" json:"rule_id"`
-	RuleVersion   int64  `gorm:"not null;default:0" json:"rule_version"`
-	Direction     string `gorm:"size:10;not null" json:"direction"`    // request|response
-	ActionTaken   string `gorm:"size:20;not null" json:"action_taken"` // block|review|log|pass
-	Status        string `gorm:"size:24;not null;index" json:"status"` // pending_review|auto_blocked|logged|confirmed|false_positive
-	Categories    datatypes.JSON `json:"categories"`                    // []ComplianceLabel（脱敏）
-	MaxRiskLevel  string `gorm:"size:20;not null;default:''" json:"max_risk_level"`
-	Reason        string `gorm:"size:1000" json:"reason"`
-	ContentSHA256 string `gorm:"size:64;not null;default:''" json:"content_sha256"`
-	ContentExcerpt string `gorm:"size:500" json:"content_excerpt"`
-	EngineError   string `gorm:"size:500" json:"engine_error,omitempty"`
-	Model         string `gorm:"size:255" json:"model"`
-	APIKeyID      int64  `json:"api_key_id"`
-	TeamID        int64  `json:"team_id"`
-	ReviewerID    int64  `gorm:"not null;default:0" json:"reviewer_id"`
-	ReviewerName  string `gorm:"size:64;not null;default:''" json:"reviewer_name"`
-	ReviewNote    string `gorm:"size:500;not null;default:''" json:"review_note"`
-	ReviewedAt    *time.Time `json:"reviewed_at"`
-	CreatedAt     time.Time  `gorm:"not null;default:now()" json:"created_at"`
+	ID             int64          `gorm:"primaryKey" json:"id"`
+	OrgID          *int64         `gorm:"index:idx_compliance_incidents_org" json:"org_id,omitempty"`
+	RuleID         int64          `gorm:"not null;default:0" json:"rule_id"`
+	RuleVersion    int64          `gorm:"not null;default:0" json:"rule_version"`
+	Direction      string         `gorm:"size:10;not null" json:"direction"`    // request|response
+	ActionTaken    string         `gorm:"size:20;not null" json:"action_taken"` // block|review|log|pass
+	Status         string         `gorm:"size:24;not null;index" json:"status"` // pending_review|auto_blocked|logged|confirmed|false_positive
+	Categories     datatypes.JSON `json:"categories"`                           // []ComplianceLabel（脱敏）
+	MaxRiskLevel   string         `gorm:"size:20;not null;default:''" json:"max_risk_level"`
+	Reason         string         `gorm:"size:1000" json:"reason"`
+	ContentSHA256  string         `gorm:"size:64;not null;default:''" json:"content_sha256"`
+	ContentExcerpt string         `gorm:"size:500" json:"content_excerpt"`
+	EngineError    string         `gorm:"size:500" json:"engine_error,omitempty"`
+	Model          string         `gorm:"size:255" json:"model"`
+	APIKeyID       int64          `json:"api_key_id"`
+	TeamID         int64          `json:"team_id"`
+	// EventID: the stable event identity (assigned in GuardrailService.emitEvent)
+	// shared with guardrail_alert_logs for the same event. Review verdicts are
+	// written back to the alert-log arbitration columns via this id so one
+	// event counts exactly once in tuning statistics. NULL on legacy rows.
+	EventID      string     `gorm:"size:36;index" json:"event_id,omitempty"`
+	ReviewerID   int64      `gorm:"not null;default:0" json:"reviewer_id"`
+	ReviewerName string     `gorm:"size:64;not null;default:''" json:"reviewer_name"`
+	ReviewNote   string     `gorm:"size:500;not null;default:''" json:"review_note"`
+	ReviewedAt   *time.Time `json:"reviewed_at"`
+	CreatedAt    time.Time  `gorm:"not null;default:now()" json:"created_at"`
 }
 
 func (ComplianceIncident) TableName() string { return "compliance_incidents" }

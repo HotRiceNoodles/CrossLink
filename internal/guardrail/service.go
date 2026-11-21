@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
@@ -43,6 +44,15 @@ type GuardrailService struct {
 	enabled  atomic.Bool
 	logOnly  atomic.Bool
 	failOpen atomic.Bool
+	// configTransform: optional Config seam (adaptive tuning, commercial-only
+	// injection; nil/identity in Community). Stored via atomic.Value so the
+	// setter is hot-swappable without locks on the check path.
+	configTransform atomic.Value // ConfigTransformFunc
+	// builtCfg records the config each cached engine was BUILT with (post-
+	// transform), guarded by engineMu — LoadRules evicts when the transformed
+	// config drifts (multiplier stepped) even though the raw rule Config is
+	// unchanged.
+	builtCfg map[int64]string
 
 	// Detection execution policy (system_settings, hot-reloaded):
 	//   streamMode          "window" (legacy sliding window, chunks may be
@@ -120,6 +130,7 @@ func NewGuardrailService(db *gorm.DB, rdb redis.Cmdable) *GuardrailService {
 		deps:      EngineDeps{Redis: rdb, DB: db},
 		ttl:       30 * time.Second,
 		engines:   make(map[int64]GuardrailEngine),
+		builtCfg:  make(map[int64]string),
 		modelCfgs: make(map[string]modelCfgEntry),
 		failOpen:  atomic.Bool{}, // default false: DB failure = error
 	}
@@ -198,6 +209,16 @@ func (s *GuardrailService) AddHandler(h EventHandler) {
 }
 
 func (s *GuardrailService) emitEvent(ctx context.Context, event GuardrailEvent) {
+	// EventID: assigned once, before any handler sees the event, so every
+	// persistence path (alert logs, compliance incidents) records the same id.
+	// UUIDv7 keeps ids time-ordered for index locality. Assignment failure is
+	// non-fatal (handlers tolerate an empty id); it is logged by the caller's
+	// metrics path rather than dropping the event.
+	if event.EventID == "" {
+		if id, err := uuid.NewV7(); err == nil {
+			event.EventID = id.String()
+		}
+	}
 	s.handlersMu.RLock()
 	handlers := s.handlers
 	s.handlersMu.RUnlock()
@@ -224,6 +245,14 @@ func (s *GuardrailService) emitEvent(ctx context.Context, event GuardrailEvent) 
 }
 func (s *GuardrailService) IsEnabled() bool   { return s.enabled.Load() }
 func (s *GuardrailService) SetEnabled(v bool) { s.enabled.Store(v) }
+
+// SetConfigTransform installs the Config rewrite seam (adaptive tuning).
+// nil restores identity. Takes effect on the NEXT engine build — cached
+// engines are served until their rule Config changes or InvalidateCache /
+// LoadRules evicts them; callers that need immediacy publish a rules reload.
+func (s *GuardrailService) SetConfigTransform(fn ConfigTransformFunc) {
+	s.configTransform.Store(fn)
+}
 
 // SetStreamMode overrides the runtime stream mode ("window"/"strict");
 // production reads it from system_settings via RefreshSettings.
@@ -289,6 +318,25 @@ func (s *GuardrailService) LoadRules(ctx context.Context) error {
 				}
 			}
 			delete(s.engines, r.ID)
+			delete(s.builtCfg, r.ID)
+			continue
+		}
+		// Config seam (adaptive tuning): a rule whose TRANSFORMED config
+		// drifted (e.g. the tuning multiplier stepped) must rebuild too —
+		// the multiplier lives outside guardrail_rules, so comparing the raw
+		// rule Config alone would keep serving the pre-step engine forever.
+		// Community (no transform) skips this at zero cost.
+		if tf, ok := s.configTransform.Load().(ConfigTransformFunc); ok && tf != nil && s.engines[r.ID] != nil {
+			transformed, err := tf(r.ID, r.Type, json.RawMessage(r.Config))
+			if err != nil || string(transformed) != s.builtCfg[r.ID] {
+				if eng, exists := s.engines[r.ID]; exists {
+					if c, ok := eng.(EngineCloser); ok {
+						c.Close()
+					}
+				}
+				delete(s.engines, r.ID)
+				delete(s.builtCfg, r.ID)
+			}
 		}
 	}
 	s.engineMu.Unlock()
@@ -305,11 +353,24 @@ func (s *GuardrailService) getEngine(rule GuardrailRule) (GuardrailEngine, error
 		return eng, nil
 	}
 
-	eng, err := CreateEngine(rule.Type, json.RawMessage(rule.Config), s.deps)
+	// Config seam (adaptive tuning, D1/D2): rewrite happens per engine BUILD
+	// only — the cached-engine path above never pays for it. A transform
+	// error is an engine-construction failure (existing error policy applies).
+	var cfg json.RawMessage = json.RawMessage(rule.Config)
+	if tf, ok := s.configTransform.Load().(ConfigTransformFunc); ok && tf != nil {
+		transformed, err := tf(rule.ID, rule.Type, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("guardrail: config transform: %w", err)
+		}
+		cfg = transformed
+	}
+
+	eng, err := CreateEngine(rule.Type, cfg, s.deps)
 	if err != nil {
 		return nil, err
 	}
 	s.engines[rule.ID] = eng
+	s.builtCfg[rule.ID] = string(cfg)
 	return eng, nil
 }
 
@@ -542,6 +603,12 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 		}
 		return ""
 	}
+	resultScores := func(r *GuardrailResult) map[string]float64 {
+		if r != nil {
+			return r.Scores
+		}
+		return nil
+	}
 
 	var maskedContent string
 	var maskedRuleName string
@@ -659,6 +726,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 				Timestamp:   time.Now(),
 				AgentType:   readAgentType(),
 				RuleVersion: rule.Version,
+				Scores:      resultScores(result),
 			})
 			if eventAction == "log" {
 				logRuleName = rule.Name
@@ -695,6 +763,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 			AgentType:      readAgentType(),
 			RuleVersion:    rule.Version,
 			Matched:        append([]MatchedRule(nil), matched...),
+			Scores:         result.Scores,
 		})
 
 		if action == "log" {

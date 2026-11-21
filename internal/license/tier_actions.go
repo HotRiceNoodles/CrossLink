@@ -132,6 +132,15 @@ var proExtraActions = map[string]bool{
 	// 属 Community 机制）—— Pro 及以上；observe-only，不含处置动作（D2）。
 	"behavior:view":   true,
 	"behavior:manage": true,
+	// 护栏误报仲裁（自适应调参 M1，端点在商业 overlay，规划 v1.7 D16）——
+	// Pro 及以上。窄于规则编辑：可读告警详情 + 标裁决（false_positive/
+	// confirmed），不可改规则/乘子/确认候选；与 guardrail:tuning_confirm
+	// 职责分离（标误报的人不确认放宽）。
+	"guardrail:arbitrate": true,
+	// 调参候选人工确认(自适应调参 M2,D16 v1.4 拆分):确认 awaiting_confirm
+	// 候选应用 / 人工废弃;不可标仲裁、不可改规则——与仲裁职责分离,防单人
+	// 闭环(仲裁员制造信号→自己确认放宽)。
+	"guardrail:tuning_confirm": true,
 }
 
 // enterpriseExtraActions defines additional actions available to the Enterprise tier (on top of Pro).

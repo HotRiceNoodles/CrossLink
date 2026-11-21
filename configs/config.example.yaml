@@ -249,3 +249,25 @@ mcp:
 #       - key_model
 #   from_name: "CrossLink DataLens"   # Sender name for DataLens email reports
 #   # from_address: "noreply@example.com"  # Sender address (required for reports)
+
+# Entity behavior baseline & anomaly detection (Pro; observe-only).
+# 默认关闭。推荐在管理页热切换（系统设置 → 运行时配置 → 行为基线学习），立即
+# 生效无需重启；此处的 yaml 值只作基线默认（DB 运行时设置优先）。
+# 启用后后台作业开始从真实流量学习每个 API key / org 的行为基线（28 天窗口），
+# 偏离基线的异常进入台账（/behavior-anomalies 管理页）并可选 webhook 告警。
+# observe-only：只记录与告警，不阻断、不限流——自适应限流（L1）需 G0 真实流量
+# 误报回放通过后另行评审启用。诊断：GET /admin/api/behavior/status（enabled /
+# 作业租约活性 / 各表计数 / 最近学习时间与 staleness）。
+# 开启后基线需要 ~14 天积累才逐步生效（hour-of-day 桶 ≥14 个观测才打分）。
+# behavior:
+#   enabled: true
+
+# Guardrail adaptive tuning (Pro; 反馈驱动半自动,规划 v1.7)。
+# 默认关闭。开关只控制自动化(作业/评估/自动应用);已生效乘子与人工确认
+# 不受它约束(恢复原阈值用调优面板的全局重置)。推荐管理页热切换
+# (系统设置 → 运行时配置);yaml 值只作基线默认(DB 运行时设置优先)。
+# 启用后:人工误报仲裁按规则累积复核误报占比,达标规则产生候选乘子,
+# 先过离线评估门禁(prompt_injection 需部署 JB 语料,JB_CORPUS_DIR),
+# 通过后进人工确认队列——未过门禁/未确认的候选永不生效。
+# guardrail_tuning:
+#   enabled: false

@@ -15,16 +15,18 @@ import (
 // as system_settings row > yaml/env baseline. Built by the Provider on every
 // refresh; consumers read it per request / per send.
 type Snapshot struct {
-	SMTP           config.SMTPConfig
-	GatewayBaseURL string
-	CORSAllowed    []string
-	RateLimit      config.RateLimitConfig
-	GuardrailAlert config.GuardrailAlertConfig
-	IPBinding      config.IPBindingConfig
-	DataLens       config.DataLensConfig
-	MCP            config.MCPConfig
-	Captcha        config.CaptchaConfig
-	Toolset        config.ToolsetConfig
+	SMTP            config.SMTPConfig
+	GatewayBaseURL  string
+	CORSAllowed     []string
+	RateLimit       config.RateLimitConfig
+	GuardrailAlert  config.GuardrailAlertConfig
+	IPBinding       config.IPBindingConfig
+	DataLens        config.DataLensConfig
+	MCP             config.MCPConfig
+	Captcha         config.CaptchaConfig
+	Toolset         config.ToolsetConfig
+	Behavior        config.BehaviorConfig
+	GuardrailTuning config.GuardrailTuningConfig
 
 	// Sources maps every registry key to "db" (row applied), "default"
 	// (yaml/env value in effect), or "db-error" (row present but not
@@ -65,18 +67,20 @@ type decryptFunc func(string) (string, error)
 // — a bad row must never take the process down.
 func buildSnapshot(baseline *config.Config, values map[string]string, decrypt decryptFunc) *Snapshot {
 	snap := &Snapshot{
-		SMTP:           baseline.SMTP,
-		GatewayBaseURL: baseline.Gateway.BaseURL,
-		CORSAllowed:    baseline.CORS.AllowedOrigins,
-		RateLimit:      baseline.RateLimit,
-		GuardrailAlert: baseline.GuardrailAlert,
-		IPBinding:      baseline.IPBinding,
-		DataLens:       baseline.DataLens,
-		MCP:            baseline.MCP,
-		Captcha:        baseline.Captcha,
-		Toolset:        baseline.Toolset,
-		Sources:        make(map[string]string, len(Registry)),
-		SensitiveSet:   make(map[string]bool),
+		SMTP:            baseline.SMTP,
+		GatewayBaseURL:  baseline.Gateway.BaseURL,
+		CORSAllowed:     baseline.CORS.AllowedOrigins,
+		RateLimit:       baseline.RateLimit,
+		GuardrailAlert:  baseline.GuardrailAlert,
+		IPBinding:       baseline.IPBinding,
+		DataLens:        baseline.DataLens,
+		MCP:             baseline.MCP,
+		Captcha:         baseline.Captcha,
+		Toolset:         baseline.Toolset,
+		Behavior:        baseline.Behavior,
+		GuardrailTuning: baseline.GuardrailTuning,
+		Sources:         make(map[string]string, len(Registry)),
+		SensitiveSet:    make(map[string]bool),
 	}
 	for _, d := range Registry {
 		snap.Sources[d.Name] = SourceDefault
@@ -247,6 +251,12 @@ func buildSnapshot(baseline *config.Config, values map[string]string, decrypt de
 	apply(KeyToolsetDescLen, integer(KeyToolsetDescLen, &snap.Toolset.DescMaxLen))
 	apply(KeyToolsetRetention, integer(KeyToolsetRetention, &snap.Toolset.RetentionDays))
 	apply(KeyToolsetAlertEn, boolean(KeyToolsetAlertEn, &snap.Toolset.AlertEnabled))
+
+	// --- behavior（学习开关,热生效） ---
+	apply(KeyBehaviorEnabled, boolean(KeyBehaviorEnabled, &snap.Behavior.Enabled))
+
+	// --- guardrail_tuning(自适应调参开关,热生效;D10:只停自动化) ---
+	apply(KeyGTuningEnabled, boolean(KeyGTuningEnabled, &snap.GuardrailTuning.Enabled))
 
 	snap.LoadedAt = time.Now().UTC()
 	return snap

@@ -15,34 +15,42 @@ import (
 )
 
 type Config struct {
-	Server         ServerConfig         `mapstructure:"server"`
-	Database       DatabaseConfig       `mapstructure:"database"`
-	Redis          RedisConfig          `mapstructure:"redis"`
-	Gateway        GatewayConfig        `mapstructure:"gateway"`
-	Admin          AdminConfig          `mapstructure:"admin"`
-	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
-	Logging        LoggingConfig        `mapstructure:"logging"`
-	Cache          CacheConfig          `mapstructure:"cache"`
-	SecretManager  SecretManagerConfig  `mapstructure:"secret_manager"`
-	SMTP           SMTPConfig           `mapstructure:"smtp"`
-	GuardrailAlert GuardrailAlertConfig `mapstructure:"guardrail_alert"`
-	IPBinding      IPBindingConfig      `mapstructure:"ip_binding"`
-	CORS           CORSConfig           `mapstructure:"cors"`
-	License        LicenseConfig        `mapstructure:"license"`
-	MCP            MCPConfig            `mapstructure:"mcp"`
-	Crypto         CryptoConfig         `mapstructure:"crypto"`
-	DataLens       DataLensConfig       `mapstructure:"datalens"`
-	Captcha        CaptchaConfig        `mapstructure:"captcha"`
-	Demo           DemoConfig           `mapstructure:"demo"`
-	Usage          UsageConfig          `mapstructure:"usage"`
-	Guard          GuardConfig          `mapstructure:"guard"`
-	Toolset        ToolsetConfig        `mapstructure:"toolset"`
-	Behavior       BehaviorConfig       `mapstructure:"behavior"`
+	Server          ServerConfig          `mapstructure:"server"`
+	Database        DatabaseConfig        `mapstructure:"database"`
+	Redis           RedisConfig           `mapstructure:"redis"`
+	Gateway         GatewayConfig         `mapstructure:"gateway"`
+	Admin           AdminConfig           `mapstructure:"admin"`
+	RateLimit       RateLimitConfig       `mapstructure:"rate_limit"`
+	Logging         LoggingConfig         `mapstructure:"logging"`
+	Cache           CacheConfig           `mapstructure:"cache"`
+	SecretManager   SecretManagerConfig   `mapstructure:"secret_manager"`
+	SMTP            SMTPConfig            `mapstructure:"smtp"`
+	GuardrailAlert  GuardrailAlertConfig  `mapstructure:"guardrail_alert"`
+	IPBinding       IPBindingConfig       `mapstructure:"ip_binding"`
+	CORS            CORSConfig            `mapstructure:"cors"`
+	License         LicenseConfig         `mapstructure:"license"`
+	MCP             MCPConfig             `mapstructure:"mcp"`
+	Crypto          CryptoConfig          `mapstructure:"crypto"`
+	DataLens        DataLensConfig        `mapstructure:"datalens"`
+	Captcha         CaptchaConfig         `mapstructure:"captcha"`
+	Demo            DemoConfig            `mapstructure:"demo"`
+	Usage           UsageConfig           `mapstructure:"usage"`
+	Guard           GuardConfig           `mapstructure:"guard"`
+	Toolset         ToolsetConfig         `mapstructure:"toolset"`
+	Behavior        BehaviorConfig        `mapstructure:"behavior"`
+	GuardrailTuning GuardrailTuningConfig `mapstructure:"guardrail_tuning"`
 }
 
 // BehaviorConfig 控制实体行为基线聚合作业（docs/plans/2026-11-19-behavior-baseline-defense.md，
 // 冻结 v4.0）。M1 仅暴露开关（默认关）；作业周期冻结为小时/日轮，运行参数不开放配置。
 type BehaviorConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+}
+
+// GuardrailTuningConfig 控制护栏自适应调参作业（docs/plans/2026-11-20-guardrail-adaptive-tuning.md，
+// 规划 v1.7 D10）。开关只控制自动化（作业/评估/自动应用）；人工确认与已生效
+// 乘子不受它约束（恢复原值用全局重置）。默认关。
+type GuardrailTuningConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
 
@@ -534,9 +542,9 @@ type DataLensAggConfig struct {
 // the commercial overlay (community builds read but ignore it — same pattern
 // as SMTP / guardrail_alert).
 type ToolsetConfig struct {
-	Enabled       bool   `mapstructure:"enabled"`       // collection master switch (on top of license)
-	Granularity   string `mapstructure:"granularity"`   // name | name_desc | full (hash+size always kept)
-	DescMaxLen    int    `mapstructure:"desc_max_len"`  // description truncation length
+	Enabled       bool   `mapstructure:"enabled"`      // collection master switch (on top of license)
+	Granularity   string `mapstructure:"granularity"`  // name | name_desc | full (hash+size always kept)
+	DescMaxLen    int    `mapstructure:"desc_max_len"` // description truncation length
 	RetentionDays int    `mapstructure:"retention_days"`
 	AlertEnabled  bool   `mapstructure:"alert_enabled"` // change-alert master switch (M2; rules gate further)
 }

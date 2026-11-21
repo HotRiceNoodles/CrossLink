@@ -2,6 +2,7 @@ package guardrail
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -30,6 +31,12 @@ type GuardrailResult struct {
 	// field layout of the content can mask each field in place without
 	// collapsing structure (roles, arrays, media blocks).
 	MaskedSpans []Span `json:"masked_spans,omitempty"`
+	// Scores carries the engine's structured decision numbers (aggregate
+	// score, strongest single-signal weight, flag-style values as 0/1). It is
+	// the machine-readable counterpart of the human-facing Reason: adaptive
+	// tuning consumes THIS, never parses the Reason text. Optional — engines
+	// without continuous scoring leave it nil.
+	Scores map[string]float64 `json:"scores,omitempty"`
 }
 
 // Span is one masked region of checked content: [Start, End) are byte offsets
@@ -65,6 +72,16 @@ type GuardrailEngine interface {
 type EngineCloser interface {
 	Close()
 }
+
+// ConfigTransformFunc rewrites a rule's Config JSON right before engine
+// construction (adaptive-tuning seam, plan 2026-11-20 v1.7 D1/D2). It runs
+// once per engine build — engines are cached per rule, so the hot check path
+// never pays for it. Community never injects one (identity); the commercial
+// edition injects the threshold-multiplier rewrite. An error surfaces as an
+// engine-construction failure and follows the existing engine-error policy.
+// Implementations must touch ONLY whitelisted threshold-like leaf fields —
+// secrets, pattern lists and toggles must survive byte-identical.
+type ConfigTransformFunc func(ruleID int64, ruleType string, config json.RawMessage) (json.RawMessage, error)
 
 type GuardrailRule struct {
 	ID          int64          `gorm:"primaryKey" json:"id"`
@@ -175,6 +192,15 @@ type GuardrailEvent struct {
 	OrgID          int64 // tenant attribution; 0 = unattributed (admin/internal)
 	Timestamp      time.Time
 	AgentType      string // from CheckContext, set by agent_fingerprint engine
+	// EventID is the stable identity of this single event, assigned once in
+	// GuardrailService.emitEvent (UUIDv7, time-ordered). Every handler that
+	// persists the event (alert logs, compliance incidents) records the SAME
+	// id, so downstream consumers dedupe and cross-reference one event across
+	// tables by id — not by (timestamp, reason) heuristics.
+	EventID string `json:"event_id,omitempty"`
+	// Scores mirrors GuardrailResult.Scores onto the event channel (see there).
+	// Consumed by adaptive tuning decisions; never parsed out of Reason.
+	Scores map[string]float64 `json:"scores,omitempty"`
 	// RuleVersion is the version of THIS event's rule — the cached copy that
 	// produced the result (per-instance view; propagation is TTL/broadcast
 	// bounded, never claimed globally atomic).

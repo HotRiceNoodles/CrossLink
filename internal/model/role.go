@@ -91,8 +91,13 @@ var ValidActions = map[string]bool{
 	"rag:manage": true,
 	// 实体行为基线防护台账(M2,冻结 v4.0 D4):台账 CRUD 是社区机制,路由在本仓
 	// app.go;tier 定档 Pro(tier_actions.proExtraActions),社区档 403。
-	"behavior:view":               true,
-	"behavior:manage":             true,
+	"behavior:view":   true,
+	"behavior:manage": true,
+	// 护栏误报仲裁(自适应调参 M1,规划 v1.7 D16):裁决端点在商业 overlay,
+	// 动作位定档 Pro、路由闭包收紧(与 rag/behavior 同模式)。
+	"guardrail:arbitrate": true,
+	// 调参候选人工确认(自适应调参 M2,D16):与仲裁职责分离。
+	"guardrail:tuning_confirm":    true,
 	"mcp:list":                    true,
 	"mcp:view":                    true,
 	"mcp:create":                  true,

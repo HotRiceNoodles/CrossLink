@@ -119,6 +119,10 @@ func (s *Snapshot) APIMap() map[string]any {
 			setIfNotSensitive(d, s.Toolset.RetentionDays)
 		case KeyToolsetAlertEn:
 			setIfNotSensitive(d, s.Toolset.AlertEnabled)
+		case KeyBehaviorEnabled:
+			setIfNotSensitive(d, s.Behavior.Enabled)
+		case KeyGTuningEnabled:
+			setIfNotSensitive(d, s.GuardrailTuning.Enabled)
 		}
 	}
 	return out

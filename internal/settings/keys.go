@@ -104,20 +104,24 @@ const (
 	KeyToolsetDescLen   = "toolset_desc_max_len"
 	KeyToolsetRetention = "toolset_retention_days"
 	KeyToolsetAlertEn   = "toolset_alert_enabled"
+	KeyBehaviorEnabled  = "behavior_enabled"
+	KeyGTuningEnabled   = "guardrail_tuning_enabled"
 )
 
 // section names (meta grouping + UI).
 const (
-	SectionSMTP           = "smtp"
-	SectionGateway        = "gateway"
-	SectionCORS           = "cors"
-	SectionRateLimit      = "rate_limit"
-	SectionCaptcha        = "captcha"
-	SectionDataLens       = "datalens"
-	SectionMCP            = "mcp"
-	SectionGuardrailAlert = "guardrail_alert"
-	SectionIPBinding      = "ip_binding"
-	SectionToolset        = "toolset"
+	SectionSMTP            = "smtp"
+	SectionGateway         = "gateway"
+	SectionCORS            = "cors"
+	SectionRateLimit       = "rate_limit"
+	SectionCaptcha         = "captcha"
+	SectionDataLens        = "datalens"
+	SectionMCP             = "mcp"
+	SectionGuardrailAlert  = "guardrail_alert"
+	SectionIPBinding       = "ip_binding"
+	SectionToolset         = "toolset"
+	SectionBehavior        = "behavior"
+	SectionGuardrailTuning = "guardrail_tuning"
 )
 
 func k(name, typ, section string) KeyDef {
@@ -235,6 +239,9 @@ var Registry = []KeyDef{
 	kRange(KeyToolsetDescLen, TypeInt, SectionToolset, 0, 8000),
 	kRange(KeyToolsetRetention, TypeInt, SectionToolset, 0, 0),
 	k(KeyToolsetAlertEn, TypeBool, SectionToolset),
+	// --- behavior baseline (学习开关;热生效——runner 每轮读取快照) ---
+	k(KeyBehaviorEnabled, TypeBool, SectionBehavior),
+	k(KeyGTuningEnabled, TypeBool, SectionGuardrailTuning),
 }
 
 // RegistryMap indexes Registry by key name.
