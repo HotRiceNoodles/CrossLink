@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crosslink/internal/admission"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
@@ -61,6 +62,40 @@ func NewOpenAICompatibleWithTransport(name, baseURL string, timeout time.Duratio
 
 func (p *OpenAICompatibleProvider) Name() string { return p.name }
 
+// marshalChatBodyWithExtensions serializes the chat request and merges the
+// envelope's ADMITTED dialect params (e.g. dialect.enable_thinking →
+// enable_thinking) into the outgoing JSON body — the final hop of the M3
+// envelope carry. Only admission-registered keys with a wire name are merged;
+// everything else on the envelope stays off the wire. Bodies without
+// extension params marshal exactly as before (byte-for-byte unchanged path).
+func marshalChatBodyWithExtensions(req *domain.OpenAIRequest) []byte {
+	body, _ := json.Marshal(req)
+	if req.Extensions == nil || len(req.Extensions.Params) == 0 {
+		return body
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
+		return body
+	}
+	merged := false
+	for key, raw := range req.Extensions.Params {
+		wire, ok := admission.DialectWireName(key)
+		if !ok {
+			continue
+		}
+		top[wire] = raw
+		merged = true
+	}
+	if !merged {
+		return body
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 func (p *OpenAICompatibleProvider) Embeddings(ctx context.Context, req *domain.EmbeddingsRequest, apiKey string) (*domain.EmbeddingsResponse, error) {
 	url := p.baseURL + "/embeddings"
 	body, _ := json.Marshal(req)
@@ -93,8 +128,7 @@ func (p *OpenAICompatibleProvider) Embeddings(ctx context.Context, req *domain.E
 
 func (p *OpenAICompatibleProvider) Chat(ctx context.Context, req *domain.OpenAIRequest, apiKey string) (*domain.OpenAIResponse, error) {
 	url := p.baseURL + "/chat/completions"
-	body, _ := json.Marshal(req)
-
+	body := marshalChatBodyWithExtensions(req)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -146,7 +180,7 @@ func (p *OpenAICompatibleProvider) StreamChat(ctx context.Context, req *domain.O
 	url := p.baseURL + "/chat/completions"
 	reqCopy := *req
 	reqCopy.Stream = true
-	body, _ := json.Marshal(reqCopy)
+	body := marshalChatBodyWithExtensions(&reqCopy)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -727,6 +761,7 @@ func init() {
 		NeedsAPIKey:    true,
 		Capabilities:   []string{"chat", "stream", "embeddings", "images", "video", "audio_speech", "audio_transcription", "audio_translation", "batch"},
 		ExtraFields: []AdapterField{
+			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
 		},
 	})
@@ -741,6 +776,7 @@ func init() {
 		NeedsAPIKey:    false,
 		Capabilities:   []string{"chat", "stream"},
 		ExtraFields: []AdapterField{
+			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
 		},
 	})

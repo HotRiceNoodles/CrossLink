@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/pool"
@@ -25,17 +26,72 @@ import (
 // maxResponseRead). 50MB matches the rest of the provider layer.
 const maxAnthropicResponseSize = 50 << 20
 
+// supportedAnthropicAPIVersions is the single registry of API versions this
+// adapter has verified behavior for (M0). Unknown versions are rejected at
+// config validation (pre-persist) and again at construction — never inferred
+// from a date comparison.
+var supportedAnthropicAPIVersions = map[string]bool{
+	"2023-06-01": true,
+	"2026-10-21": true,
+}
+
+// anthropicAPIVersionsWithSamplingRules lists versions whose upstream rejects
+// temperature/top_p/top_k outright (the 2026-10-21 breaking change). Explicit
+// set, not a >= comparison, so future versions opt in only after verification.
+var anthropicAPIVersionsWithSamplingRules = map[string]bool{
+	"2026-10-21": true,
+}
+
+// anthropicVersionCapabilities formalizes per-version behavior (M2): the
+// sampling defaults eligible for silent strip are REGISTERED here rather than
+// scattered as literals in the checkpoint — a new version opts in by adding an
+// entry alongside supportedAnthropicAPIVersions.
+type anthropicVersionCapabilities struct {
+	// SamplingDefaults maps a sampling parameter to its officially documented
+	// default value. A present parameter equal to its registered default
+	// strips losslessly (the upstream only accepts defaults anyway); a
+	// parameter with NO registered default is always the non-default tier.
+	SamplingDefaults map[string]float64
+}
+
+var anthropicVersionCaps = map[string]anthropicVersionCapabilities{
+	"2026-10-21": {SamplingDefaults: map[string]float64{"temperature": 1.0}},
+}
+
 type AnthropicProvider struct {
-	name         string
-	baseURL      string
-	apiKey       string
-	apiVersion   string
-	httpClient   *http.Client
-	streamClient *http.Client
+	name                string
+	baseURL             string
+	apiKey              string
+	apiVersion          string
+	samplingRules       bool // apiVersion is in anthropicAPIVersionsWithSamplingRules
+	samplingCompatStrip bool // extra_config.sampling_compat_strip
+	httpClient          *http.Client
+	streamClient        *http.Client
 }
 
 type anthropicExtraConfig struct {
-	APIVersion string `json:"api_version"`
+	APIVersion          string `json:"api_version"`
+	SamplingCompatStrip bool   `json:"sampling_compat_strip"`
+}
+
+// ValidateAnthropicAPIVersion checks the api_version field of an extra_config
+// JSON against the supported list. It applies to any provider config carrying
+// api_version (the anthropic adapter and the cloud shells that reuse it via
+// api_protocol=anthropic) and is meant to run BEFORE persisting provider rows
+// (admin CRUD, onboarding, import/seed), so an invalid value fails the write
+// instead of surfacing at request time or being skipped at startup.
+func ValidateAnthropicAPIVersion(extraConfig []byte) error {
+	if len(extraConfig) == 0 {
+		return nil
+	}
+	var cfg anthropicExtraConfig
+	if err := json.Unmarshal(extraConfig, &cfg); err != nil || cfg.APIVersion == "" {
+		return nil
+	}
+	if !supportedAnthropicAPIVersions[cfg.APIVersion] {
+		return fmt.Errorf("unsupported anthropic api_version %q (supported: 2023-06-01, 2026-10-21)", cfg.APIVersion)
+	}
+	return nil
 }
 
 func NewAnthropicProvider(name, baseURL, apiKey string, extraConfig []byte, timeout time.Duration) (*AnthropicProvider, error) {
@@ -50,10 +106,17 @@ func NewAnthropicProvider(name, baseURL, apiKey string, extraConfig []byte, time
 
 	if len(extraConfig) > 0 {
 		var cfg anthropicExtraConfig
-		if err := json.Unmarshal(extraConfig, &cfg); err == nil && cfg.APIVersion != "" {
-			p.apiVersion = cfg.APIVersion
+		if err := json.Unmarshal(extraConfig, &cfg); err == nil {
+			if cfg.APIVersion != "" {
+				if !supportedAnthropicAPIVersions[cfg.APIVersion] {
+					return nil, fmt.Errorf("unsupported anthropic api_version %q (supported: 2023-06-01, 2026-10-21)", cfg.APIVersion)
+				}
+				p.apiVersion = cfg.APIVersion
+			}
+			p.samplingCompatStrip = cfg.SamplingCompatStrip
 		}
 	}
+	p.samplingRules = anthropicAPIVersionsWithSamplingRules[p.apiVersion]
 
 	return p, nil
 }
@@ -112,6 +175,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *domain.OpenAIRequest,
 	if err != nil {
 		return nil, fmt.Errorf("translate request: %w", err)
 	}
+	if err := p.applyVersionSamplingRules(ctx, anthropicReq, req.InboundSamplingMeta); err != nil {
+		return nil, err
+	}
 	anthropicReq.Stream = false
 
 	key := apiKey
@@ -149,6 +215,9 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 	anthropicReq, err := translator.OpenAIToAnthropicRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("translate request: %w", err)
+	}
+	if err := p.applyVersionSamplingRules(ctx, anthropicReq, req.InboundSamplingMeta); err != nil {
+		return nil, err
 	}
 	anthropicReq.Stream = true
 
@@ -215,6 +284,82 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", p.apiVersion)
+}
+
+// applyVersionSamplingRules enforces the 2026-10-21 sampling-parameter removal
+// at the outbound serialization checkpoint (M0, three tiers):
+//   - temperature=1.0 (the officially documented default): stripped silently,
+//     audited — official semantics say new models only accept defaults, so
+//     stripping a default value is lossless;
+//   - non-default values: rejected with a client-facing 400-class error unless
+//     the provider sets extra_config.sampling_compat_strip (then stripped and
+//     audited);
+//   - top_p/top_k: no published defaults are registered in the capability
+//     table, so they are always the non-default tier.
+//
+// top_k reaches this checkpoint via req.InboundSamplingMeta — the internal
+// OpenAI representation cannot express it and AnthropicToOpenAI would
+// otherwise drop it before the check. Old versions are a strict no-op:
+// existing translation behavior is unchanged, including the pre-existing
+// top_k drop for 2023-06-01 upstreams.
+//
+// Every strip is recorded to the context's audit sink (upstream.ParamStrip →
+// usage-log attempts timeline); rejections surface via the typed error.
+func (p *AnthropicProvider) applyVersionSamplingRules(ctx context.Context, ar *domain.AnthropicRequest, meta *domain.InboundSamplingMeta) error {
+	if !p.samplingRules {
+		return nil
+	}
+	var stripped []string
+	record := func(param, reason string) {
+		stripped = append(stripped, param+":"+reason)
+		upstream.RecordParamStrip(ctx, upstream.ParamStrip{
+			Provider: p.name, APIVersion: p.apiVersion, Param: param, Reason: reason,
+		})
+	}
+	reject := func(param string) error {
+		return &ProviderError{
+			StatusCode: http.StatusBadRequest,
+			ErrorType:  ErrorBadRequest,
+			Param:      param,
+			Message: fmt.Sprintf("sampling parameter %q is not supported by Anthropic API version %s on provider %q; remove it or enable sampling_compat_strip on the provider",
+				param, p.apiVersion, p.name),
+		}
+	}
+	caps := anthropicVersionCaps[p.apiVersion]
+	if ar.Temperature != nil {
+		if def, hasDefault := caps.SamplingDefaults["temperature"]; hasDefault && *ar.Temperature == def {
+			record("temperature", "default")
+			ar.Temperature = nil
+		} else if p.samplingCompatStrip {
+			record("temperature", "compat_strip")
+			ar.Temperature = nil
+		} else {
+			return reject("temperature")
+		}
+	}
+	if ar.TopP != nil {
+		if p.samplingCompatStrip {
+			record("top_p", "compat_strip")
+			ar.TopP = nil
+		} else {
+			return reject("top_p")
+		}
+	}
+	if ar.TopK != nil || (meta != nil && meta.TopK != nil) {
+		if p.samplingCompatStrip {
+			record("top_k", "compat_strip")
+			ar.TopK = nil
+		} else {
+			return reject("top_k")
+		}
+	}
+	if len(stripped) > 0 {
+		// Structured log line mirrors the audit sink for operators tailing
+		// logs; the usage-log attempts row is the durable audit record.
+		slog.Warn("anthropic sampling parameters stripped for api_version",
+			"provider", p.name, "api_version", p.apiVersion, "params", strings.Join(stripped, ","))
+	}
+	return nil
 }
 
 // activity refreshes while sends block on a full channel (consumer
@@ -296,7 +441,14 @@ func init() {
 		NeedsAPIKey:    true,
 		Capabilities:   []string{"chat", "stream"},
 		ExtraFields: []AdapterField{
-			{Name: "api_version", Type: "text", Label: "API Version", Placeholder: "2023-06-01", DefaultValue: "2023-06-01"},
+			{
+				Name: "api_version", Type: "select", Label: "API Version", DefaultValue: "2023-06-01",
+				Options: []FieldOption{
+					{Label: "2023-06-01（旧版）", Value: "2023-06-01"},
+					{Label: "2026-10-21（sampling 参数已移除）", Value: "2026-10-21"},
+				},
+			},
+			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
 		},
 	})

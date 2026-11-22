@@ -184,7 +184,11 @@ func TestAnthropicProvider_StreamChat_ProviderError(t *testing.T) {
 }
 
 func TestAnthropicProvider_ExtraConfig_APIVersion(t *testing.T) {
-	extraConfig, _ := json.Marshal(map[string]string{"api_version": "2024-01-01"})
+	// M0: api_version must be one of the supported versions (validated at
+	// construction) — the test previously used an arbitrary "2024-01-01"
+	// passthrough; its purpose (custom version reaches the header) is
+	// preserved with a listed version.
+	extraConfig, _ := json.Marshal(map[string]string{"api_version": "2026-10-21"})
 
 	var captured string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +211,7 @@ func TestAnthropicProvider_ExtraConfig_APIVersion(t *testing.T) {
 		Messages:  []domain.OpenAIMessage{{Role: "user", Content: "Hi"}},
 	}, "key")
 	require.NoError(t, err)
-	assert.Equal(t, "2024-01-01", captured)
+	assert.Equal(t, "2026-10-21", captured)
 }
 
 func TestAnthropicProvider_ListUpstreamModels(t *testing.T) {

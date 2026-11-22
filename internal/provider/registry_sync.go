@@ -19,6 +19,7 @@ const RegistrySyncChannel = "crosslink:registry:sync"
 type registrySyncMessage struct {
 	Action       string `json:"action"`
 	ProviderName string `json:"provider_name"`
+	ModelName    string `json:"model_name,omitempty"`
 	Timestamp    int64  `json:"timestamp"`
 	InstanceID   string `json:"instance_id"`
 }
@@ -26,13 +27,27 @@ type registrySyncMessage struct {
 // RegistrySync keeps provider registries in sync across multiple gateway
 // instances using Redis Pub/Sub. When one instance mutates a provider (create,
 // update, delete), it publishes a notification so other instances reload the
-// change from the database.
+// change from the database. M1 adds the invalidate_model action: model-mapping
+// mutations broadcast the affected model name, and receiving nodes drop that
+// model's resolver routes via the injected callback.
 type RegistrySync struct {
 	rdb            *redis.Client
 	registry       *Registry
 	db             *gorm.DB
 	secretResolver *secret.SecretResolver
 	instanceID     string
+
+	// OnModelInvalidated runs on THIS node when a remote instance reports a
+	// model-mapping change (action invalidate_model). Injected by the app
+	// layer — provider cannot import router without a dependency cycle.
+	OnModelInvalidated func(modelName string)
+
+	// OnProviderApplied runs on THIS node after a remote provider
+	// reload/remove has been handled (registry already updated above). The
+	// M1/F-4 three-way flush hook: resolver routes + response cache must
+	// follow the registry, or a version/config switch leaves other nodes
+	// serving stale routes and cached responses.
+	OnProviderApplied func(providerName string)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -69,6 +84,18 @@ func (s *RegistrySync) NotifyRemove(providerName string) {
 		ProviderName: providerName,
 		Timestamp:    time.Now().Unix(),
 		InstanceID:   s.instanceID,
+	})
+}
+
+// NotifyModelInvalidated publishes an "invalidate_model" message so other
+// instances drop the affected model's resolver routes (M1). Idempotent on the
+// receiving side — a dropped-but-not-yet-cached model is a no-op.
+func (s *RegistrySync) NotifyModelInvalidated(modelName string) {
+	s.publish(registrySyncMessage{
+		Action:     "invalidate_model",
+		ModelName:  modelName,
+		Timestamp:  time.Now().Unix(),
+		InstanceID: s.instanceID,
 	})
 }
 
@@ -132,11 +159,32 @@ func (s *RegistrySync) handleMessage(msg *redis.Message) {
 	switch m.Action {
 	case "reload":
 		s.reloadProvider(m.ProviderName)
+		s.appliedProvider(m.ProviderName)
 	case "remove":
 		s.registry.Remove(m.ProviderName)
 		slog.Info("registry_sync: removed provider", "name", m.ProviderName, "source_instance", m.InstanceID)
+		s.appliedProvider(m.ProviderName)
+	case "invalidate_model":
+		if m.ModelName == "" {
+			slog.Warn("registry_sync: invalidate_model without model_name")
+			return
+		}
+		if s.OnModelInvalidated != nil {
+			s.OnModelInvalidated(m.ModelName)
+		}
+		slog.Info("registry_sync: invalidated model routes", "model", m.ModelName, "source_instance", m.InstanceID)
 	default:
 		slog.Warn("registry_sync: unknown action", "action", m.Action)
+	}
+}
+
+// appliedProvider fires the provider-applied hook. Called for every handled
+// reload/remove — including apply failures — because re-resolving routes from
+// the (unchanged or updated) registry is always safe, while skipping it would
+// leave stale routes referencing the pre-event state.
+func (s *RegistrySync) appliedProvider(name string) {
+	if s.OnProviderApplied != nil {
+		s.OnProviderApplied(name)
 	}
 }
 
@@ -182,7 +230,7 @@ func (s *RegistrySync) reloadProvider(name string) {
 		}
 	}
 
-	prov, err := NewFromModel(&cp, 300*time.Second)
+	prov, err := NewFromModel(&cp, ResolveHTTPTimeout(cp.ExtraConfig, 300*time.Second))
 	if err != nil {
 		slog.Error("registry_sync: create provider failed", "name", name, "adapter_type", p.AdapterType, "error", err)
 		return

@@ -33,10 +33,19 @@ func MigratePlaintextSecrets(db *gorm.DB, encStore *EncryptedDBStore) (*Migratio
 	// predicate approximates both targets: plaintext api_key, and
 	// extra_config that still contains plaintext secrets (already-migrated
 	// rows carry enc:/sref: markers).
+	//
+	// On PostgreSQL/Kingbase extra_config is JSONB: comparing it to '' or
+	// applying LIKE is a type error (SQLSTATE 22P02), so cast to text first.
+	// Without the cast the pre-count fails on every tick and the GORM error
+	// log drowns out real signals.
+	extraPlaintext := "extra_config IS NOT NULL AND extra_config != '' AND extra_config NOT LIKE '%enc:%' AND extra_config NOT LIKE '%sref:%'"
+	if db.Dialector.Name() == "postgres" {
+		extraPlaintext = "extra_config IS NOT NULL AND extra_config::text NOT IN ('', '{}', 'null') AND extra_config::text NOT LIKE '%enc:%' AND extra_config::text NOT LIKE '%sref:%'"
+	}
 	var pending int64
 	if err := db.Table("providers").
 		Where("api_key != '' AND api_key NOT LIKE 'enc:%' AND api_key NOT LIKE 'sref:%'").
-		Or("extra_config IS NOT NULL AND extra_config != '' AND extra_config NOT LIKE '%enc:%' AND extra_config NOT LIKE '%sref:%'").
+		Or(extraPlaintext).
 		Count(&pending).Error; err != nil {
 		// Count must not BLOCK migration on dialect quirks (e.g. bytea
 		// comparison): fall through to the full scan on error.

@@ -33,6 +33,14 @@ const (
 // are excluded from production binaries, so this is never disabled in deployment.
 var outboundSSRFGuard = true
 
+// SetOutboundSSRFGuardForTest toggles the SSRF dialer guard. It exists for
+// cross-package tests (e.g. service's four-way acceptance matrix) that drive
+// REAL adapters against loopback httptest upstreams — the same accommodation
+// this package's own TestMain makes. Call it only from TestMain, before any
+// provider is constructed (wrapping happens at construction time). Production
+// code must never call it.
+func SetOutboundSSRFGuardForTest(v bool) { outboundSSRFGuard = v }
+
 // outboundTransports tracks every SSRF-guarded outbound *http.Transport so a
 // policy swap can drop the idle connections the previous, wider allowlist
 // admitted (revocation must not be bypassed by connection-pool reuse). Each
