@@ -64,6 +64,10 @@ type ChatResult struct {
 	// CacheCreationTokens: Anthropic prompt-cache write tokens (billed at 1.25×
 	// the input price by the handler); included in InputTokens.
 	CacheCreationTokens int
+	// Attempts carries the fallback timeline (incl. M0 ParamStrips audit
+	// records) on SUCCESS too — the default-value strip happens on clean
+	// requests, so the usage row needs the timeline beyond the error path.
+	Attempts []FallbackAttempt
 }
 
 func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest, sessionID string, orgID int64) (*ChatResult, error) {
@@ -86,9 +90,20 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 	engine.SetClassifier(s.classifier)
 
 	var totalRetries int
+	// M0 audit: one strip batch per engine attempt (callFn invocation), zipped
+	// onto result.Attempts after the run — see attachStripsToAttempts.
+	var stripBatches [][]upstream.ParamStrip
 	result := engine.ExecuteNonStream(ctx, routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
 		reqCopy := *openaiReq
 		reqCopy.Model = route.ProviderModel
+		// M3 §1.3: the shallow struct copy shares the envelope pointer — clone
+		// it so a candidate that mutates extensions (per-candidate application
+		// lands later) can never leak into the sibling candidate.
+		reqCopy.Extensions = reqCopy.Extensions.Clone()
+		// M3.2 execution half: apply the route's request_overrides (admin
+		// wins) and gate client-carried dialect params by allowed_extensions —
+		// on the clone, per candidate.
+		applyRouteRequestOverrides(&reqCopy, route)
 		pn := route.Provider.Name()
 		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
 		if s.guardRDB != nil {
@@ -106,14 +121,17 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 			retryCfg.NumRetries = 0
 		}
 		var openaiResp *domain.OpenAIResponse
+		var attemptStrips []upstream.ParamStrip
 		rr := provider.WithRetry(ctx, retryCfg, s.budget, func(attemptCtx context.Context) error {
 			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
 			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
 			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
+			attemptCtx = upstream.WithStripSink(attemptCtx, &attemptStrips)
 			var callErr error
 			openaiResp, callErr = route.Provider.Chat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
+		stripBatches = append(stripBatches, attemptStrips)
 		totalRetries += rr.RetriesUsed
 		if s.activeTracker != nil {
 			s.activeTracker.Decr(ctx, pn)
@@ -126,6 +144,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		}
 		return openaiResp, nil
 	})
+	AttachStripsToAttempts(result.Attempts, stripBatches)
 
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)
@@ -173,6 +192,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		InputPrice:          route.InputPrice,
 		OutputPrice:         route.OutputPrice,
 		Currency:            route.Currency,
+		Attempts:            result.Attempts,
 		FallbackCount:       result.FallbackCount,
 		RetryCount:          totalRetries,
 		ReasoningTokens:     extractReasoningTokens(openaiResp.Usage.CompletionTokensDetails),
@@ -224,10 +244,20 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 	engine := NewFallbackEngine(s.health, config)
 	engine.SetClassifier(s.classifier)
 	var totalRetries int
+	// M0 audit: strip batches per attempt (mirror of the non-stream path).
+	var stripBatches [][]upstream.ParamStrip
 
 	result := engine.ExecuteStream(ctx, routes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {
 		reqCopy := *openaiReq
 		reqCopy.Model = route.ProviderModel
+		// M3 §1.3: the shallow struct copy shares the envelope pointer — clone
+		// it so a candidate that mutates extensions (per-candidate application
+		// lands later) can never leak into the sibling candidate.
+		reqCopy.Extensions = reqCopy.Extensions.Clone()
+		// M3.2 execution half: apply the route's request_overrides (admin
+		// wins) and gate client-carried dialect params by allowed_extensions —
+		// on the clone, per candidate.
+		applyRouteRequestOverrides(&reqCopy, route)
 		pn := route.Provider.Name()
 		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
 		if s.guardRDB != nil {
@@ -245,14 +275,17 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 			retryCfg.NumRetries = 0
 		}
 		var ch <-chan domain.SSEChunk
+		var attemptStrips []upstream.ParamStrip
 		rr := provider.WithRetry(ctx, retryCfg, s.budget, func(attemptCtx context.Context) error {
 			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
 			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
 			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
+			attemptCtx = upstream.WithStripSink(attemptCtx, &attemptStrips)
 			var callErr error
 			ch, callErr = route.Provider.StreamChat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
+		stripBatches = append(stripBatches, attemptStrips)
 		totalRetries += rr.RetriesUsed
 		if s.activeTracker != nil {
 			s.activeTracker.Decr(ctx, pn)
@@ -265,6 +298,7 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 		}
 		return ch, nil
 	})
+	AttachStripsToAttempts(result.Attempts, stripBatches)
 
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)
@@ -342,6 +376,7 @@ loop:
 		InputPrice:          route.InputPrice,
 		OutputPrice:         route.OutputPrice,
 		Currency:            route.Currency,
+		Attempts:            result.Attempts,
 		FallbackCount:       result.FallbackCount,
 		RetryCount:          totalRetries,
 		ReasoningTokens:     st.ReasoningTokens(),
@@ -385,6 +420,10 @@ type StreamResult struct {
 	// CacheCreationTokens: Anthropic prompt-cache write tokens (billed at 1.25×
 	// the input price by the handler); included in InputTokens.
 	CacheCreationTokens int
+	// Attempts carries the fallback timeline (incl. M0 ParamStrips audit
+	// records) on SUCCESS too — the default-value strip happens on clean
+	// requests, so the usage row needs the timeline beyond the error path.
+	Attempts []FallbackAttempt
 }
 
 type RouteError struct {

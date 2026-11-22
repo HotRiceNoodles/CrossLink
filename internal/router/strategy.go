@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
@@ -74,6 +75,9 @@ type RouteCandidate struct {
 	FallbackCfg    FallbackConfig
 	ExtraConfig    json.RawMessage
 	MaxContext     *int
+	// M3.2/P3 model-level extension controls (see RouteResult).
+	RequestOverrides  map[string]any
+	AllowedExtensions []string
 }
 
 type RoutingStrategy interface {
@@ -94,20 +98,90 @@ func splitPrimariesFallbacks(candidates []RouteCandidate) (primaries, fallbacks 
 
 func candidateToRouteResult(c RouteCandidate) *RouteResult {
 	return &RouteResult{
-		Provider:       c.Provider,
-		ProviderModel:  c.ProviderModel,
-		InputPrice:     c.InputPrice,
-		OutputPrice:    c.OutputPrice,
-		Currency:       c.Currency,
-		ProviderRow:    c.ProviderRow,
-		RetryConfig:    c.RetryConfig,
-		FallbackModels: c.FallbackModels,
-		FallbackConfig: c.FallbackCfg,
-		ExtraConfig:    c.ExtraConfig,
-		Weight:         c.Weight,
-		Priority:       c.Priority,
-		MaxContext:     c.MaxContext,
+		Provider:          c.Provider,
+		ProviderModel:     c.ProviderModel,
+		InputPrice:        c.InputPrice,
+		OutputPrice:       c.OutputPrice,
+		Currency:          c.Currency,
+		ProviderRow:       c.ProviderRow,
+		RetryConfig:       c.RetryConfig,
+		FallbackModels:    c.FallbackModels,
+		FallbackConfig:    c.FallbackCfg,
+		ExtraConfig:       c.ExtraConfig,
+		Weight:            c.Weight,
+		Priority:          c.Priority,
+		MaxContext:        c.MaxContext,
+		RequestOverrides:  c.RequestOverrides,
+		AllowedExtensions: c.AllowedExtensions,
 	}
+}
+
+// ModelOverrideFields is the allow-table for request_overrides keys (M3.2):
+// generation params an admin may inject/override per model mapping. The
+// plan's deny-list (model/messages/tools/tool_choice/stream/stream_options/
+// max_tokens/max_completion_tokens/auth) is enforced by NOT being here —
+// "其他字段也须在允许表内;非法配置不能静默忽略".
+var ModelOverrideFields = map[string]string{
+	"temperature":     "number",
+	"top_p":           "number",
+	"enable_thinking": "bool",
+}
+
+// DialectExtensionFields is the allow-table for allowed_extensions opt-ins:
+// registered admission dialect params a route may forward upstream.
+var DialectExtensionFields = map[string]bool{
+	"enable_thinking": true,
+}
+
+// ValidateModelExtensionConfig validates the request_overrides and
+// allowed_extensions keys of a model mapping's extra_config BEFORE the row is
+// persisted (M3.2 "配置写入和实际执行双重校验" — write half). Values are
+// shape-checked against the allow-table types; the execution half re-checks
+// at dispatch.
+func ValidateModelExtensionConfig(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var cfg struct {
+		RequestOverrides  map[string]any `json:"request_overrides"`
+		AllowedExtensions []string       `json:"allowed_extensions"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil // malformed extra_config as a whole is not this validator's lane
+	}
+	for k, v := range cfg.RequestOverrides {
+		wantType, ok := ModelOverrideFields[k]
+		if !ok {
+			return fmt.Errorf("request_overrides: %q is not an overridable generation param (allowed: temperature, top_p, enable_thinking)", k)
+		}
+		if !matchesOverrideShape(v, wantType) {
+			return fmt.Errorf("request_overrides: %q must be a %s", k, wantType)
+		}
+	}
+	for _, k := range cfg.AllowedExtensions {
+		if !DialectExtensionFields[k] {
+			return fmt.Errorf("allowed_extensions: %q is not a registered dialect param (allowed: enable_thinking)", k)
+		}
+	}
+	return nil
+}
+
+func matchesOverrideShape(v any, want string) bool {
+	switch want {
+	case "number":
+		if _, ok := v.(float64); !ok {
+			return false
+		}
+	case "bool":
+		if _, ok := v.(bool); !ok {
+			return false
+		}
+	case "string":
+		if _, ok := v.(string); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func candidatesToRouteResults(cs []RouteCandidate) []*RouteResult {
@@ -155,6 +229,13 @@ type extraConfig struct {
 	// path (handler callFn) via AcquireDispatchGuard.
 	Concurrency int `json:"concurrency"` // max in-flight requests per (provider,model)
 	RPM         int `json:"rpm"`         // max requests per minute per (provider,model)
+	// M3.2/P3: model-level extension controls. RequestOverrides are admin
+	// injection/override of ALLOWED generation params (validated at write
+	// time by ValidateModelExtensionConfig); AllowedExtensions opts a route
+	// in to forwarding registered dialect params (cost-bearing: enable_thinking
+	// bills thinking tokens as output).
+	RequestOverrides  map[string]any `json:"request_overrides"`
+	AllowedExtensions []string       `json:"allowed_extensions"`
 }
 
 func parseExtraConfig(raw json.RawMessage) extraConfig {

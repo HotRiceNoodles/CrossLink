@@ -38,6 +38,12 @@ type FallbackAttempt struct {
 	// (0 = network/timeout/cancel, no upstream response). Persisted in the
 	// usage log's attempts timeline (error observability L2).
 	UpstreamStatus int
+	// ParamStrips records the M0 version-rule strips performed during THIS
+	// attempt (provider, api_version, param, reason) — the durable audit
+	// trail the plan requires in place of debug-log-only records. Persisted
+	// in the usage log's attempts timeline; a strip on an otherwise clean
+	// single attempt keeps the timeline from being suppressed.
+	ParamStrips []upstream.ParamStrip
 }
 
 // FallbackResult holds the outcome of a fallback execution.

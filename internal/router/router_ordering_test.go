@@ -15,19 +15,37 @@ import (
 
 // registeredProbe polls r.probes until cacheKey has an in-flight probe and
 // returns its pointer (the waiter-to-be must join BEFORE the owner is
-// cancelled, deterministically).
+// cancelled, deterministically). M1: probe keys carry the epoch suffix
+// ("cacheKey#epoch"), so match by prefix at the '#' boundary.
 func registeredProbe(r *Resolver, cacheKey string) *resolveProbe {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		r.probesMu.Lock()
-		p, ok := r.probes[cacheKey]
+		var p *resolveProbe
+		for k, v := range r.probes {
+			if probeCacheKey(k) == cacheKey {
+				p = v
+				break
+			}
+		}
 		r.probesMu.Unlock()
-		if ok {
+		if p != nil {
 			return p
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	return nil
+}
+
+// probeCacheKey strips the M1 epoch suffix from a composite probe key
+// ("model:org#epoch" → "model:org"); keys without '#' pass through.
+func probeCacheKey(k string) string {
+	for i := len(k) - 1; i >= 0; i-- {
+		if k[i] == '#' {
+			return k[:i]
+		}
+	}
+	return k
 }
 
 // Review fix ordering proof: when an owner cancels, the probe's registration
@@ -59,7 +77,13 @@ func TestProbeResolve_CancelUnregistersBeforePublish(t *testing.T) {
 		defer close(waiterDone)
 		<-p.done // wakes only after close(done) — which happens after forget
 		r.probesMu.Lock()
-		_, still := r.probes["m:0"]
+		var still bool
+		for k := range r.probes {
+			if probeCacheKey(k) == "m:0" {
+				still = true
+				break
+			}
+		}
 		r.probesMu.Unlock()
 		stillRegistered <- still
 	}()

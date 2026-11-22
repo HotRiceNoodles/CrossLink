@@ -31,6 +31,12 @@ var ErrNoActiveProvider = errors.New("no active provider")
 // cannot answer right now. Maps to 503, never 404.
 var ErrResolveDegraded = errors.New("resolve degraded")
 
+// ErrResolveContention is returned when the model-mapping generation kept
+// changing during a bounded resolve retry: the resolver cannot pin a result
+// to a generation and refuses to cache or serve one (M1). Temporary by
+// nature — clients should retry, like ErrResolveDegraded.
+var ErrResolveContention = errors.New("resolve contention")
+
 type Resolver struct {
 	registry       *provider.Registry
 	repo           ProviderModelRepo
@@ -70,6 +76,14 @@ type Resolver struct {
 	// outcome.
 	probesMu sync.Mutex
 	probes   map[string]*resolveProbe
+	// M1 write-invalidation barrier: epoch increments on every invalidation;
+	// cache publishes and degraded-negative-cache writes are guarded under
+	// invalidationMu against the epoch the query started on, so an in-flight
+	// query that read the DB before an invalidation can neither backfill
+	// stale mappings nor suppress the next generation's lookups (the race the
+	// unconditional cache.Store used to lose).
+	invalidationMu sync.Mutex
+	epoch          atomic.Uint64
 }
 
 // resolveDegradedTTL bounds how long a resolve-degradation negative-cache
@@ -135,6 +149,13 @@ type RouteResult struct {
 	Priority int
 	// context window of the provider model, nil = unknown
 	MaxContext *int
+	// M3.2/P3: model-level extension controls parsed from the mapping's
+	// extra_config (validated at write time by ValidateModelExtensionConfig).
+	// RequestOverrides: admin injection/override of allowed generation params
+	// (wins over client-sent values per the M3.2 priority order).
+	// AllowedExtensions: dialect params this route opts in to forwarding.
+	RequestOverrides  map[string]any
+	AllowedExtensions []string
 }
 
 func NewResolver(
@@ -195,6 +216,13 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		return routes, err
 	}
 
+	// M1: the probe key carries the mapping generation (epoch) captured at
+	// query start — requests arriving after an invalidation must not join a
+	// probe whose outcome may predate the change; they start a fresh probe
+	// against the new generation.
+	e := r.epoch.Load()
+	probeKey := fmt.Sprintf("%s#%d", cacheKey, e)
+
 	// Single-flight the uncached probe per key: cold start and the instant a
 	// degradation window expires would otherwise stampede the DB with N
 	// concurrent identical queries. The probe owner runs resolveUncached and
@@ -204,7 +232,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 	// outcome is published (close(done)) and before the probe unregisters —
 	// so a post-completion arrival sees the caches already filled and never
 	// starts a second query (the tail race the owner-side Store used to lose).
-	return r.probeResolve(ctx, cacheKey, func(pctx context.Context) ([]*RouteResult, error) {
+	return r.probeResolve(ctx, probeKey, func(pctx context.Context) ([]*RouteResult, error) {
 		// Tail-race guard: an earlier probe may have completed (and filled
 		// either cache) between this caller's checks and its probe
 		// registration. The new owner re-checks both before touching the DB
@@ -215,25 +243,53 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		if routes, cerr, hit := r.serveFromCache(cacheKey, modelName); hit {
 			return routes, cerr
 		}
-		ordered, err := r.resolveUncached(pctx, modelName, orgID)
-		if err != nil {
-			// Negative-cache ONLY the degradation case (the DB lookup itself
-			// failed on the DB's merits). Cancellations come back as raw ctx
-			// errors from resolveUncached and must NOT poison the negative
-			// cache — the DB may be perfectly healthy when one request goes
-			// away.
-			if errors.Is(err, ErrResolveDegraded) {
-				r.markDegraded(cacheKey)
+		// M1 bounded re-resolve loop: when an invalidation races this query,
+		// retry once on the new generation; continuous churn returns a typed
+		// contention error instead of looping, caching stale routes, or
+		// serving a result from an unpinnable generation.
+		for attempt := 0; ; attempt++ {
+			ordered, err := r.resolveUncached(pctx, modelName, orgID)
+			if err != nil {
+				// Negative-cache ONLY the degradation case (the DB lookup
+				// itself failed on the DB's merits), and only on the
+				// generation the query started on — an old query's failure
+				// must not suppress the next generation's lookups. Cancellations
+				// come back as raw ctx errors from resolveUncached and must
+				// NOT poison the negative cache.
+				if errors.Is(err, ErrResolveDegraded) {
+					r.markDegradedIfEpoch(cacheKey, e)
+				}
+				return nil, err
 			}
-			return nil, err
+			r.invalidationMu.Lock()
+			cur := r.epoch.Load()
+			if cur == e {
+				r.cache.Store(cacheKey, &cacheEntry{
+					results: ordered,
+					expire:  time.Now().Add(r.ttl),
+				})
+				r.invalidationMu.Unlock()
+				r.clearDegraded(cacheKey)
+				return ordered, nil
+			}
+			r.invalidationMu.Unlock()
+			if attempt >= 1 {
+				return nil, fmt.Errorf("%w: model %s mapping changed repeatedly during resolve", ErrResolveContention, modelName)
+			}
+			e = cur // re-resolve once against the new generation
 		}
-		r.clearDegraded(cacheKey)
-		r.cache.Store(cacheKey, &cacheEntry{
-			results: ordered,
-			expire:  time.Now().Add(r.ttl),
-		})
-		return ordered, nil
 	})
+}
+
+// markDegradedIfEpoch records the degradation negative-cache entry only when
+// the mapping generation is unchanged since the query started (M1).
+func (r *Resolver) markDegradedIfEpoch(cacheKey string, e uint64) {
+	r.invalidationMu.Lock()
+	defer r.invalidationMu.Unlock()
+	if r.epoch.Load() != e {
+		return
+	}
+	r.markDegraded(cacheKey)
 }
 
 // serveFromCache returns the cached routes for cacheKey with circuit-open
@@ -538,6 +594,9 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 			FallbackModels: ec.FallbackModels,
 			FallbackCfg:    ec.Fallback,
 			ExtraConfig:    json.RawMessage(m.ExtraConfig),
+
+			RequestOverrides:  ec.RequestOverrides,
+			AllowedExtensions: ec.AllowedExtensions,
 		})
 	}
 
@@ -601,11 +660,35 @@ func (r *Resolver) healthAllows(name, model string) bool {
 }
 
 // Invalidate removes cached entries. Call this when model mappings change.
+// M1: the epoch is bumped under the same lock that deletes entries, closing
+// the in-flight backfill race — a resolve that queried the DB before this
+// invalidation can no longer Store its (now stale) result afterwards.
 func (r *Resolver) Invalidate() {
+	r.invalidateWhere(func(string) bool { return true })
+}
+
+// InvalidateModel removes the cached entries of one model name across all
+// orgs — the targeted form used by the M1 cross-instance invalidate_model
+// notification. Cache keys are "model:orgID"; the model name is matched by
+// parsing at the LAST colon so model names that themselves contain ':' cannot
+// interfere with each other (no bare prefix matching).
+func (r *Resolver) InvalidateModel(name string) {
+	r.invalidateWhere(func(k string) bool {
+		i := strings.LastIndexByte(k, ':')
+		return i >= 0 && k[:i] == name
+	})
+}
+
+func (r *Resolver) invalidateWhere(match func(string) bool) {
+	r.invalidationMu.Lock()
+	r.epoch.Add(1)
 	r.cache.Range(func(key, _ any) bool {
-		r.cache.Delete(key)
+		if s, ok := key.(string); ok && match(s) {
+			r.cache.Delete(key)
+		}
 		return true
 	})
+	r.invalidationMu.Unlock()
 }
 
 // reorderByHealth sorts cached routes by effective weight DESC, Priority ASC
