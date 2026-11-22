@@ -3,6 +3,7 @@ package translator
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/crosslink/internal/domain"
@@ -111,6 +112,7 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	var textParts []string
 	var toolCalls []domain.OpenAIToolCall
 	var results []domain.OpenAIMessage
+	var imageParts []any
 
 	for _, b := range blocks {
 		switch b.Type {
@@ -132,12 +134,24 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 				Content:    content,
 				ToolCallID: b.ToolUseID,
 			})
+		case "image":
+			if part, ok := imageBlockToPart(b); ok {
+				imageParts = append(imageParts, part)
+			}
 		}
 	}
 
 	// If only text blocks, return a simple message
 	if len(toolCalls) == 0 && len(results) == 0 {
-		return []domain.OpenAIMessage{{Role: role, Content: strings.Join(textParts, "\n")}}
+		if len(imageParts) == 0 {
+			return []domain.OpenAIMessage{{Role: role, Content: strings.Join(textParts, "\n")}}
+		}
+		content := make([]any, 0, len(textParts)+len(imageParts))
+		if len(textParts) > 0 {
+			content = append(content, map[string]any{"type": "text", "text": strings.Join(textParts, "\n")})
+		}
+		content = append(content, imageParts...)
+		return []domain.OpenAIMessage{{Role: role, Content: content}}
 	}
 
 	var msgs []domain.OpenAIMessage
@@ -155,10 +169,59 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	// tool_result messages
 	msgs = append(msgs, results...)
 
+	// Images cannot ride along a tool-role message in OpenAI shape; emit them
+	// as a trailing message so they are not silently dropped.
+	if len(imageParts) > 0 {
+		msgs = append(msgs, domain.OpenAIMessage{Role: role, Content: imageParts})
+	}
+
 	return msgs
 }
 
-func extractToolResultContent(raw json.RawMessage) string {
+// imageBlockToPart converts an Anthropic image block into an OpenAI
+// {"type":"image_url","image_url":{"url":...}} content part. Base64 sources
+// become data: URLs; url sources pass through. Blocks with unusable sources
+// are dropped with a warning.
+func imageBlockToPart(b domain.ContentBlock) (map[string]any, bool) {
+	var source struct {
+		Type      string `json:"type"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+		URL       string `json:"url"`
+	}
+	if err := json.Unmarshal(b.Source, &source); err != nil {
+		slog.Warn("translator: dropping image block with invalid source JSON")
+		return nil, false
+	}
+	switch source.Type {
+	case "base64":
+		if source.MediaType == "" || source.Data == "" {
+			slog.Warn("translator: dropping base64 image block missing media_type or data")
+			return nil, false
+		}
+		return map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": "data:" + source.MediaType + ";base64," + source.Data},
+		}, true
+	case "url":
+		if source.URL == "" {
+			slog.Warn("translator: dropping url image block missing url")
+			return nil, false
+		}
+		return map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": source.URL},
+		}, true
+	}
+	slog.Warn("translator: dropping image block with unsupported source type", "source_type", source.Type)
+	return nil, false
+}
+
+// extractToolResultContent converts Anthropic tool_result content into an
+// OpenAI tool-message content: a plain string when text-only (the common
+// case, byte-identical to what an OpenAI client sends), or a parts array
+// when the result carries image blocks.
+func extractToolResultContent(raw json.RawMessage) any {
 	if raw == nil {
 		return ""
 	}
@@ -167,16 +230,30 @@ func extractToolResultContent(raw json.RawMessage) string {
 		return s
 	}
 	var blocks []domain.ContentBlock
-	if err := json.Unmarshal(raw, &blocks); err == nil {
-		var texts []string
-		for _, b := range blocks {
-			if b.Type == "text" {
-				texts = append(texts, b.Text)
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return string(raw)
+	}
+	var texts []string
+	var imageParts []any
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			texts = append(texts, b.Text)
+		case "image":
+			if part, ok := imageBlockToPart(b); ok {
+				imageParts = append(imageParts, part)
 			}
 		}
+	}
+	if len(imageParts) == 0 {
 		return strings.Join(texts, "\n")
 	}
-	return string(raw)
+	content := make([]any, 0, len(texts)+len(imageParts))
+	if len(texts) > 0 {
+		content = append(content, map[string]any{"type": "text", "text": strings.Join(texts, "\n")})
+	}
+	content = append(content, imageParts...)
+	return content
 }
 
 func translateTools(raw json.RawMessage) ([]domain.OpenAITool, error) {

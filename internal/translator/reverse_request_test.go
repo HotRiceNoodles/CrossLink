@@ -182,3 +182,137 @@ func TestOpenAIToAnthropicRequest_User_MappedToMetadata(t *testing.T) {
 	assert.NotNil(t, got.Metadata)
 	assert.Equal(t, "user-123", got.Metadata.UserID)
 }
+
+func TestOpenAIToAnthropicRequest_UserContentParts_ImageURLConverted(t *testing.T) {
+	req := &domain.OpenAIRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: intPtr(512),
+		Messages: []domain.OpenAIMessage{
+			{Role: "user", Content: []any{
+				map[string]any{"type": "text", "text": "What is in this image?"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,aGVsbG8="}},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/cat.png"}},
+			}},
+		},
+	}
+	got, err := OpenAIToAnthropicRequest(req)
+	assert.NoError(t, err)
+	assert.Len(t, got.Messages, 1)
+
+	var blocks []domain.ContentBlock
+	assert.NoError(t, json.Unmarshal(got.Messages[0].Content, &blocks))
+	assert.Len(t, blocks, 3)
+
+	assert.Equal(t, "text", blocks[0].Type)
+	assert.Equal(t, "What is in this image?", blocks[0].Text)
+
+	assert.Equal(t, "image", blocks[1].Type)
+	var base64Src map[string]string
+	assert.NoError(t, json.Unmarshal(blocks[1].Source, &base64Src))
+	assert.Equal(t, map[string]string{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}, base64Src)
+
+	assert.Equal(t, "image", blocks[2].Type)
+	var urlSrc map[string]string
+	assert.NoError(t, json.Unmarshal(blocks[2].Source, &urlSrc))
+	assert.Equal(t, map[string]string{"type": "url", "url": "https://example.com/cat.png"}, urlSrc)
+}
+
+func TestOpenAIToAnthropicRequest_UserContentParts_UntranslatableDropped(t *testing.T) {
+	req := &domain.OpenAIRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: intPtr(512),
+		Messages: []domain.OpenAIMessage{
+			{Role: "user", Content: []any{
+				map[string]any{"type": "text", "text": "hi"},
+				map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "x", "format": "wav"}},
+				map[string]any{"type": "image_url", "image_url": map[string]any{}}, // missing url
+			}},
+		},
+	}
+	got, err := OpenAIToAnthropicRequest(req)
+	assert.NoError(t, err)
+
+	var blocks []domain.ContentBlock
+	assert.NoError(t, json.Unmarshal(got.Messages[0].Content, &blocks))
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, "text", blocks[0].Type)
+	assert.Equal(t, "hi", blocks[0].Text)
+}
+
+func TestOpenAIToAnthropicRequest_UserContentParts_AllDroppedKeepsEmptyText(t *testing.T) {
+	req := &domain.OpenAIRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: intPtr(512),
+		Messages: []domain.OpenAIMessage{
+			{Role: "user", Content: []any{
+				map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "x", "format": "wav"}},
+			}},
+		},
+	}
+	got, err := OpenAIToAnthropicRequest(req)
+	assert.NoError(t, err)
+
+	// Anthropic rejects empty content arrays; the message must stay present.
+	assert.Equal(t, `[{"type":"text","text":""}]`, string(got.Messages[0].Content))
+}
+
+func TestOpenAIToAnthropicRequest_ToolMessageWithImageParts(t *testing.T) {
+	// OpenAI tool message with a parts-array content: image_url must become an
+	// image block inside tool_result content — verbatim passthrough would 400
+	// an Anthropic upstream exactly like the user-message case.
+	req := &domain.OpenAIRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: intPtr(512),
+		Messages: []domain.OpenAIMessage{
+			{Role: "user", Content: "take a screenshot"},
+			{Role: "assistant", ToolCalls: []domain.OpenAIToolCall{
+				{ID: "call_1", Type: "function", Function: domain.OpenAIFunctionCall{Name: "take_screenshot", Arguments: "{}"}},
+			}},
+			{Role: "tool", ToolCallID: "call_1", Content: []any{
+				map[string]any{"type": "text", "text": "done"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,eHg="}},
+			}},
+		},
+	}
+	got, err := OpenAIToAnthropicRequest(req)
+	assert.NoError(t, err)
+	assert.Len(t, got.Messages, 3)
+
+	var blocks []domain.ContentBlock
+	assert.NoError(t, json.Unmarshal(got.Messages[2].Content, &blocks))
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, "tool_result", blocks[0].Type)
+	assert.Equal(t, "call_1", blocks[0].ToolUseID)
+
+	var inner []domain.ContentBlock
+	assert.NoError(t, json.Unmarshal(blocks[0].Content, &inner))
+	assert.Len(t, inner, 2)
+	assert.Equal(t, "text", inner[0].Type)
+	assert.Equal(t, "done", inner[0].Text)
+	assert.Equal(t, "image", inner[1].Type)
+	var src map[string]string
+	assert.NoError(t, json.Unmarshal(inner[1].Source, &src))
+	assert.Equal(t, map[string]string{"type": "base64", "media_type": "image/png", "data": "eHg="}, src)
+}
+
+func TestOpenAIToAnthropicRequest_ToolMessageStringContent_Unchanged(t *testing.T) {
+	// Backward compatibility: plain-string tool content passes through verbatim.
+	req := &domain.OpenAIRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: intPtr(512),
+		Messages: []domain.OpenAIMessage{
+			{Role: "user", Content: "check"},
+			{Role: "assistant", ToolCalls: []domain.OpenAIToolCall{
+				{ID: "call_1", Type: "function", Function: domain.OpenAIFunctionCall{Name: "f", Arguments: "{}"}},
+			}},
+			{Role: "tool", ToolCallID: "call_1", Content: "Sunny"},
+		},
+	}
+	got, err := OpenAIToAnthropicRequest(req)
+	assert.NoError(t, err)
+
+	var blocks []domain.ContentBlock
+	assert.NoError(t, json.Unmarshal(got.Messages[2].Content, &blocks))
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, `"Sunny"`, string(blocks[0].Content))
+}
