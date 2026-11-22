@@ -157,3 +157,8 @@ func (r *GuardTraceRepo) DeleteOlderThan(ctx context.Context, cutoff time.Time) 
 	res := r.db.WithContext(ctx).Where("created_at < ?", cutoff).Delete(&model.GuardTrace{})
 	return res.RowsAffected, res.Error
 }
+
+func (r *GuardTokenRepo) BoundKeyActive(ctx context.Context, org, id int64) bool {
+	var n int64
+	return r.db.WithContext(ctx).Model(&model.APIKey{}).Where("org_id=? AND id=? AND status=1 AND (expires_at IS NULL OR expires_at>?)", org, id, time.Now()).Count(&n).Error == nil && n == 1
+}

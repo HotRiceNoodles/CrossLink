@@ -11,6 +11,7 @@ import (
 // 哈希存储与轮换模式借用 api_key_hashes。明文 token 仅创建时展示一次，
 // 库中只存 SHA-256 哈希与可展示前缀。
 type GuardIngestToken struct {
+	APIKeyID   *int64     `json:"api_key_id,omitempty"`
 	ID         int64      `gorm:"primaryKey" json:"id"`
 	OrgID      int64      `gorm:"not null;index:idx_guard_ingest_tokens_org" json:"org_id"`
 	Name       string     `gorm:"size:128;not null;default:''" json:"name"`
