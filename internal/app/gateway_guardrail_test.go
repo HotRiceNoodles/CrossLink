@@ -65,7 +65,7 @@ func TestGatewayWiringEnforcesOrganizationResponseRules(t *testing.T) {
 				if err := db.AutoMigrate(&model.SystemSetting{}, &model.UsageLog{}); err != nil {
 					t.Fatal(err)
 				}
-				if err := db.Exec("CREATE TABLE guardrail_rules (id INTEGER PRIMARY KEY, org_id INTEGER, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT, model_filter TEXT, version INTEGER, created_at DATETIME, updated_at DATETIME)").Error; err != nil {
+				if err := db.Exec("CREATE TABLE guardrail_rules (scope_mode TEXT DEFAULT 'all', api_key_ids TEXT, id INTEGER PRIMARY KEY, org_id INTEGER, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT, model_filter TEXT, version INTEGER, created_at DATETIME, updated_at DATETIME)").Error; err != nil {
 					t.Fatal(err)
 				}
 				if err := db.Exec("CREATE TABLE provider_models (model_name TEXT, extra_config TEXT)").Error; err != nil {

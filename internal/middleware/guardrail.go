@@ -26,6 +26,10 @@ const maxGuardrailBodySize = 10 << 20
 // capability evidence worth profiling even though no call was answered.
 func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObserver) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.GetHeader("X-CrossLink-Model-Review") != "" {
+			c.AbortWithStatusJSON(400, gin.H{"error": "审核服务地址不能指向网关入口"})
+			return
+		}
 		if svc == nil || !svc.IsEnabled() {
 			c.Next()
 			return
@@ -192,6 +196,7 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 		defer cancel()
 
 		result, err := svc.Check(guardCtx, &guardrail.CheckRequest{
+			Input:     ex.DetectionInput(),
 			Content:   ex.Text,
 			Direction: guardrail.DirectionRequest,
 			Model:     probe.Model,

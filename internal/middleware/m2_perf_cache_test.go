@@ -61,7 +61,7 @@ func TestM2PerfRealCacheHitAndPolicyRecheck(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE system_settings (key TEXT, value TEXT)",
 		"INSERT INTO system_settings VALUES ('guardrails_enabled','true')",
-		"CREATE TABLE guardrail_rules (id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
+		"CREATE TABLE guardrail_rules (scope_mode TEXT DEFAULT 'all', api_key_ids TEXT, id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatal(err)
@@ -126,7 +126,7 @@ func TestM2PerfRealCacheHitAndPolicyRecheck(t *testing.T) {
 	// Phase 3: policy change → every HIT re-check runs against CURRENT rules.
 	// The cached body now contains a blocked marker under the new policy: the
 	// middleware must serve BYPASS-GUARDRAIL (regeneration), never the entry.
-	if err := db.Exec(`INSERT INTO guardrail_rules VALUES (9,'kw','keyword_filter','response',true,'{"blocklist":["regional revenue grew steadily"]}','high','block')`).Error; err != nil {
+	if err := db.Exec(`INSERT INTO guardrail_rules (id,name,type,direction,enabled,config,severity,action) VALUES (9,'kw','keyword_filter','response',true,'{"blocklist":["regional revenue grew steadily"]}','high','block')`).Error; err != nil {
 		t.Fatal(err)
 	}
 	gs.InvalidateCache() // production rule writes invalidate the rules TTL cache

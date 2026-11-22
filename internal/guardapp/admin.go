@@ -34,10 +34,14 @@ func (a *App) registerAdminRoutes(r *gin.Engine) {
 	authed.GET("/auth/permissions", a.handlePermissions)
 
 	gr := admin.NewGuardrailHandler(a.DB, a.Guardrail, nil)
+	gr.RegisterPromptSecurity(authed, middleware.RequireAction(a.PermCache, "guardrail:list"), middleware.RequireAction(a.PermCache, "guardrail:update"), middleware.RequireAction(a.PermCache, "key:update"))
 	authed.GET("/guardrails", middleware.RequireAction(a.PermCache, "guardrail:list"), gr.List)
 	authed.POST("/guardrails", middleware.RequireAction(a.PermCache, "guardrail:create"), gr.Create)
 	authed.PUT("/guardrails/:id", middleware.RequireAction(a.PermCache, "guardrail:update"), gr.Update)
 	authed.DELETE("/guardrails/:id", middleware.RequireAction(a.PermCache, "guardrail:delete"), gr.Delete)
+	authed.POST("/guardrails/:id/copy", middleware.RequireAction(a.PermCache, "guardrail:create"), gr.CopyRule)
+	authed.GET("/guardrails/versions", middleware.RequireAction(a.PermCache, "guardrail:list"), gr.Versions)
+	authed.POST("/guardrails/:id/rollback", middleware.RequireAction(a.PermCache, "guardrail:update"), gr.Rollback)
 	authed.POST("/guardrails/:id/test", middleware.RequireAction(a.PermCache, "guardrail:test"), gr.Test)
 
 	tok := middleware.RequireAction(a.PermCache, "guard:token_manage")
@@ -268,6 +272,7 @@ func (a *App) requireOrg(c *gin.Context) (int64, bool) {
 
 // tokenView 是凭证列表投影：哈希永不回显（明文仅创建/重置响应出现一次）。
 type tokenView struct {
+	APIKeyID   *int64     `json:"api_key_id,omitempty"`
 	ID         int64      `json:"id"`
 	OrgID      int64      `json:"org_id"`
 	Name       string     `json:"name"`
@@ -292,7 +297,7 @@ func (a *App) handleTokenList(c *gin.Context) {
 	out := make([]tokenView, len(toks))
 	for i := range toks {
 		out[i] = tokenView{
-			ID: toks[i].ID, OrgID: toks[i].OrgID, Name: toks[i].Name,
+			APIKeyID: toks[i].APIKeyID, ID: toks[i].ID, OrgID: toks[i].OrgID, Name: toks[i].Name,
 			KeyPrefix: toks[i].KeyPrefix, HashAlgo: toks[i].HashAlgo, Status: toks[i].Status,
 			LastUsedAt: toks[i].LastUsedAt, RevokedAt: toks[i].RevokedAt, CreatedAt: toks[i].CreatedAt,
 		}
@@ -306,10 +311,18 @@ func (a *App) handleTokenCreate(c *gin.Context) {
 		return
 	}
 	var input struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		APIKeyID *int64 `json:"api_key_id"`
 	}
-	_ = c.ShouldBindJSON(&input) // name 可选，空体也接受
-	ct, err := a.Tokens.Create(c.Request.Context(), orgID, input.Name)
+	if c.Request.ContentLength != 0 && c.ShouldBindJSON(&input) != nil {
+		c.Status(400)
+		return
+	} // name 可选，空体也接受
+	if input.APIKeyID != nil && (!a.PermCache.HasPermission(admin.GetRoleID(c), "key:update") || !admin.CanBindGuardKey(c, a.DB, orgID, *input.APIKeyID)) {
+		c.Status(403)
+		return
+	}
+	ct, err := a.Tokens.createBound(c.Request.Context(), orgID, input.Name, input.APIKeyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"code": "create_failed", "message": err.Error()}})
 		return

@@ -86,6 +86,13 @@ func IngestAuth(repo *repository.GuardTokenRepo, cache *tokenCache) gin.HandlerF
 			return
 		}
 		c.Set("org_id", tok.OrgID)
+		if tok.APIKeyID != nil {
+			if !repo.BoundKeyActive(c.Request.Context(), tok.OrgID, *tok.APIKeyID) {
+				c.AbortWithStatusJSON(403, gin.H{"error": "绑定的 API Key 不可用"})
+				return
+			}
+			c.Set("bound_key_id", *tok.APIKeyID)
+		}
 		c.Set("guard_token_id", tok.ID)
 		c.Set("guard_token_name", tok.Name)
 		// fire-and-forget：60s 节流在 SQL 条件里，高频镜像流量下每 token

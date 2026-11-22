@@ -49,10 +49,10 @@ func (a *App) readPayload(c *gin.Context, p *IngestPayload, defaultDirection str
 		p.Protocol = ProtocolGeneric
 	}
 	switch p.Protocol {
-	case ProtocolOpenAI, ProtocolAnthropic, ProtocolGeneric:
+	case ProtocolOpenAI, ProtocolAnthropic, ProtocolGeneric, ProtocolResponses:
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_protocol",
-			"message": "protocol must be one of openai/anthropic/generic"}})
+			"message": "protocol must be one of openai/anthropic/generic/responses"}})
 		return false
 	}
 	if p.Direction == "" {
@@ -98,7 +98,7 @@ func (a *App) checkTenant(c *gin.Context, tenant string) bool {
 // seenFirst 幂等闸门：(org_id, trace_id, direction, seq) 重复回放 409——
 // 不重跑管线，杜绝重复事件/trace（重复的同步裁决由客户首答承担）。
 func (a *App) seenFirst(c *gin.Context, p *IngestPayload) bool {
-	if a.Idem.Seen(c.GetInt64("org_id"), p.TraceID, p.Direction, p.Seq) {
+	if a.Idem.Seen(c.GetInt64("org_id"), streamKey(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), p.TraceID), p.Direction, p.Seq) {
 		return true
 	}
 	c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "duplicate",
@@ -107,7 +107,7 @@ func (a *App) seenFirst(c *gin.Context, p *IngestPayload) bool {
 }
 
 func (a *App) detectRequestFrom(c *gin.Context, p *IngestPayload) (*DetectRequest, bool) {
-	text, uninspectable, ok := NormalizeContent(p.Content, p.Protocol)
+	normalized, ok := NormalizeInput(p.Content, p.Protocol)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "no_inspectable_content",
 			"message": "content carries no inspectable text"}})
@@ -115,10 +115,12 @@ func (a *App) detectRequestFrom(c *gin.Context, p *IngestPayload) (*DetectReques
 	}
 	return &DetectRequest{
 		OrgID:         c.GetInt64("org_id"),
+		APIKeyID:      c.GetInt64("bound_key_id"),
 		TraceID:       p.TraceID,
 		Direction:     p.Direction,
-		Text:          text,
-		Uninspectable: uninspectable,
+		Text:          normalized.Text,
+		Input:         normalized.Input,
+		Uninspectable: normalized.Uninspectable,
 		Model:         p.Model,
 		Metadata:      MetadataMap(p.Metadata),
 	}, true

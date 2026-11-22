@@ -18,6 +18,7 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/license"
+	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/service"
@@ -198,15 +199,40 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 		passwordHash := ""
 		if db != nil {
 			var user model.User
-			if err := db.WithContext(c.Request.Context()).Select("role_id", "status", "force_password_change", "password_hash").First(&user, claims.UserID).Error; err == nil {
+			err := db.WithContext(c.Request.Context()).Select("role_id", "status", "force_password_change", "password_hash").First(&user, claims.UserID).Error
+			switch {
+			case err == nil:
 				roleID = user.RoleID
 				userStatus = user.Status
 				forcePasswordChange = user.ForcePasswordChange
 				passwordHash = user.PasswordHash
 				var role model.Role
-				if err := db.WithContext(c.Request.Context()).Select("name").First(&role, roleID).Error; err == nil {
+				// Audit item 2 (final boundary): the role NAME is authorization
+				// data — an unresolvable role (query error OR missing row) must
+				// not silently fall back to the token's stale claim. Mark
+				// degraded; guards deny business routes on it.
+				if roleErr := db.WithContext(c.Request.Context()).Select("name").First(&role, roleID).Error; roleErr != nil {
+					roleName = ""
+					middleware.MarkAuthPermDegraded(c)
+					slog.Warn("admin auth: role lookup failed; action-gated routes degraded", "user_id", claims.UserID, "role_id", roleID, "error", roleErr)
+				} else {
 					roleName = role.Name
 				}
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				// Audit item 2: account gone (hard- or soft-deleted — the default
+				// GORM scope hides soft-deleted rows). Sessions must die with the
+				// account; keeping token claims alive here is session revocation
+				// bypass for deleted users.
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "account not found"})
+				return
+			default:
+				// Audit item 2: permission data unavailable (DB error, not
+				// not-found). Fail CLOSED for action-gated routes via the
+				// degraded flag; non-gated endpoints keep serving (a DB hiccup
+				// must not lock the whole admin panel, but must not authorize
+				// privileged writes on unverified data either).
+				middleware.MarkAuthPermDegraded(c)
+				slog.Warn("admin auth: user lookup failed; action-gated routes degraded", "user_id", claims.UserID, "error", err)
 			}
 		}
 
@@ -218,9 +244,13 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 
 		// M7: resolve team/org membership fresh from DB (admin role has none) so
 		// that removing a user from an org/team takes effect on the next request,
-		// not when their JWT eventually expires. Falls back to the claim values on
-		// any lookup error (fail-closed on membership would lock users out on a DB
-		// hiccup, which is worse than the bounded staleness it would replace).
+		// not when their JWT eventually expires.
+		// Audit item 2 (final boundary): NOT-FOUND vs TECHNICAL ERROR are now
+		// distinct — no membership is a legitimate state (org context zeroed,
+		// request proceeds under the normal org-scope rules); a failed QUERY
+		// means the claims' carried team/org scope is unverified and must not
+		// authorize anything: mark degraded (business routes deny, self-service
+		// stays reachable).
 		teamID := claims.TeamID
 		orgID := claims.OrgID
 		orgRole := claims.OrgRole
@@ -230,6 +260,9 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 				teamID = tm.TeamID
 			} else if errors.Is(err, gorm.ErrRecordNotFound) {
 				teamID = 0
+			} else {
+				middleware.MarkAuthPermDegraded(c)
+				slog.Warn("admin auth: team membership lookup failed; action-gated routes degraded", "user_id", claims.UserID, "error", err)
 			}
 			var om model.OrgMember
 			if err := db.WithContext(c.Request.Context()).Select("org_id", "role").Where("user_id = ?", claims.UserID).First(&om).Error; err == nil {
@@ -238,15 +271,22 @@ func JWTAuthMiddleware(cfg config.AdminConfig, db *gorm.DB, cp crypto.CryptoProv
 			} else if errors.Is(err, gorm.ErrRecordNotFound) {
 				orgID = 0
 				orgRole = ""
+			} else {
+				middleware.MarkAuthPermDegraded(c)
+				slog.Warn("admin auth: org membership lookup failed; action-gated routes degraded", "user_id", claims.UserID, "error", err)
 			}
 		}
 
 		// 租户停用强制点（管理面）：成员身份解析出的 org 已停用 → 拒绝该请求。
-		// 查询失败时放行（与成员解析同口径：DB 抖动不应整租户锁死管理面）；
+		// Audit item 2 (final boundary): 状态查询的技术性失败同样标记降级——
+		// 停用状态无法核实时不得按“未停用”放行业务面（自助接口不受影响）。
 		// 平台 admin（orgID=0）不受影响——平台上下文不属于任何租户。
 		if orgID != 0 {
 			var orgStatus struct{ Status int16 }
-			if err := db.WithContext(c.Request.Context()).Select("status").Table("organizations").Where("id = ?", orgID).Scan(&orgStatus).Error; err == nil && orgStatus.Status != 1 {
+			if err := db.WithContext(c.Request.Context()).Select("status").Table("organizations").Where("id = ?", orgID).Scan(&orgStatus).Error; err != nil {
+				middleware.MarkAuthPermDegraded(c)
+				slog.Warn("admin auth: org status lookup failed; action-gated routes degraded", "org_id", orgID, "error", err)
+			} else if orgStatus.Status != 1 {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "organization disabled", "error_code": "org_disabled"})
 				return
 			}

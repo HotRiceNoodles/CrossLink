@@ -81,8 +81,8 @@ func newBlockedGuardrailSvc(t *testing.T) *guardrail.GuardrailService {
 	for _, stmt := range []string{
 		"CREATE TABLE system_settings (key TEXT, value TEXT)",
 		"INSERT INTO system_settings VALUES ('guardrails_enabled','true')",
-		"CREATE TABLE guardrail_rules (id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
-		`INSERT INTO guardrail_rules VALUES (1,'blocker','keyword_filter','request',true,'{"blocklist":["BLOCKWORD"]}','high','block')`,
+		"CREATE TABLE guardrail_rules (scope_mode TEXT DEFAULT 'all', api_key_ids TEXT, id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
+		`INSERT INTO guardrail_rules (id,name,type,direction,enabled,config,severity,action) VALUES (1,'blocker','keyword_filter','request',true,'{"blocklist":["BLOCKWORD"]}','high','block')`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatal(err)

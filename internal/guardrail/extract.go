@@ -3,6 +3,7 @@ package guardrail
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -62,10 +63,11 @@ type contentSegment struct {
 
 // ExtractedContent is the protocol-aware view of one request body.
 type ExtractedContent struct {
-	Text   string
-	segs   []contentSegment
-	commit func() []byte
-	maskOK *bool
+	Text     string
+	Segments []DetectionSegment
+	segs     []contentSegment
+	commit   func() []byte
+	maskOK   *bool
 	// Uninspectable marks bodies that carry non-text media parts alongside
 	// checkable text (images, audio, files). Under strict coverage such
 	// bodies are rejected instead of forwarding uninspectable content.
@@ -77,10 +79,40 @@ type contentBuilder struct {
 	segs          []contentSegment
 	maskOK        bool
 	uninspectable bool
+	meta          DetectionSegment
+	segments      []DetectionSegment
 }
 
 func newContentBuilder() *contentBuilder {
-	return &contentBuilder{maskOK: true}
+	return &contentBuilder{maskOK: true, meta: DetectionSegment{SourceType: "unknown", MessageIndex: -1}}
+}
+
+// 来源由协议位置产生，不读取 approved/trusted 等客户自报字段。
+func (cb *contentBuilder) source(role, source string, index int, callID, path string) {
+	if source == "" {
+		switch role {
+		case "user":
+			source = "user_input"
+		case "tool", "function":
+			source = "tool_result"
+		case "assistant":
+			source = "assistant"
+		case "system", "developer":
+			source = "policy_text"
+		default:
+			source = "unknown"
+		}
+	}
+	cb.meta = DetectionSegment{Role: role, SourceType: source, MessageIndex: index, ToolCallID: callID, Path: path}
+}
+
+func (e *ExtractedContent) DetectionInput() *DetectionInput {
+	coverage := "full"
+	if e.Uninspectable {
+		coverage = "partial"
+	}
+	return &DetectionInput{Version: DetectionInputVersion, Content: e.Text,
+		Segments: append([]DetectionSegment(nil), e.Segments...), Coverage: coverage}
 }
 
 func (cb *contentBuilder) add(text string, zone, role string, apply maskApply) {
@@ -97,13 +129,16 @@ func (cb *contentBuilder) addItem(text string, zone, role string, item int, appl
 	start := cb.b.Len()
 	cb.b.WriteString(text)
 	cb.segs = append(cb.segs, contentSegment{start: start, end: start + len(text), zone: zone, role: role, item: item, apply: apply})
+	seg := cb.meta
+	seg.ID, seg.Text, seg.Start, seg.End = fmt.Sprintf("s%d", len(cb.segments)), text, start, start+len(text)
+	cb.segments = append(cb.segments, seg)
 }
 
 func (cb *contentBuilder) build(commit func() []byte) *ExtractedContent {
 	if len(cb.segs) == 0 && !cb.uninspectable {
 		return nil
 	}
-	return &ExtractedContent{Text: cb.b.String(), segs: cb.segs, commit: commit, maskOK: &cb.maskOK, Uninspectable: cb.uninspectable}
+	return &ExtractedContent{Text: cb.b.String(), Segments: cb.segments, segs: cb.segs, commit: commit, maskOK: &cb.maskOK, Uninspectable: cb.uninspectable}
 }
 
 // SegmentZone is one protocol-segment zone extent in ExtractedContent.Text
@@ -304,6 +339,8 @@ func RawString(raw json.RawMessage) (string, bool) {
 // parts are neither checked nor touched. Zone is derived from the message
 // role (zoneForChatRole).
 func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage, key, role string, textTypes ...string) {
+	meta := cb.meta
+	defer func() { cb.meta = meta }()
 	if len(textTypes) == 0 {
 		textTypes = []string{"text"}
 	}
@@ -329,6 +366,7 @@ func addTextBlockSegments(cb *contentBuilder, holder map[string]json.RawMessage,
 		return
 	}
 	for pi := range parts {
+		cb.meta.Path = fmt.Sprintf("%s/%d/text", meta.Path, pi)
 		t, ok := RawString(parts[pi]["type"])
 		if !ok || !allowed[t] {
 			if ok {
@@ -368,8 +406,11 @@ func extractChatContent(body []byte) *ExtractedContent {
 		for i := range msgs {
 			m := msgs[i]
 			role, _ := RawString(m["role"])
+			callID, _ := RawString(m["tool_call_id"])
+			cb.source(role, "", i, callID, fmt.Sprintf("/messages/%d/content", i))
 			addTextBlockSegments(cb, m, "content", role)
 			if s, ok := RawString(m["reasoning_content"]); ok && s != "" {
+				cb.source(role, "reasoning", i, "", fmt.Sprintf("/messages/%d/reasoning_content", i))
 				cb.add(s, ZoneAssistant, "assistant", func(masked string) {
 					m["reasoning_content"], _ = json.Marshal(masked)
 				})
@@ -385,6 +426,8 @@ func extractChatContent(body []byte) *ExtractedContent {
 					if !ok || args == "" {
 						continue
 					}
+					id, _ := RawString(tcs[ti]["id"])
+					cb.source(role, "tool_call", i, id, fmt.Sprintf("/messages/%d/tool_calls/%d/function/arguments", i, ti))
 					cb.add(canonicalJSONText(args), ZoneToolArgs, "assistant", func(masked string) {
 						if !json.Valid([]byte(masked)) {
 							cb.maskOK = false
@@ -410,6 +453,7 @@ func extractChatContent(body []byte) *ExtractedContent {
 			if !ok || desc == "" {
 				continue
 			}
+			cb.source("", "tool_definition", -1, "", fmt.Sprintf("/tools/%d/function/description", ti))
 			cb.add(desc, ZoneToolDesc, "", func(masked string) {
 				fnMap["description"], _ = json.Marshal(masked)
 				tools[ti]["function"], _ = json.Marshal(fnMap)
@@ -436,10 +480,10 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	}
 	cb := newContentBuilder()
 
-	// addAnthropicBlocks extracts one holder's block array. role carries the
-	// enclosing message role; role=="" marks the top-level system field
-	// (zone system regardless of blocks).
+	// role 为空表示顶层 system；保留结构化检测来源和协议 zone 两套元数据。
 	addAnthropicBlocks := func(holder map[string]json.RawMessage, key, role string) {
+		meta := cb.meta
+		defer func() { cb.meta = meta }()
 		raw, ok := holder[key]
 		if !ok {
 			return
@@ -467,6 +511,8 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 			holder[key], _ = json.Marshal(blocks)
 		}
 		for bi := range blocks {
+			cb.meta = meta
+			cb.meta.Path = fmt.Sprintf("%s/%d/text", meta.Path, bi)
 			t, _ := RawString(blocks[bi]["type"])
 			switch t {
 			case "text":
@@ -487,6 +533,9 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 				}
 			}
 			if t == "tool_use" {
+				cb.meta.SourceType = "tool_call"
+				cb.meta.ToolCallID, _ = RawString(blocks[bi]["id"])
+				cb.meta.Path = fmt.Sprintf("%s/%d/input", meta.Path, bi)
 				input := blocks[bi]["input"]
 				if len(input) == 0 {
 					continue
@@ -501,6 +550,9 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 				})
 			}
 			if t == "tool_result" {
+				cb.meta.SourceType = "tool_result"
+				cb.meta.ToolCallID, _ = RawString(blocks[bi]["tool_use_id"])
+				cb.meta.Path = fmt.Sprintf("%s/%d/content", meta.Path, bi)
 				rawC := blocks[bi]["content"]
 				if s, isStr := RawString(rawC); isStr {
 					if s == "" {
@@ -517,6 +569,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 					continue
 				}
 				for pi := range parts {
+					cb.meta.Path = fmt.Sprintf("%s/%d/content/%d/text", meta.Path, bi, pi)
 					pt, _ := RawString(parts[pi]["type"])
 					if pt != "text" {
 						if pt != "" {
@@ -539,6 +592,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	}
 
 	if _, ok := root["system"]; ok {
+		cb.source("system", "", -1, "", "/system")
 		addAnthropicBlocks(root, "system", "")
 	}
 
@@ -550,6 +604,7 @@ func extractAnthropicContent(body []byte) *ExtractedContent {
 	if hasMsgs {
 		for i := range msgs {
 			role, _ := RawString(msgs[i]["role"])
+			cb.source(role, "", i, "", fmt.Sprintf("/messages/%d/content", i))
 			addAnthropicBlocks(msgs[i], "content", role)
 		}
 	}
@@ -574,6 +629,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 	cb := newContentBuilder()
 
 	if s, ok := RawString(root["instructions"]); ok && s != "" {
+		cb.source("system", "", -1, "", "/instructions")
 		cb.add(s, ZoneInstructions, "", func(masked string) {
 			root["instructions"], _ = json.Marshal(masked)
 		})
@@ -584,6 +640,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 	if raw, ok := root["input"]; ok {
 		if s, isStr := RawString(raw); isStr {
 			if s != "" {
+				cb.source("user", "", -1, "", "/input")
 				cb.add(s, ZoneUser, "user", func(masked string) {
 					root["input"], _ = json.Marshal(masked)
 				})
@@ -596,12 +653,16 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 		for ii := range items {
 			it := items[ii]
 			t, _ := RawString(it["type"])
+			role, _ := RawString(it["role"])
+			callID, _ := RawString(it["call_id"])
+			cb.source(role, "", ii, callID, fmt.Sprintf("/input/%d/content", ii))
 			switch t {
-			case "message":
+			case "message", "":
 				// Responses-native content parts use input_text/output_text.
 				role, _ := RawString(it["role"])
 				addTextBlockSegments(cb, it, "content", role, "text", "input_text", "output_text")
 			case "function_call":
+				cb.source("assistant", "tool_call", ii, callID, fmt.Sprintf("/input/%d/arguments", ii))
 				args, ok := RawString(it["arguments"])
 				if !ok || args == "" {
 					continue
@@ -614,6 +675,7 @@ func extractResponsesContent(body []byte) *ExtractedContent {
 					it["arguments"], _ = json.Marshal(masked)
 				})
 			case "function_call_output":
+				cb.source("tool", "tool_result", ii, callID, fmt.Sprintf("/input/%d/output", ii))
 				out, ok := RawString(it["output"])
 				if !ok || out == "" {
 					continue

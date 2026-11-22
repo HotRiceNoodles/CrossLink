@@ -130,6 +130,7 @@ func newM3Env(t *testing.T, redis bool, ttlB time.Duration) *m3Env {
 	// AutoMigrate chokes on the model's gorm:"type:jsonb" tag — same pattern
 	// as seed_test.go's setup).
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rules (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		org_id INTEGER,
 		name TEXT NOT NULL,
@@ -145,6 +146,7 @@ func newM3Env(t *testing.T, redis bool, ttlB time.Duration) *m3Env {
 		version INTEGER NOT NULL DEFAULT 1
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rule_versions (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id INTEGER NOT NULL,
 		version INTEGER NOT NULL,

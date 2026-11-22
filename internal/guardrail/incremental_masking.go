@@ -10,9 +10,14 @@ import (
 	"unicode/utf8"
 )
 
+// ValidateRuleAction 拒绝对该引擎没有意义的动作。
+// 提示词注入是对整段输入是否越权的判断，无法靠遮盖片段放行；只能是放行（log）或阻断（block）。
 func ValidateRuleAction(kind, action string) error {
 	if kind == "content_length" && action == "mask" {
 		return errors.New("content_length 仅支持 block、log，不支持 mask")
+	}
+	if kind == "prompt_injection" && action == "mask" {
+		return errors.New("prompt_injection 仅支持 block、log，不支持 mask")
 	}
 	return nil
 }
@@ -43,7 +48,7 @@ func safeStreamPreview(result *GuardrailResult) string {
 		if strings.HasPrefix(value, "[CREDENTIAL:") && strings.HasSuffix(value, "]") {
 			safe := true
 			for _, r := range value[len("[CREDENTIAL:") : len(value)-1] {
-				if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+				if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
 					safe = false
 				}
 			}

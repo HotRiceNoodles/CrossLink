@@ -44,8 +44,8 @@ func TestCodexAcceptanceCacheHitIsRechecked(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE system_settings (key TEXT, value TEXT)",
 		"INSERT INTO system_settings VALUES ('guardrails_enabled','true')",
-		"CREATE TABLE guardrail_rules (id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
-		`INSERT INTO guardrail_rules VALUES (1,'synthetic','keyword_filter','response',true,'{"blocklist":["SECRET"]}','high','block')`,
+		"CREATE TABLE guardrail_rules (scope_mode TEXT DEFAULT 'all', api_key_ids TEXT, id INTEGER PRIMARY KEY, name TEXT, type TEXT, direction TEXT, enabled BOOLEAN, config TEXT, severity TEXT, action TEXT)",
+		`INSERT INTO guardrail_rules (id,name,type,direction,enabled,config,severity,action) VALUES (1,'synthetic','keyword_filter','response',true,'{"blocklist":["SECRET"]}','high','block')`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatal(err)
@@ -75,7 +75,7 @@ func TestCodexAcceptanceStrictCoverageRejectsMixedMedia(t *testing.T) {
 	}
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
-	if err := db.Exec("CREATE TABLE guardrail_rules (id INTEGER PRIMARY KEY, enabled BOOLEAN)").Error; err != nil {
+	if err := db.Exec("CREATE TABLE guardrail_rules (scope_mode TEXT DEFAULT 'all', api_key_ids TEXT, id INTEGER PRIMARY KEY, enabled BOOLEAN)").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("CREATE TABLE system_settings (key TEXT, value TEXT)").Error; err != nil {

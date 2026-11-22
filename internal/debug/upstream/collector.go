@@ -70,3 +70,36 @@ func RedactHeaders(h http.Header) http.Header {
 	}
 	return clone
 }
+
+// ── M0 param-strip audit sink ──
+
+// ParamStrip records one version-rule strip (M0 sampling tiers) for the
+// usage-log audit trail: which provider+API version dropped which parameter
+// and why. Rejections already surface through the typed error path
+// (client response + usage error stage); strips ride this sink so the audit
+// row can carry them too.
+type ParamStrip struct {
+	Provider   string `json:"provider"`
+	APIVersion string `json:"api_version,omitempty"`
+	Param      string `json:"param"`
+	Reason     string `json:"reason"` // "default" | "compat_strip"
+}
+
+type stripSinkKey struct{}
+
+// WithStripSink returns a context whose strips land in the given slice. The
+// caller owns the slice; the gateway attaches one per fallback attempt.
+func WithStripSink(ctx context.Context, sink *[]ParamStrip) context.Context {
+	return context.WithValue(ctx, stripSinkKey{}, sink)
+}
+
+// RecordParamStrip appends s to the context's strip sink. No sink (direct
+// adapter calls, tests, probes) → no-op: recording must never fail a request.
+func RecordParamStrip(ctx context.Context, s ParamStrip) {
+	if ctx == nil {
+		return
+	}
+	if sink, ok := ctx.Value(stripSinkKey{}).(*[]ParamStrip); ok && sink != nil {
+		*sink = append(*sink, s)
+	}
+}

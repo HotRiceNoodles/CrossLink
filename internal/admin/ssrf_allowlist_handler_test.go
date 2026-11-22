@@ -60,7 +60,10 @@ func withSession(c *gin.Context, authHeader string) *gin.Context {
 }
 
 func TestSsrfAllowlistHandler_Get(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/system/ssrf-allowlist", nil)
 	setAdminContext(c, 1, 1, "admin")
@@ -73,7 +76,10 @@ func TestSsrfAllowlistHandler_Get(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_PermissionDenied(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	t.Run("org admin forbidden", func(t *testing.T) {
@@ -102,6 +108,10 @@ func TestSsrfAllowlistHandler_Put_PermissionDenied(t *testing.T) {
 // ── re-authentication enforcement on writes ──
 
 func TestSsrfAllowlistHandler_WritesRequireReauth(t *testing.T) {
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	t.Run("put without token rejected", func(t *testing.T) {
@@ -182,6 +192,10 @@ func TestSsrfAllowlistHandler_WritesRequireReauth(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_AndApply(t *testing.T) {
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, db := setupSsrfAllowlistHandler(t)
 
 	// Admin applies a list.
@@ -210,6 +224,10 @@ func TestSsrfAllowlistHandler_Put_AndApply(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_MissingCIDRsVsExplicitEmpty(t *testing.T) {
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, db := setupSsrfAllowlistHandler(t)
 
 	// Field absent → rejected with guidance distinguishing the two ops.
@@ -237,7 +255,10 @@ func TestSsrfAllowlistHandler_Put_MissingCIDRsVsExplicitEmpty(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Put_InvalidAndConflict(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	// Invalid CIDR: 400 with the shared validator's reason; nothing applied.
@@ -268,6 +289,10 @@ func TestSsrfAllowlistHandler_Put_InvalidAndConflict(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_Delete_ResetSemantics(t *testing.T) {
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, db := setupSsrfAllowlistHandler(t)
 
 	// Seed override v1.
@@ -319,7 +344,10 @@ func TestSsrfAllowlistHandler_Delete_ResetSemantics(t *testing.T) {
 }
 
 func TestSsrfAllowlistHandler_AuditFields_NoSecretLeak(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, db := setupSsrfAllowlistHandler(t)
 	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/ssrf-allowlist", gin.H{"cidrs": []string{"10.30.0.0/16"}, "expected_version": 0})
 	setAdminContext(c, 1, 1, "admin")
@@ -524,7 +552,10 @@ func TestReauthManager_RedisSharedState(t *testing.T) {
 // Reauth endpoint shape: wrong password → 401 with a FIXED message that
 // never echoes the credential; success mints a token usable on writes.
 func TestSsrfAllowlistHandler_ReauthEndpoint(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/ssrf-allowlist/reauth", gin.H{"password": "super-secret-pw"})
@@ -583,7 +614,10 @@ func TestGenerateToken_UniqueSessionIDPerLogin(t *testing.T) {
 // A's re-auth token cannot be consumed by B (a second login), A consumes it
 // exactly once.
 func TestSsrfAllowlistHandler_JTI_SessionBinding(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	h, _ := setupSsrfAllowlistHandler(t)
 
 	// Two "logins" → two distinct jtis (as JWTAuthMiddleware would set).
@@ -631,6 +665,10 @@ func TestSsrfAllowlistHandler_JTI_SessionBinding(t *testing.T) {
 // single-instance constraint: no per-node tokens/limits to bypass) and the
 // status API reports reauth:"local".
 func TestSsrfAllowlistHandler_LocalMode_RefusesWrites(t *testing.T) {
+	// NOT parallel: this test drives the SsrfAllowlist handler/service,
+	// which mutates the PROCESS-GLOBAL guardrail allowlist — parallel
+	// peers in this file read/apply the same global (0ae8ce9 parallelized
+	// them and introduced cross-test races; serialized 2026-11-21).
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.SsrfAllowlistConfig{}, &model.AuditLog{}))

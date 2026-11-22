@@ -48,6 +48,7 @@ func newM3AEnv(t *testing.T, redis bool, orgID int64) *m3aEnv {
 	})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rules (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		org_id INTEGER,
 		name TEXT NOT NULL,
@@ -63,6 +64,7 @@ func newM3AEnv(t *testing.T, redis bool, orgID int64) *m3aEnv {
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rule_versions (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id INTEGER NOT NULL,
 		version INTEGER NOT NULL,
@@ -87,6 +89,8 @@ func newM3AEnv(t *testing.T, redis bool, orgID int64) *m3aEnv {
 		}
 	})
 
+	require.NoError(t, db.Exec("CREATE TABLE role_permissions (role_id INTEGER, action TEXT)").Error)
+	require.NoError(t, db.Exec("INSERT INTO role_permissions VALUES(7,'key:update')").Error)
 	env := &m3aEnv{db: db}
 	if redis {
 		env.mr = miniredis.RunT(t)
@@ -113,8 +117,11 @@ func newM3AEnv(t *testing.T, redis bool, orgID int64) *m3aEnv {
 			c.Set("org_id", orgID)
 		}
 		c.Set("username", "m3-tester")
+		c.Set("user_id", int64(7))
+		c.Set("role_id", int64(7))
 	})
 	r.POST("/guardrails", handler.Create)
+	r.POST("/guardrails/:id/copy", handler.CopyRule)
 	r.PUT("/guardrails/:id", handler.Update)
 	r.DELETE("/guardrails/:id", handler.Delete)
 	r.POST("/guardrails/:id/rollback", handler.Rollback)

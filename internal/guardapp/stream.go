@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,7 @@ type streamChunk struct {
 
 // streamItem 一条流缓冲：按字段累积的分片文本 + 流属性 + 空闲终检定时器。
 type streamItem struct {
+	apiKeyID  int64
 	orgID     int64
 	traceID   string
 	fields    map[string]*strings.Builder
@@ -103,15 +105,18 @@ func NewStreamStore(ttl time.Duration, maxEntries int, finalize func(req *Detect
 // Append 追加一个分片：建/刷新流条目（TTL 顺延）并重置空闲定时器。返回
 // 当前有文本的字段数。容量淘汰在锁内完成，被淘汰流的定时器一并停止。
 func (s *StreamStore) Append(orgID int64, traceID, field, text, model string, metadata map[string]string) int {
+	return s.appendBound(orgID, 0, traceID, field, text, model, metadata)
+}
+func (s *StreamStore) appendBound(orgID, keyID int64, traceID, field, text, model string, metadata map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := traceKey(orgID, traceID)
+	key := streamKey(orgID, keyID, traceID)
 	var it *streamItem
 	if el, ok := s.items[key]; ok {
 		it = el.Value.(*streamItem)
 	} else {
 		it = &streamItem{
-			orgID: orgID, traceID: traceID,
+			orgID: orgID, traceID: traceID, apiKeyID: keyID,
 			fields: map[string]*strings.Builder{streamFieldContent: {}, streamFieldReasoning: {}},
 			model:  model, metadata: metadata,
 		}
@@ -124,7 +129,7 @@ func (s *StreamStore) Append(orgID int64, traceID, field, text, model string, me
 			victim := back.Value.(*streamItem)
 			victim.timer.Stop()
 			s.lru.Remove(back)
-			delete(s.items, traceKey(victim.orgID, victim.traceID))
+			delete(s.items, streamKey(victim.orgID, victim.apiKeyID, victim.traceID))
 			s.evictedLRU.Add(1)
 			ingestDroppedTotal.Inc()
 		}
@@ -138,7 +143,7 @@ func (s *StreamStore) Append(orgID int64, traceID, field, text, model string, me
 	if it.timer != nil {
 		it.timer.Stop()
 	}
-	it.timer = time.AfterFunc(s.idle, func() { s.finalizeIdle(orgID, traceID) })
+	it.timer = time.AfterFunc(s.idle, func() { s.finalizeIdle(orgID, keyID, traceID) })
 	it.expiresAt = s.now().Add(s.ttl)
 	s.lru.MoveToFront(s.items[key])
 	n := 0
@@ -152,17 +157,23 @@ func (s *StreamStore) Append(orgID int64, traceID, field, text, model string, me
 
 // Finalize 主动终检（final 分片）：取走并删除条目（一次性）。返回 nil
 // 表示无可终检文本（从未提交分片 / 已终检 / TTL 过期 / LRU 淘汰 / 空流）。
+func streamKey(org, key int64, trace string) string {
+	return strconv.FormatInt(key, 10) + "/" + traceKey(org, trace)
+}
 func (s *StreamStore) Finalize(orgID int64, traceID string) *DetectRequest {
+	return s.finalizeBound(orgID, 0, traceID)
+}
+func (s *StreamStore) finalizeBound(orgID, keyID int64, traceID string) *DetectRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.takeLocked(orgID, traceID)
+	return s.takeLocked(orgID, keyID, traceID)
 }
 
 // finalizeIdle 空闲终检回调（定时器 goroutine）：条目仍在（未被 final
 // 抢先/未被淘汰）才终检；递交在锁外执行。
-func (s *StreamStore) finalizeIdle(orgID int64, traceID string) {
+func (s *StreamStore) finalizeIdle(orgID, keyID int64, traceID string) {
 	s.mu.Lock()
-	req := s.takeLocked(orgID, traceID)
+	req := s.takeLocked(orgID, keyID, traceID)
 	s.mu.Unlock()
 	if req != nil && s.finalize != nil {
 		s.finalize(req)
@@ -171,8 +182,8 @@ func (s *StreamStore) finalizeIdle(orgID int64, traceID string) {
 
 // takeLocked 删除并返回终检请求；过期条目按 TTL 淘汰计数，空流/无条目
 // 返回 nil。必须已持有 s.mu。
-func (s *StreamStore) takeLocked(orgID int64, traceID string) *DetectRequest {
-	key := traceKey(orgID, traceID)
+func (s *StreamStore) takeLocked(orgID, keyID int64, traceID string) *DetectRequest {
+	key := streamKey(orgID, keyID, traceID)
 	el, ok := s.items[key]
 	if !ok {
 		return nil
@@ -192,7 +203,7 @@ func (s *StreamStore) takeLocked(orgID int64, traceID string) *DetectRequest {
 		return nil
 	}
 	return &DetectRequest{
-		OrgID:     orgID,
+		OrgID: orgID, APIKeyID: it.apiKeyID,
 		TraceID:   traceID,
 		Direction: string(guardrail.DirectionResponse),
 		Text:      it.text(),
@@ -251,14 +262,14 @@ func (a *App) handleStreamChunk(c *gin.Context) {
 		return
 	}
 	// 幂等：重复 seq 409（结构化 API 家族语义，客户可感知重试）。
-	if !a.Idem.Seen(c.GetInt64("org_id"), traceID, streamDirection, p.Seq) {
+	if !a.Idem.Seen(c.GetInt64("org_id"), streamKey(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID), streamDirection, p.Seq) {
 		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "duplicate",
 			"message": "stream chunk already ingested"}})
 		return
 	}
 
 	if p.Event == "chunk" {
-		n := a.Streams.Append(c.GetInt64("org_id"), traceID, p.Field, p.Text, p.Model, MetadataMap(p.Metadata))
+		n := a.Streams.appendBound(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID, p.Field, p.Text, p.Model, MetadataMap(p.Metadata))
 		c.JSON(http.StatusAccepted, gin.H{"accepted": true, "trace_id": traceID, "buffered": n})
 		return
 	}
@@ -267,9 +278,9 @@ func (a *App) handleStreamChunk(c *gin.Context) {
 	// 缓冲会丢尾段，跨 chunk/final 的关键词漏检）。无缓冲/空流记覆盖
 	// 缺口事件（fire-and-forget 语义不回错误，202 如实告知）。
 	if p.Text != "" {
-		a.Streams.Append(c.GetInt64("org_id"), traceID, p.Field, p.Text, p.Model, MetadataMap(p.Metadata))
+		a.Streams.appendBound(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID, p.Field, p.Text, p.Model, MetadataMap(p.Metadata))
 	}
-	req := a.Streams.Finalize(c.GetInt64("org_id"), traceID)
+	req := a.Streams.finalizeBound(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID)
 	if req == nil {
 		a.recordStreamGap(c, traceID, "stream finalized with no buffered text")
 		c.JSON(http.StatusAccepted, gin.H{"accepted": false, "trace_id": traceID, "reason": "no_buffer"})

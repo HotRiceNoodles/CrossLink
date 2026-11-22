@@ -24,6 +24,8 @@ import (
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/repository"
+	"github.com/crosslink/internal/secret"
+	"github.com/crosslink/internal/service"
 	"github.com/crosslink/internal/settings"
 	"github.com/crosslink/internal/version"
 	"github.com/crosslink/internal/worker"
@@ -170,7 +172,23 @@ func Run(migrateOnly bool, configDir string) error {
 	traceStore := NewTraceStore(time.Duration(cfg.Guard.TraceStore.TTLMinutes)*time.Minute, cfg.Guard.TraceStore.MaxEntries)
 	traceRecorder := NewTraceRecorder(repository.NewGuardTraceRepo(db), traceStore)
 	detectorPool := worker.NewPool("guard", cfg.Guard.Queue.Workers, cfg.Guard.Queue.QueueSize, cfg.Guard.Queue.OverflowCap)
+	policyCtx, stopPolicy := context.WithCancel(context.Background())
+	defer stopPolicy()
+	outbound := service.NewSsrfAllowlistService(db, rdb, cfg.Gateway.InternalAllowCIDRs, cfg.Gateway.InternalAllowCIDRsFromEnv)
+	outbound.LoadColdStart(policyCtx)
+	go outbound.Start(policyCtx)
 	grSvc := guardrail.NewGuardrailService(db, rdb)
+	resolver := secret.NewSecretResolver(cfg.SecretManager.CacheTTL)
+	resolver.Register(secret.NewEnvSecretStore())
+	reviewStore, _, err := secret.InitActiveEncryption(db, cfg.SecretManager.EncryptionKey, cp)
+	if err != nil {
+		return err
+	}
+	if reviewStore != nil {
+		resolver.Register(reviewStore)
+		resolver.Register(reviewStore.AsV2())
+	}
+	grSvc.SetReviewSecrets(resolver, reviewStore)
 	a := &App{
 		Cfg:       cfg,
 		DB:        db,

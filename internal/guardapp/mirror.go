@@ -44,11 +44,13 @@ func (a *App) registerMirrorRoutes(r *gin.Engine) {
 	g := r.Group("/mirror", IngestAuth(a.TokenRepo, a.IngestCache), a.Limiter.Middleware())
 	g.POST("/v1/chat/completions", a.mirrorHandler(ProtocolOpenAI))
 	g.POST("/v1/messages", a.mirrorHandler(ProtocolAnthropic))
+	g.POST("/v1/responses", a.mirrorHandler(ProtocolResponses))
 	g.POST("/traces/:trace_id/response", a.handleMirrorResponse)
 
 	alias := r.Group("/v1", IngestAuth(a.TokenRepo, a.IngestCache), a.Limiter.Middleware())
 	alias.POST("/chat/completions", a.mirrorHandler(ProtocolOpenAI))
 	alias.POST("/messages", a.mirrorHandler(ProtocolAnthropic))
+	alias.POST("/responses", a.mirrorHandler(ProtocolResponses))
 }
 
 // readMirrorBody 读镜像报文体并按 Content-Encoding 解压：gzip 解压后重检
@@ -157,13 +159,13 @@ func (a *App) mirrorHandler(protocol string) gin.HandlerFunc {
 		// 回 202 duplicate，不回 409）；生成型 trace 全新，不会重复。
 		// Seen 首次=true：false 即重复回放。
 		if !strings.HasPrefix(traceID, mirrorTracePrefix) &&
-			!a.Idem.Seen(c.GetInt64("org_id"), traceID, direction, 0) {
+			!a.Idem.Seen(c.GetInt64("org_id"), streamKey(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID), direction, 0) {
 			mirrorIngestTotal.WithLabelValues("duplicate").Inc()
 			c.JSON(http.StatusAccepted, gin.H{"accepted": true, "trace_id": traceID, "duplicate": true})
 			return
 		}
 
-		text, uninspectable, ok := NormalizeContent(body, protocol)
+		normalized, ok := NormalizeInput(body, protocol)
 		if !ok {
 			// 畸形报文记事件（无检测文本的覆盖缺口），但不向网络层镜像端
 			// 回错误——重试同样畸形，只制造噪声。
@@ -173,10 +175,12 @@ func (a *App) mirrorHandler(protocol string) gin.HandlerFunc {
 		}
 		req := &DetectRequest{
 			OrgID:         c.GetInt64("org_id"),
+			APIKeyID:      c.GetInt64("bound_key_id"),
 			TraceID:       traceID,
 			Direction:     direction,
-			Text:          text,
-			Uninspectable: uninspectable,
+			Text:          normalized.Text,
+			Input:         normalized.Input,
+			Uninspectable: normalized.Uninspectable,
 			Model:         mirrorModel(body),
 		}
 		if !a.Pipeline.SubmitAsync(req) {
@@ -234,13 +238,14 @@ func (a *App) handleMirrorResponse(c *gin.Context) {
 	}
 
 	// Seen 首次=true：false 即重复回放，不重跑管线。
-	if !a.Idem.Seen(c.GetInt64("org_id"), traceID, direction, 0) {
+	if !a.Idem.Seen(c.GetInt64("org_id"), streamKey(c.GetInt64("org_id"), c.GetInt64("bound_key_id"), traceID), direction, 0) {
 		mirrorIngestTotal.WithLabelValues("duplicate").Inc()
 		c.JSON(http.StatusAccepted, gin.H{"accepted": true, "trace_id": traceID, "duplicate": true})
 		return
 	}
 	req := &DetectRequest{
 		OrgID:         c.GetInt64("org_id"),
+		APIKeyID:      c.GetInt64("bound_key_id"),
 		TraceID:       traceID,
 		Direction:     direction,
 		Text:          text,

@@ -20,6 +20,7 @@ func setupSeedDB(t *testing.T) *gorm.DB {
 	// runtime; calling it here would choke on the model's gorm:"type:jsonb" tag,
 	// which is invalid sqlite syntax. Mirrors the production column types.
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rules (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		org_id INTEGER,
 		name TEXT NOT NULL,

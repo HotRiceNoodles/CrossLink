@@ -11,6 +11,7 @@ const (
 	ProtocolOpenAI    = "openai"
 	ProtocolAnthropic = "anthropic"
 	ProtocolGeneric   = "generic"
+	ProtocolResponses = "responses"
 )
 
 // IngestPayload 结构化检测 API 请求体（设计 DD-2）。Content 为纯 JSON 字符
@@ -31,6 +32,7 @@ type IngestPayload struct {
 
 // Normalized 是规范化层的输出：进入检测管线的检测文本及其元数据。
 type Normalized struct {
+	Input         *guardrail.DetectionInput
 	Text          string
 	Uninspectable bool // 结构化报文携带非文本媒体块（网关 strict coverage 同语义）
 	Model         string
@@ -45,6 +47,8 @@ func protocolPath(protocol string) string {
 		return "/v1/chat/completions"
 	case ProtocolAnthropic:
 		return "/v1/messages"
+	case ProtocolResponses:
+		return "/v1/responses"
 	}
 	return ""
 }
@@ -59,17 +63,26 @@ func protocolPath(protocol string) string {
 //
 // ok=false 表示无可检文本（畸形报文/空内容），调用方据此拒绝或记事件。
 func NormalizeContent(content json.RawMessage, protocol string) (text string, uninspectable bool, ok bool) {
+	n, ok := NormalizeInput(content, protocol)
+	return n.Text, n.Uninspectable, ok
+}
+
+// NormalizeInput 保留协议片段；纯正文不推测角色、来源或可信任务。
+func NormalizeInput(content json.RawMessage, protocol string) (Normalized, bool) {
+	plain := func(text string) (Normalized, bool) {
+		return Normalized{Text: text, Protocol: protocol, Input: guardrail.PlainDetectionInput(text)}, true
+	}
 	raw := trimJSON(content)
 	if len(raw) == 0 {
-		return "", false, false
+		return Normalized{}, false
 	}
 	switch raw[0] {
 	case '"':
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" {
-			return "", false, false
+			return Normalized{}, false
 		}
-		return s, false, true
+		return plain(s)
 	case '{':
 		if path := protocolPath(protocol); path != "" {
 			return extractBody(raw, path)
@@ -78,29 +91,33 @@ func NormalizeContent(content json.RawMessage, protocol string) (text string, un
 			Content string `json:"content"`
 		}
 		if json.Unmarshal(raw, &obj) != nil || obj.Content == "" {
-			return "", false, false
+			return Normalized{}, false
 		}
-		return obj.Content, false, true
+		return plain(obj.Content)
 	case '[':
 		path := protocolPath(protocol)
 		if path == "" {
-			return "", false, false
+			return Normalized{}, false
 		}
-		wrapped, err := json.Marshal(map[string]json.RawMessage{"messages": raw})
+		key := "messages"
+		if protocol == ProtocolResponses {
+			key = "input"
+		}
+		wrapped, err := json.Marshal(map[string]json.RawMessage{key: raw})
 		if err != nil {
-			return "", false, false
+			return Normalized{}, false
 		}
 		return extractBody(wrapped, path)
 	}
-	return "", false, false
+	return Normalized{}, false
 }
 
-func extractBody(body []byte, path string) (string, bool, bool) {
+func extractBody(body []byte, path string) (Normalized, bool) {
 	ex := guardrail.ExtractContent(body, path)
 	if ex == nil || ex.Text == "" {
-		return "", false, false
+		return Normalized{}, false
 	}
-	return ex.Text, ex.Uninspectable, true
+	return Normalized{Text: ex.Text, Uninspectable: ex.Uninspectable, Input: ex.DetectionInput()}, true
 }
 
 // trimJSON 去掉 JSON 值外的空白。

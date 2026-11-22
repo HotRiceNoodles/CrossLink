@@ -170,6 +170,16 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 				continue
 			}
 			if err := tx.Exec(stmt).Error; err != nil {
+				// Audit item 6 (upgrade compat): databases that applied the
+				// pre-renumbering commercial overlay recorded OLD version
+				// numbers, so the renumbered files replay the same logical
+				// change. SQLite has no "ADD COLUMN IF NOT EXISTS"; a
+				// duplicate-column error on an ALTER…ADD COLUMN means the
+				// column is already there — idempotent skip, every other
+				// failure still fails the migration honestly.
+				if isAlterAddColumn(stmt) && strings.Contains(err.Error(), "duplicate column name") {
+					continue
+				}
 				tx.Rollback()
 				return fmt.Errorf("%s statement %d: %w\n%s", name, i, err, truncate(stmt, 200))
 			}
@@ -194,6 +204,20 @@ func (s *SQLiteDialect) RunMigrations(ctx context.Context) error {
 
 	slog.Info("database migrated successfully", "driver", s.Name())
 	return nil
+}
+
+// isAlterAddColumn reports whether stmt is an ALTER TABLE … ADD COLUMN
+// statement (the only shape eligible for duplicate-column replay tolerance).
+func isAlterAddColumn(stmt string) bool {
+	trimmed := strings.TrimSpace(stmt)
+	if len(trimmed) < 12 {
+		return false
+	}
+	head := strings.ToUpper(trimmed[:12])
+	if !strings.HasPrefix(head, "ALTER TABLE") {
+		return false
+	}
+	return strings.Contains(strings.ToUpper(trimmed), "ADD COLUMN")
 }
 
 // AcquireMigrationLock uses a file lock for SQLite.

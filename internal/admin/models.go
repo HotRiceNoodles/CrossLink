@@ -35,6 +35,12 @@ type ModelHandler struct {
 	cache    CacheInvalidator
 	cacheSvc *service.CacheService
 	auditSvc *service.AuditService
+	// OnModelChange is called after a successful local commit of a model
+	// mapping mutation (create/update/delete), with the affected model name.
+	// Wired by the app layer to the M1 cross-instance invalidate_model
+	// broadcast; nil (single-instance, no Redis) skips the call — the local
+	// cache invalidation above already covers this node.
+	OnModelChange func(modelName string)
 }
 
 func NewModelHandler(repo *repository.ProviderModelCRUDRepo, cache CacheInvalidator, cacheSvc *service.CacheService, auditSvc *service.AuditService) *ModelHandler {
@@ -78,6 +84,16 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "prices must be non-negative")
 		return
 	}
+	// M3.2 write half: request_overrides / allowed_extensions keys are
+	// validated BEFORE the mapping row is persisted — illegal keys fail the
+	// write instead of being silently ignored at dispatch.
+	if err := router.ValidateModelExtensionConfig(input.ExtraConfig); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "model_extension_invalid", "error": err.Error()}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrModelExtensionInvalid, err.Error())
+		return
+	}
 
 	if input.RoutingStrategy == "" {
 		input.RoutingStrategy = "weighted_random"
@@ -114,6 +130,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 	h.cache.Invalidate()
 	h.cacheSvc.FlushByModel(c.Request.Context(), input.ModelName)
 	h.cacheSvc.InvalidateModelCache(input.ModelName)
+	if h.OnModelChange != nil {
+		h.OnModelChange(input.ModelName)
+	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "model:create", "model", fmt.Sprintf("%d", m.ID), m.ModelName, service.AuditDetail(map[string]any{"after": map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID}}))
 	}
@@ -149,6 +168,9 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 	h.cache.Invalidate()
 	h.cacheSvc.FlushByModel(c.Request.Context(), m.ModelName)
 	h.cacheSvc.InvalidateModelCache(m.ModelName)
+	if h.OnModelChange != nil {
+		h.OnModelChange(m.ModelName)
+	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "model:delete", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"before": map[string]any{"id": m.ID, "model_name": m.ModelName}}))
 	}
@@ -174,6 +196,12 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		Status          *int16          `json:"status"`
 		RoutingStrategy *string         `json:"routing_strategy"`
 		ExtraConfig     json.RawMessage `json:"extra_config"`
+		// M4/P-8: recognized only so a rename attempt gets an explicit 400
+		// instead of being silently dropped by the update whitelist. The two
+		// keys key the resolver/response caches — changing them in place would
+		// desynchronize every cache; delete + recreate is the sanctioned path.
+		ModelName     *string `json:"model_name"`
+		ProviderModel *string `json:"provider_model"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		if h.auditSvc != nil {
@@ -196,6 +224,17 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, "invalid routing strategy")
 		return
 	}
+	// M3.2 write half (same rule as Create): extension control keys must be
+	// valid before the rewrite is persisted.
+	if input.ExtraConfig != nil {
+		if err := router.ValidateModelExtensionConfig(input.ExtraConfig); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "model_extension_invalid", "error": err.Error()}))
+			}
+			errorResp(c, http.StatusBadRequest, ErrModelExtensionInvalid, err.Error())
+			return
+		}
+	}
 
 	orgID := GetOrgID(c)
 	m, err := h.repo.GetByID(c.Request.Context(), id, orgID)
@@ -207,6 +246,18 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		return
 	}
 	before := map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "currency": m.Currency, "status": m.Status, "routing_strategy": m.RoutingStrategy}
+
+	// M4/P-8: model_name and provider_model are immutable — passing a
+	// DIFFERENT value is an explicit 400; passing the same value (or omitting
+	// the keys) stays compatible with clients that echo the full object back.
+	if (input.ModelName != nil && *input.ModelName != m.ModelName) ||
+		(input.ProviderModel != nil && *input.ProviderModel != m.ProviderModel) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"reason": "model_immutable_fields"}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrModelImmutableFields, "model_name and provider_model are immutable; delete and recreate the mapping to change them")
+		return
+	}
 
 	if input.Weight != nil {
 		m.Weight = *input.Weight
@@ -243,6 +294,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	h.cache.Invalidate()
 	h.cacheSvc.FlushByModel(c.Request.Context(), m.ModelName)
 	h.cacheSvc.InvalidateModelCache(m.ModelName)
+	if h.OnModelChange != nil {
+		h.OnModelChange(m.ModelName)
+	}
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "model:update", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "currency": m.Currency, "status": m.Status, "routing_strategy": m.RoutingStrategy}}))
 	}

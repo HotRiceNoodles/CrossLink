@@ -17,6 +17,10 @@ type AnthropicRequest struct {
 	Tools         json.RawMessage    `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage    `json:"tool_choice,omitempty"`
 	Thinking      json.RawMessage    `json:"thinking,omitempty"`
+	// Extensions is the M3 admission envelope, set by the inbound handler
+	// AFTER unmarshal — json:"-" means client JSON can never populate it.
+	// AnthropicToOpenAI carries it onto the internal request verbatim.
+	Extensions *ProtocolExtensions `json:"-"`
 }
 
 type AnthropicMessage struct {

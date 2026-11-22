@@ -34,6 +34,8 @@ const (
 // DetectRequest 是规范化层输出进入管线的形态（Step 7 API 处理器构造，
 // M2 镜像端点复用）。
 type DetectRequest struct {
+	APIKeyID      int64
+	Input         *guardrail.DetectionInput
 	OrgID         int64
 	TraceID       string
 	Direction     string // guardrail.DirectionRequest / DirectionResponse
@@ -124,12 +126,21 @@ func (p *Pipeline) detect(ctx context.Context, req *DetectRequest, mode string) 
 		}
 	}
 
+	input := req.Input
+	if input == nil {
+		input = guardrail.PlainDetectionInput(req.Text)
+		if req.Uninspectable {
+			input.Coverage = "partial"
+		}
+	}
 	res, err := p.svc.Check(cctx, &guardrail.CheckRequest{
+		Input:     input,
 		Content:   req.Text,
 		Direction: guardrail.Direction(req.Direction),
 		Model:     req.Model,
 		OrgID:     req.OrgID,
-		Prompt:    prompt,
+		APIKeyID:  req.APIKeyID, Bypass: true,
+		Prompt: prompt,
 	})
 
 	out = &DetectResult{Verdict: VerdictFromCheck(res, err), Action: bypassAction(res), EngineCtx: checkCtx}
@@ -199,7 +210,13 @@ func (p *Pipeline) buildEvents(req *DetectRequest, res *DetectResult) []model.Gu
 	}
 
 	for _, m := range res.Matched {
-		hit(m.RuleID, m.Version, "", bypassRuleAction(m.Action), "", reason)
+		if m.EngineType == guardrail.ModelReview {
+			hit(m.RuleID, m.Version, m.EngineType, bypassRuleAction(m.Action), "", m.AuditReason)
+			rows[len(rows)-1].ContentPreview = ""
+			rows[len(rows)-1].Metadata = nil
+		} else {
+			hit(m.RuleID, m.Version, "", bypassRuleAction(m.Action), "", reason)
+		}
 	}
 	switch {
 	case res.Verdict == model.GuardVerdictError:

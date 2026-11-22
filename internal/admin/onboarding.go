@@ -12,6 +12,7 @@ import (
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/license"
+	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -22,6 +23,12 @@ import (
 	"gorm.io/gorm"
 	"log/slog"
 )
+
+// ActionAuthorizer resolves role→action permissions. *middleware.PermissionCache
+// satisfies it; the indirection exists so tests can stub it without a DB.
+type ActionAuthorizer interface {
+	HasPermission(roleID int64, action string) bool
+}
 
 // OnboardingHandler powers the first-run wizard: a stateless upstream probe
 // (Probe) and an atomic provider+models+key creator (Commit) wrapped in one
@@ -35,7 +42,9 @@ type OnboardingHandler struct {
 	resolver         *router.Resolver
 	cacheSvc         *service.CacheService
 	auditSvc         *service.AuditService
+	authorizer       ActionAuthorizer
 	onRegistryChange func(action, providerName string)
+	onModelChange    func(modelName string)
 }
 
 func NewOnboardingHandler(
@@ -55,10 +64,34 @@ func NewOnboardingHandler(
 	}
 }
 
+// SetAuthorizer wires the RBAC action checker used by Commit (audit item 1:
+// the wizard is a composite creator and must gate each write by the same
+// action the individual CRUD routes use). nil fails CLOSED — a handler
+// without an authorizer is a wiring bug, not a license to skip checks.
+func (h *OnboardingHandler) SetAuthorizer(a ActionAuthorizer) {
+	h.authorizer = a
+}
+
+// authorizeAction reports whether the caller's role holds the action in the
+// current tier. False on a nil authorizer (fail-closed).
+func (h *OnboardingHandler) authorizeAction(roleID int64, action string) bool {
+	if h.authorizer == nil {
+		return false
+	}
+	return h.authorizer.HasPermission(roleID, action) && license.TierAllowsAction(action)
+}
+
 // SetOnRegistryChange wires the multi-instance registry-sync callback (same
 // pattern as ProviderHandler.OnRegistryChange, assigned from app.go).
 func (h *OnboardingHandler) SetOnRegistryChange(fn func(action, providerName string)) {
 	h.onRegistryChange = fn
+}
+
+// SetOnModelChange wires the M1 model-mapping notification callback: after a
+// successful wizard commit, every written model name is broadcast so other
+// instances drop their resolver routes for it (targeted invalidation).
+func (h *OnboardingHandler) SetOnModelChange(fn func(modelName string)) {
+	h.onModelChange = fn
 }
 
 // ---- Probe: stateless upstream connectivity + model enumeration ----
@@ -278,21 +311,71 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		return
 	}
 
+	// --- operation-level authorization (audit item 1 + acceptance boundary 2) ---
+	// The wizard composes three writes; gate each by the same action the
+	// individual CRUD routes use, checked against the ACTUAL request shape:
+	// reuse skips provider:create, keyless commits skip key:create. Fail-closed
+	// on a missing authorizer. This runs BEFORE the provider-existence
+	// pre-check: a caller without the required actions must not learn
+	// existing provider IDs/names from the structured 409.
+	{
+		// Same degraded posture as middleware.RequireAction (audit item 2):
+		// unresolved permission data must deny this composite writer.
+		if middleware.AuthPermDegraded(c) {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "auth_degraded"}))
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "permission data unavailable, retry shortly", "error_code": "auth_degraded"})
+			return
+		}
+		roleID := GetRoleID(c)
+		required := make([]string, 0, 3)
+		// provider:create is required whenever a NEW provider row would be
+		// written: always when reuse was not requested, and after the
+		// pre-check below when reuse was requested but the name is free.
+		if !input.ReuseProvider {
+			required = append(required, "provider:create")
+		}
+		if len(input.Models) > 0 {
+			required = append(required, "model:create")
+		}
+		if input.Key != nil {
+			required = append(required, "key:create")
+		}
+		for _, action := range required {
+			if !h.authorizeAction(roleID, action) {
+				if h.auditSvc != nil {
+					h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "permission_denied", "action": action}))
+				}
+				c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions", "error_code": "permission_denied", "action": action})
+				return
+			}
+		}
+	}
+
 	// --- pre-check: does a provider with this name already exist? ---
-	// Provider.Name has a global uniqueIndex, so the check is name-only.
-	// This lets the wizard offer "reuse existing provider, just create a key"
-	// instead of failing blindly on the DB constraint.
+	// Provider.Name has a global uniqueIndex, so the check is name-only. When
+	// the caller carries an org context the lookup is org-scoped (audit item 1:
+	// same rule as ProviderRepo.GetByID) so a cross-tenant name collision is
+	// neither reusable nor disclosed — it surfaces later as a plain 409 from
+	// the DB constraint. Platform context (orgID=0) stays global: that is the
+	// Community/Pro single-tenant shape and the Enterprise platform view.
 	var existingProvider model.Provider
 	reuseMode := false
 	{
 		var found model.Provider
-		result := h.db.WithContext(c.Request.Context()).Select("id", "name").Where("name = ?", input.Provider.Name).First(&found)
+		q := h.db.WithContext(c.Request.Context()).Select("id", "name").Where("name = ?", input.Provider.Name)
+		if orgID != 0 {
+			q = q.Where("org_id = ?", orgID)
+		}
+		result := q.First(&found)
 		if result.Error == nil {
 			if !input.ReuseProvider {
 				if h.auditSvc != nil {
 					h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "provider_exists"}))
 				}
 				// Structured 409: wizard prompts the user to reuse or rename.
+				// (Authorization already passed above — provider:create held.)
 				c.JSON(http.StatusConflict, gin.H{
 					"error":                  "provider name already exists",
 					"error_code":             ErrProviderExists,
@@ -312,6 +395,19 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		}
 	}
 
+	// Reuse requested but the name is free in scope → a NEW provider row will
+	// be written; provider:create is required after all (checked here, before
+	// any write, and without disclosing anything — nothing was found).
+	if input.ReuseProvider && !reuseMode {
+		if !h.authorizeAction(GetRoleID(c), "provider:create") {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "permission_denied", "action": "provider:create"}))
+			}
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions", "error_code": "permission_denied", "action": "provider:create"})
+			return
+		}
+	}
+
 	// --- build models in memory (provider_id filled inside tx) ---
 	models := make([]*model.ProviderModel, 0, len(input.Models))
 	for _, m := range input.Models {
@@ -326,6 +422,16 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			RoutingStrategy: m.RoutingStrategy,
 			Status:          1,
 		})
+	}
+
+	// M0/M4: pre-persist validation — an invalid api_version or timeout must
+	// fail the wizard transaction, not leave a row the runtime refuses to load.
+	if err := provider.ValidateCommonExtraConfig(input.Provider.ExtraConfig); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "provider_api_version_invalid", "error": err.Error()}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
 	}
 
 	// --- build provider (encrypt outside tx; pure CPU) ---
@@ -404,6 +510,22 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			if err := tx.Create(p).Error; err != nil {
 				return classifyCreateErr(err, "create provider")
 			}
+		} else {
+			// Re-read the reused provider INSIDE the transaction, scoped to the
+			// caller's org (audit item 1): a provider deleted or moved between
+			// the pre-check and this commit must not receive mappings, and the
+			// tenant check lives in the same snapshot as the writes.
+			var cnt int64
+			recheck := tx.Model(&model.Provider{}).Where("id = ?", existingProvider.ID)
+			if orgID != 0 {
+				recheck = recheck.Where("org_id = ?", orgID)
+			}
+			if err := recheck.Count(&cnt).Error; err != nil {
+				return classifyCreateErr(err, "recheck existing provider")
+			}
+			if cnt == 0 {
+				return fmt.Errorf("provider no longer available for reuse")
+			}
 		}
 		providerID := p.ID
 		// In reuse mode, soft-dedup models: skip any model_name that already
@@ -470,8 +592,9 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	// --- post-commit side effects (best effort) ---
 	// Only sync the runtime registry when a NEW provider was created. In reuse
 	// mode the existing provider is already registered from its original creation.
+	var applyErr error
 	if !reuseMode {
-		h.syncRegistry(p)
+		applyErr = h.syncRegistry(p)
 		if h.onRegistryChange != nil {
 			h.onRegistryChange("reload", p.Name)
 		}
@@ -481,6 +604,22 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 	if h.cacheSvc != nil {
 		h.cacheSvc.FlushAll(c.Request.Context())
+	}
+	// M1: broadcast the written model names so other instances drop their
+	// resolver routes for exactly those models (local Invalidate above only
+	// helps this node). Deduplicated — reuse mode often re-maps one name.
+	if h.onModelChange != nil {
+		seen := make(map[string]struct{}, len(models))
+		for _, m := range models {
+			if m == nil || m.ModelName == "" {
+				continue
+			}
+			if _, dup := seen[m.ModelName]; dup {
+				continue
+			}
+			seen[m.ModelName] = struct{}{}
+			h.onModelChange(m.ModelName)
+		}
 	}
 	if input.Key != nil && input.Key.Name != "" && OnKeyCreated != nil {
 		OnKeyCreated(input.Key.Name, "", rawKey, "")
@@ -507,6 +646,11 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		"provider_id":     p.ID,
 		"model_ids":       modelIDs,
 		"reused_provider": reuseMode,
+		"applied":         applyErr == nil,
+	}
+	if applyErr != nil {
+		slog.Error("onboarding: provider saved but not applied to local registry", "name", p.Name, "error", applyErr)
+		resp["apply_error"] = applyErr.Error()
 	}
 	if key != nil {
 		/* 明文密钥仅在建钥时返回（调用方负责展示一次）；未建钥不含该字段 */
@@ -566,16 +710,20 @@ func (h *OnboardingHandler) encryptExtraConfig(p *model.Provider) error {
 }
 
 // syncRegistry mirrors ProviderHandler.syncRegistry (providers.go:260).
-func (h *OnboardingHandler) syncRegistry(p *model.Provider) {
+// syncRegistry applies the committed provider row into the local registry.
+// M0: returns a structured error so the wizard response can distinguish
+// "saved but not applied" instead of reporting success for a provider the
+// runtime refused to load.
+func (h *OnboardingHandler) syncRegistry(p *model.Provider) error {
 	if p.Status != 1 {
-		return
+		return nil
 	}
 	cp := *p
 	if h.secretResolver != nil {
 		resolved, err := h.secretResolver.Resolve(context.Background(), cp.APIKey)
 		if err != nil {
 			slog.Error("onboarding syncRegistry: failed to resolve api_key", "name", p.Name, "error", err)
-			return
+			return fmt.Errorf("resolve api_key: %w", err)
 		}
 		cp.APIKey = resolved
 		if len(cp.ExtraConfig) > 0 {
@@ -583,7 +731,7 @@ func (h *OnboardingHandler) syncRegistry(p *model.Provider) {
 			if json.Unmarshal(cp.ExtraConfig, &config) == nil {
 				if err := h.secretResolver.ResolveExtraConfigSecrets(context.Background(), config); err != nil {
 					slog.Error("onboarding syncRegistry: failed to resolve extra_config secrets", "name", p.Name, "error", err)
-					return
+					return fmt.Errorf("resolve extra_config secrets: %w", err)
 				}
 				if data, err := json.Marshal(config); err == nil {
 					cp.ExtraConfig = data
@@ -591,13 +739,14 @@ func (h *OnboardingHandler) syncRegistry(p *model.Provider) {
 			}
 		}
 	}
-	prov, err := provider.NewFromModel(&cp, 300*time.Second)
+	prov, err := provider.NewFromModel(&cp, provider.ResolveHTTPTimeout(cp.ExtraConfig, 300*time.Second))
 	if err != nil {
 		slog.Error("onboarding: failed to create provider", "name", p.Name, "adapter_type", p.AdapterType, "error", err)
-		return
+		return fmt.Errorf("create provider (adapter %s): %w", p.AdapterType, err)
 	}
 	h.registry.Register(p.Name, prov)
 	slog.Info("onboarding: synced provider to registry", "name", p.Name, "adapter_type", p.AdapterType)
+	return nil
 }
 
 // classifyCreateErr annotates a GORM create error with which step failed while

@@ -63,6 +63,8 @@ const (
 	// Models
 	ErrPricesNegative         = "prices_negative"
 	ErrInvalidRoutingStrategy = "invalid_routing_strategy"
+	ErrModelImmutableFields   = "model_immutable_fields"
+	ErrModelExtensionInvalid  = "model_extension_invalid"
 
 	// System settings
 	ErrCircuitBreakerThreshold = "circuit_breaker_threshold"

@@ -127,7 +127,8 @@ func TestGuardTablesMigration(t *testing.T) {
 
 			// Model parity: write through the gorm models, read back.
 			tok := &model.GuardIngestToken{OrgID: 7, Name: "edge-mirror", TokenHash: "a" + strings.Repeat("0", 63), KeyPrefix: "cg-test", Status: 1}
-			if err := p.db.Create(tok).Error; err != nil {
+			// 该历史迁移的表尚无后续接入凭证绑定列。
+			if err := p.db.Omit("APIKeyID").Create(tok).Error; err != nil {
 				t.Fatalf("insert token: %v", err)
 			}
 			var gotTok model.GuardIngestToken

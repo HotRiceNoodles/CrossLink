@@ -45,7 +45,17 @@ func NewProviderHandler(repo ProviderRepository, modelRepo ProviderModelReposito
 // SetFixtureStore enables VCR recording. Called from app.go after construction.
 func (h *ProviderHandler) SetFixtureStore(store provider.FixtureStore) { h.fixtureStore = store }
 
+// denyNoOrgScope now lives in org_scope.go (OrgScopeGuard is the unified
+// admin-surface admission; the checks below stay as handler-level defense in
+// depth).
+
 func (h *ProviderHandler) List(c *gin.Context) {
+	// Audit item 2: explicit platform-scope rule — orgless Enterprise
+	// non-admins get an empty list, not the global catalog.
+	if denyNoOrgScope(c) {
+		c.JSON(http.StatusOK, gin.H{"data": []model.Provider{}})
+		return
+	}
 	orgID := GetOrgID(c)
 	providers, err := h.repo.List(c.Request.Context(), orgID)
 	if err != nil {
@@ -97,6 +107,16 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrProviderURLInvalid, urlMsg)
 		return
 	}
+	// M0/M4: validate version- and range-gated keys BEFORE the row is
+	// persisted — an invalid value must fail the write, not surface as a
+	// skipped provider at startup or a request-time 400 storm.
+	if err := provider.ValidateCommonExtraConfig(input.ExtraConfig); err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "provider:create", "provider", "", input.Name, service.AuditDetail(map[string]any{"reason": "provider_api_version_invalid", "error": err.Error()}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+		return
+	}
 
 	p := &model.Provider{
 		Name:        input.Name,
@@ -124,7 +144,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		internalErr(c, err, "create provider failed")
 		return
 	}
-	h.syncRegistry(p)
+	applyErr := h.syncRegistry(p)
 	h.cache.Invalidate()
 	if h.cacheSvc != nil {
 		h.cacheSvc.FlushAll(c.Request.Context())
@@ -135,7 +155,14 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "provider:create", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{"after": sanitizeProviderMap(input)}))
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": redactExtraConfig(p)})
+	// M0: distinguish persisted from applied — a config that saved but failed
+	// to build/apply into the local registry must not masquerade as live.
+	resp := gin.H{"data": redactExtraConfig(p), "applied": applyErr == nil}
+	if applyErr != nil {
+		slog.Error("provider saved but not applied to local registry", "name", p.Name, "error", applyErr)
+		resp["apply_error"] = applyErr.Error()
+	}
+	c.JSON(http.StatusCreated, resp)
 }
 
 func (h *ProviderHandler) Update(c *gin.Context) {
@@ -146,6 +173,12 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 			h.auditSvc.LogFailure(c, "provider:update", "provider", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	// Audit item 2: orgless Enterprise non-admin must not resolve providers
+	// through the global scope (same deny as List, object form).
+	if denyNoOrgScope(c) {
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
@@ -173,6 +206,19 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
 		return
+	}
+
+	// M0/M4: pre-persist validation of the incoming extra_config (same rule
+	// as Create). The already-stored config stays valid unless explicitly
+	// rewritten, so validating only non-nil input is sufficient here.
+	if input.ExtraConfig != nil {
+		if err := provider.ValidateCommonExtraConfig(input.ExtraConfig); err != nil {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "provider_api_version_invalid", "error": err.Error()}))
+			}
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, err.Error())
+			return
+		}
 	}
 
 	if input.Name != nil {
@@ -234,7 +280,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		internalErr(c, err, "update provider failed")
 		return
 	}
-	h.syncRegistry(p)
+	applyErr := h.syncRegistry(p)
 	h.cache.Invalidate()
 	// Only flush cache if functional fields changed
 	if input.BaseURL != nil || input.APIKey != nil || input.AdapterType != nil || input.Status != nil || input.ExtraConfig != nil {
@@ -248,7 +294,12 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if h.auditSvc != nil {
 		h.auditSvc.LogFromContext(c, "provider:update", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"before": before, "after": sanitizeProviderFromModel(p)}))
 	}
-	c.JSON(http.StatusOK, gin.H{"data": redactExtraConfig(p)})
+	resp := gin.H{"data": redactExtraConfig(p), "applied": applyErr == nil}
+	if applyErr != nil {
+		slog.Error("provider saved but not applied to local registry", "name", p.Name, "error", applyErr)
+		resp["apply_error"] = applyErr.Error()
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *ProviderHandler) Delete(c *gin.Context) {
@@ -259,6 +310,10 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 			h.auditSvc.LogFailure(c, "provider:delete", "provider", c.Param("id"), "", service.AuditDetail(map[string]any{"reason": "invalid_id"}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	if denyNoOrgScope(c) { // audit item 2, object form
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
@@ -301,11 +356,16 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-func (h *ProviderHandler) syncRegistry(p *model.Provider) {
+// syncRegistry applies a persisted provider row into the local runtime
+// registry. M0: it now returns a structured error so Create/Update can tell
+// the caller "saved but not applied" — a persisted config that fails to
+// resolve secrets or construct must not silently masquerade as live. A
+// disabled provider is an intentional removal, not an apply failure.
+func (h *ProviderHandler) syncRegistry(p *model.Provider) error {
 	if p.Status != 1 {
 		h.registry.Remove(p.Name)
 		slog.Info("unregistered provider (disabled)", "name", p.Name)
-		return
+		return nil
 	}
 	// Work on a copy to avoid mutating the DB model
 	cp := *p
@@ -313,7 +373,7 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 		resolved, err := h.secretResolver.Resolve(context.Background(), cp.APIKey)
 		if err != nil {
 			slog.Error("syncRegistry: failed to resolve api_key", "name", p.Name, "error", err)
-			return
+			return fmt.Errorf("resolve api_key: %w", err)
 		}
 		cp.APIKey = resolved
 		if len(cp.ExtraConfig) > 0 {
@@ -321,7 +381,7 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 			if json.Unmarshal(cp.ExtraConfig, &config) == nil {
 				if err := h.secretResolver.ResolveExtraConfigSecrets(context.Background(), config); err != nil {
 					slog.Error("syncRegistry: failed to resolve extra_config secrets", "name", p.Name, "error", err)
-					return
+					return fmt.Errorf("resolve extra_config secrets: %w", err)
 				}
 				data, err := json.Marshal(config)
 				if err != nil {
@@ -331,10 +391,10 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 			}
 		}
 	}
-	prov, err := provider.NewFromModel(&cp, 300*time.Second)
+	prov, err := provider.NewFromModel(&cp, provider.ResolveHTTPTimeout(cp.ExtraConfig, 300*time.Second))
 	if err != nil {
 		slog.Error("failed to create provider", "name", p.Name, "adapter_type", p.AdapterType, "error", err)
-		return
+		return fmt.Errorf("create provider (adapter %s): %w", p.AdapterType, err)
 	}
 	// VCR recording: wrap in RecordingProvider when extra_config.record=true.
 	if provider.IsRecordEnabled(cp.ExtraConfig) && h.fixtureStore != nil {
@@ -343,6 +403,7 @@ func (h *ProviderHandler) syncRegistry(p *model.Provider) {
 	}
 	h.registry.Register(p.Name, prov)
 	slog.Info("synced provider to registry", "name", p.Name, "adapter_type", p.AdapterType)
+	return nil
 }
 
 func (h *ProviderHandler) Test(c *gin.Context) {
@@ -350,6 +411,10 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	if denyNoOrgScope(c) { // audit item 2, object form
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)
@@ -446,6 +511,10 @@ func (h *ProviderHandler) ListModels(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
 		return
 	}
+	if denyNoOrgScope(c) { // audit item 2, object form
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
+		return
+	}
 	if _, err := h.repo.GetByID(c.Request.Context(), orgID, id); err != nil {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
@@ -471,6 +540,10 @@ func (h *ProviderHandler) ListRemoteModels(c *gin.Context) {
 	id := parseID(c.Param("id"))
 	if id == 0 {
 		errorResp(c, http.StatusBadRequest, ErrInvalidID, "invalid id")
+		return
+	}
+	if denyNoOrgScope(c) { // audit item 2, object form
+		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
 	p, err := h.repo.GetByID(c.Request.Context(), orgID, id)

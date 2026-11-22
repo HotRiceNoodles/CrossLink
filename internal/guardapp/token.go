@@ -54,11 +54,14 @@ func newTokenSecret() (plain string, err error) {
 
 // Create 为 org 签发新凭证。name 是运维备注（如 "edge-mirror"）。
 func (s *IngestTokenService) Create(ctx context.Context, orgID int64, name string) (*CreatedToken, error) {
+	return s.createBound(ctx, orgID, name, nil)
+}
+func (s *IngestTokenService) createBound(ctx context.Context, orgID int64, name string, keyID *int64) (*CreatedToken, error) {
 	plain, err := newTokenSecret()
 	if err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
-	tok := &model.GuardIngestToken{
+	tok := &model.GuardIngestToken{APIKeyID: keyID,
 		OrgID:     orgID,
 		Name:      name,
 		TokenHash: HashToken(plain),

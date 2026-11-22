@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 
+	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/router"
@@ -148,13 +149,21 @@ type attemptRecord struct {
 	LatencyMs      int64  `json:"latency_ms"`
 	Success        bool   `json:"success"`
 	Persistent     bool   `json:"persistent,omitempty"`
+	// ParamStrips: M0 version-rule strips performed during this attempt —
+	// the durable audit trail (provider + api_version + param + reason).
+	ParamStrips []upstream.ParamStrip `json:"param_strips,omitempty"`
 }
 
 // attemptsJSON serializes the fallback timeline for the usage log (error
 // observability L2). Clean single-attempt successes return nil so the column
 // stays NULL and row size stays flat for the common case.
 func attemptsJSON(attempts []service.FallbackAttempt) datatypes.JSON {
-	if len(attempts) == 0 || (len(attempts) == 1 && attempts[0].Success) {
+	// Clean single-attempt successes return nil so the column stays NULL and
+	// row size stays flat for the common case — EXCEPT when the attempt
+	// performed param strips: a strip on an otherwise clean request is exactly
+	// the audit record the M0 plan requires to survive.
+	if len(attempts) == 0 ||
+		(len(attempts) == 1 && attempts[0].Success && len(attempts[0].ParamStrips) == 0) {
 		return nil
 	}
 	records := make([]attemptRecord, 0, len(attempts))
@@ -167,6 +176,7 @@ func attemptsJSON(attempts []service.FallbackAttempt) datatypes.JSON {
 			LatencyMs:      a.LatencyMs,
 			Success:        a.Success,
 			Persistent:     a.Persistent,
+			ParamStrips:    a.ParamStrips,
 		})
 	}
 	b, err := json.Marshal(records)

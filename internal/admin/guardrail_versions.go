@@ -47,9 +47,9 @@ func snapshotVersion(r guardrail.GuardrailRule, version int64, changeKind, actor
 		Config:      r.Config,
 		Severity:    r.Severity,
 		Action:      r.Action,
-		ModelFilter: r.ModelFilter,
-		ChangeKind:  changeKind,
-		Actor:       actor,
+		ModelFilter: r.ModelFilter, ScopeMode: r.ScopeMode, APIKeyIDs: r.APIKeyIDs,
+		ChangeKind: changeKind,
+		Actor:      actor,
 	}
 }
 
@@ -58,9 +58,16 @@ func snapshotVersion(r guardrail.GuardrailRule, version int64, changeKind, actor
 func versionedCreate(c *gin.Context, db *gorm.DB, rule *guardrail.GuardrailRule) error {
 	actor := actorFromContext(c)
 	rule.Version = 1
+	enabled := rule.Enabled
 	return db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(rule).Error; err != nil {
 			return err
+		}
+		if !enabled {
+			if err := tx.Model(rule).UpdateColumn("enabled", false).Error; err != nil {
+				return err
+			}
+			rule.Enabled = false
 		}
 		hist := snapshotVersion(*rule, 1, "create", actor)
 		return tx.Create(&hist).Error
@@ -81,7 +88,7 @@ func versionedUpdate(c *gin.Context, db *gorm.DB, rule *guardrail.GuardrailRule,
 	for k, v := range map[string]any{
 		"name": rule.Name, "type": rule.Type, "direction": rule.Direction,
 		"enabled": rule.Enabled, "config": rule.Config, "severity": rule.Severity,
-		"action": rule.Action, "model_filter": rule.ModelFilter,
+		"action": rule.Action, "model_filter": rule.ModelFilter, "scope_mode": rule.ScopeMode, "api_key_ids": rule.APIKeyIDs,
 		"updated_at": time.Now(),
 	} {
 		updates[k] = v
@@ -137,6 +144,7 @@ func applyVersionToRule(rule *guardrail.GuardrailRule, h guardrail.GuardrailRule
 	rule.Config = h.Config
 	rule.Severity = h.Severity
 	rule.Action = h.Action
+	rule.ScopeMode, rule.APIKeyIDs = h.ScopeMode, h.APIKeyIDs
 	rule.ModelFilter = h.ModelFilter
 }
 
@@ -156,7 +164,9 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 		return
 	}
 	var input struct {
-		ToVersion int64 `json:"to_version" binding:"required"`
+		ToVersion         int64 `json:"to_version" binding:"required"`
+		ExpectedVersion   int64 `json:"expected_version"`
+		ConfirmWiderScope bool  `json:"confirm_wider_scope"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		if h.auditSvc != nil {
@@ -216,7 +226,21 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 
 	fromVersion := rule.Version
 	newVersion := fromVersion + 1
+	if input.ExpectedVersion != 0 && input.ExpectedVersion != rule.Version {
+		c.JSON(409, gin.H{"error": "规则已变化，请刷新"})
+		return
+	}
+	if widensKeyScope(rule, hist) && (!input.ConfirmWiderScope || input.ExpectedVersion != rule.Version) {
+		c.JSON(409, gin.H{"error": "回滚将扩大适用 Key 范围，请核对目标版本", "current_version": rule.Version})
+		return
+	}
 	applyVersionToRule(&rule, hist)
+	if !h.validateReviewRule(c, &rule) {
+		return
+	}
+	if !h.setScope(c, &rule, nil, nil) {
+		return
+	}
 	actor := actorFromContext(c)
 
 	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
@@ -225,7 +249,7 @@ func (h *GuardrailHandler) Rollback(c *gin.Context) {
 			Updates(map[string]any{
 				"name": rule.Name, "type": rule.Type, "direction": rule.Direction,
 				"enabled": rule.Enabled, "config": rule.Config, "severity": rule.Severity,
-				"action": rule.Action, "model_filter": rule.ModelFilter,
+				"action": rule.Action, "model_filter": rule.ModelFilter, "scope_mode": rule.ScopeMode, "api_key_ids": rule.APIKeyIDs,
 				"updated_at": time.Now(), "version": gorm.Expr("version + 1"),
 			})
 		if res.Error != nil {

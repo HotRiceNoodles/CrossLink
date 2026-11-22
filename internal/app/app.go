@@ -149,6 +149,8 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		guardrailSvc.SetConfigTransform(ext.GuardrailConfigTransform)
 	}
 
+	guardrailSvc.SetReviewSecrets(secrets.SecretResolver, secrets.EncStore)
+
 	// Seed the default credential_detection baseline rule (zero-config safety
 	// floor). Idempotent; non-fatal — guardrails are non-critical, a seed error
 	// must not block startup.
@@ -563,6 +565,27 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		}
 		handlers.Provider.OnRegistryChange = registrySyncFn
 		handlers.Onboarding.SetOnRegistryChange(registrySyncFn)
+		// Audit item 1: Commit gates provider/model/key creation by the same
+		// RBAC actions the individual CRUD routes use.
+		handlers.Onboarding.SetAuthorizer(permCache)
+		// M1: model-mapping mutations broadcast invalidate_model; receiving
+		// nodes drop that model's resolver routes (targeted, all orgs).
+		modelChangeFn := func(modelName string) {
+			infra.RegistrySync.NotifyModelInvalidated(modelName)
+		}
+		handlers.Model.OnModelChange = modelChangeFn
+		handlers.Onboarding.SetOnModelChange(modelChangeFn)
+		// M1/F-4 three-way flush on the RECEIVING node after a provider event:
+		// registry (done by reloadProvider) + resolver routes + response
+		// cache — without this, a provider switch (e.g. api_version) leaves
+		// other nodes serving stale routes and cached pre-switch responses.
+		infra.RegistrySync.OnModelInvalidated = infra.Resolver.InvalidateModel
+		infra.RegistrySync.OnProviderApplied = func(string) {
+			infra.Resolver.Invalidate()
+			if svcs.CacheSvc != nil {
+				svcs.CacheSvc.FlushAll(appCtx)
+			}
+		}
 		go infra.RegistrySync.Start(appCtx)
 	}
 	// 运行时熔断视图依赖（provider_health.go；无条件注入）
@@ -628,6 +651,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	adminGroup := r.Group("/admin/api")
 	adminGroup.Use(admin.JWTAuthMiddleware(cfg.Admin, db, cryptoProvider))
 	adminGroup.Use(middleware.OrgResolve())
+	// Audit item 2 extension: unified tenant-scope admission — Enterprise
+	// orgless non-platform callers are denied on ALL tenant business routes
+	// (model/key/usage/… treated org_id=0 as global in the repo layer);
+	// self-service paths (user/preferences, user/profile) stay reachable;
+	// Community/Pro and the platform admin are unaffected.
+	adminGroup.Use(admin.OrgScopeGuard())
 	adminGroup.Use(middleware.AdminRateLimit(rdb, 300, time.Minute, ""))
 	adminGroup.Use(middleware.CSRFGuard())
 	adminGroup.Use(middleware.GuardrailsRequest(guardrailSvc, ext.ToolObserver))
@@ -648,9 +677,12 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// api_key server-side (probe above is stateless by design — wizard time,
 		// no stored key yet). Same action gate as the DB-mapping list beside it.
 		adminGroup.POST("/providers/:id/models/remote", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.ListRemoteModels)
-		// Onboarding wizard: stateless upstream probe (no RequireAction — login-only,
-		// like /adapters and /system:info) and atomic provider+models+key creator.
-		adminGroup.POST("/providers/probe", handlers.Onboarding.Probe)
+		// Onboarding wizard. Probe is gated by provider:test — the stateless
+		// upstream probe is the wizard's counterpart of POST /providers/:id/test
+		// (audit item 1: no longer login-only). Commit checks the composed
+		// provider/model/key creation actions per request inside the handler
+		// (they depend on the submitted shape: reuse / keyless commits).
+		adminGroup.POST("/providers/probe", middleware.RequireAction(permCache, "provider:test"), handlers.Onboarding.Probe)
 		adminGroup.POST("/system/onboarding", handlers.Onboarding.Commit)
 
 		// Models
@@ -690,6 +722,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 
 		// Guardrails (Community baseline)
 		guardrailHandler := admin.NewGuardrailHandler(db, guardrailSvc, ext.Deps.AuditSvc)
+		guardrailHandler.RegisterPromptSecurity(adminGroup, middleware.RequireAction(permCache, "guardrail:list"), middleware.RequireAction(permCache, "guardrail:update"), middleware.RequireAction(permCache, "key:update"))
 		adminGroup.GET("/guardrails", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.List)
 		adminGroup.POST("/guardrails", middleware.RequireAction(permCache, "guardrail:create"), guardrailHandler.Create)
 		adminGroup.PUT("/guardrails/:id", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.Update)
@@ -698,6 +731,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// RBAC actions as rule list/update.
 		adminGroup.GET("/guardrails/versions", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.Versions)
 		adminGroup.POST("/guardrails/:id/rollback", middleware.RequireAction(permCache, "guardrail:update"), guardrailHandler.Rollback)
+		adminGroup.POST("/guardrails/:id/copy", middleware.RequireAction(permCache, "guardrail:create"), guardrailHandler.CopyRule)
 		adminGroup.POST("/guardrails/:id/test", middleware.RequireAction(permCache, "guardrail:test"), guardrailHandler.Test)
 		adminGroup.GET("/guardrails/stats", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.Stats)
 		adminGroup.GET("/guardrails/config", middleware.RequireAction(permCache, "guardrail:list"), guardrailHandler.GetConfig)
@@ -905,6 +939,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// reservation settles via the unwinding ReportBudgetUsage from the
 	// tokens+prices restored by the HIT path, and the biller writes exactly
 	// one durable cache_hit ledger row per served request.
+	// M3.4 pre-cache admission (design §2): parameter/beta-header rules must
+	// run BEFORE every replayable early-return — a cached response may never
+	// bypass the current rules. Scope-limited to the two chat endpoints.
+	gwGroup.Use(middleware.Admission())
 	gwGroup.Use(middleware.Cache(svcs.CacheSvc, cryptoProvider, guardrailSvc, handler.NewCacheHitBiller(svcs.UsageSvc)))
 	// RoutingStats (per-minute Redis hashes) removed: it was write-only —
 	// /admin/routing/stats reads usage_logs directly. Reintroduce with a reader
@@ -936,12 +974,13 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	usageGroup.Use(middleware.APIVersion("v1", func() []apidoc.Deprecation {
 		return apidoc.ActiveDeprecations
 	}))
-	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
-	// U-17: this group authenticates keys with the same DB-backed KeyService
-	// (no negative cache) — random-key scanning here was an unbounded DB
-	// point-query path. Share the gateway group's per-IP auth-failure budget
-	// (same prefix/params) so scanning EITHER surface throttles the IP.
+	// U-17 + audit item 10: share the gateway group's per-IP auth-failure
+	// budget (same prefix/params) so scanning EITHER surface throttles the IP —
+	// and mount the limit BEFORE Auth: a blocked IP must not trigger the
+	// credential lookup at all (previously mounted after Auth, the check could
+	// never fire for invalid credentials on this surface).
 	usageGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
+	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 	// Portal self-service API: same auth, but returns the portal-owned clean
 	// contract (decoupled from /v1/usage internal shape). See PortalUsageHandler.
@@ -1194,7 +1233,7 @@ func RegisterProvidersFromDB(cfg *config.Config, db *gorm.DB, registry *provider
 			}
 		}
 
-		timeout := 300 * time.Second
+		timeout := provider.ResolveHTTPTimeout(p.ExtraConfig, 300*time.Second)
 		prov, err := provider.NewFromModel(&p, timeout)
 		if err != nil {
 			slog.Warn("skipping unsupported provider", "name", p.Name, "adapter_type", p.AdapterType, "error", err)

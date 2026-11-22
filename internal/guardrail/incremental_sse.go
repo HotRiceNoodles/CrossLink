@@ -591,10 +591,7 @@ func (w *IncrementalSSEWriter) fail(err error) error {
 		w.Result = &CheckResponse{Blocked: true, Action: "block", RuleName: "guardrail_stream_error", Reason: reason}
 	}
 	if w.ctx.Err() == nil {
-		// Best-effort terminal frame: the stream is failing either way and
-		// the error is returned to the caller — an additional write error
-		// must not mask it.
-		_, _ = io.WriteString(w.out, streamFailureFrame(w.protocol, reason))
+		io.WriteString(w.out, streamFailureFrame(w.protocol, reason))
 		if w.flush != nil {
 			w.flush()
 		}

@@ -83,8 +83,14 @@ func (k *KingbaseDialect) RunMigrations(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create migrator: %w", err)
 	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("run migrations: %w", err)
+	skip, err := skipForeignSchemaVersion(m, k.MigrationDir())
+	if err != nil {
+		return fmt.Errorf("inspect schema version: %w", err)
+	}
+	if !skip {
+		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+			return fmt.Errorf("run migrations: %w", err)
+		}
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crosslink/internal/crypto"
+	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
 	"github.com/gin-gonic/gin"
@@ -40,9 +41,39 @@ func setupOnboardingTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// stubAuthorizer is a fixed roleID→actions table for wizard authorization tests.
+type stubAuthorizer struct{ roles map[int64]map[string]bool }
+
+func (s stubAuthorizer) HasPermission(roleID int64, action string) bool {
+	return s.roles[roleID][action]
+}
+
+// allowAllAuthorizer grants everything (happy-path helpers test schema/flow,
+// not authorization — role IDs there are arbitrary).
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) HasPermission(int64, string) bool { return true }
+
+// allActions mirrors the seeded admin role for the authz tests.
+var allActions = []string{
+	"provider:list", "provider:create", "provider:update", "provider:delete", "provider:test",
+	"model:list", "model:create", "model:update", "model:delete",
+	"key:list", "key:create", "key:update", "key:delete", "key:regenerate",
+}
+
 func newOnboardingHandlerForTest(db *gorm.DB) *OnboardingHandler {
 	cp, _ := crypto.NewProvider("standard")
-	return NewOnboardingHandler(db, nil, cp, nil, provider.NewRegistry(), nil, nil, nil)
+	h := NewOnboardingHandler(db, nil, cp, nil, provider.NewRegistry(), nil, nil, nil)
+	h.SetAuthorizer(allowAllAuthorizer{})
+	return h
+}
+
+func actionsSet(actions []string) map[string]bool {
+	m := make(map[string]bool, len(actions))
+	for _, a := range actions {
+		m[a] = true
+	}
+	return m
 }
 
 // --- Probe: SSRF rejection (no outbound HTTP required) ---
@@ -349,6 +380,250 @@ func TestIsDuplicateNameErr_Locales(t *testing.T) {
 			t.Errorf("isDuplicateNameErr(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
+}
+
+// --- Audit item 1: operation-level authorization + tenant scoping ---
+
+// wizardBody is a canonical valid commit payload; per-case tweaks apply on top.
+func wizardBody(providerName string) gin.H {
+	return gin.H{
+		"provider": gin.H{"name": providerName, "display_name": "X", "adapter_type": "openai_compatible",
+			"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
+		"models": []gin.H{{"model_name": "m1", "provider_model": "m1"}},
+		"key":    gin.H{"name": "k1"},
+	}
+}
+
+func newOnboardingHandlerWithAuthz(db *gorm.DB, roles map[int64]map[string]bool) *OnboardingHandler {
+	cp, _ := crypto.NewProvider("standard")
+	h := NewOnboardingHandler(db, nil, cp, nil, provider.NewRegistry(), nil, nil, nil)
+	h.SetAuthorizer(stubAuthorizer{roles: roles})
+	return h
+}
+
+// Read-only roles (viewer: provider/model/key list only) must not be able to
+// write through the wizard even with a valid admin session.
+func TestOnboarding_Commit_ViewerRoleForbidden(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		5: {"provider:list": true, "model:list": true, "key:list": true},
+	})
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("viewer-provider"))
+	setAdminContext(c, 1, 5, "viewer")
+	h.Commit(c)
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+	var providerCount, modelCount, keyCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	db.Model(&model.ProviderModel{}).Count(&modelCount)
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	assert.EqualValues(t, 0, providerCount)
+	assert.EqualValues(t, 0, modelCount)
+	assert.EqualValues(t, 0, keyCount)
+}
+
+// A role that may create providers+models but not keys can finish a keyless
+// commit but must be denied when the request includes a key.
+func TestOnboarding_Commit_KeylessAllowedWithoutKeyCreate(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: {"provider:create": true, "model:create": true},
+	})
+
+	// Keyless commit succeeds.
+	body := wizardBody("no-key-perm")
+	delete(body, "key")
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 7, "member")
+	h.Commit(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	// Same role WITH a key step → 403, and nothing from the second request leaks.
+	c2, w2 := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("with-key"))
+	setAdminContext(c2, 2, 7, "member")
+	h.Commit(c2)
+	assert.Equal(t, http.StatusForbidden, w2.Code, "body: %s", w2.Body.String())
+	var keyCount int64
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	assert.EqualValues(t, 0, keyCount)
+}
+
+// Reusing an existing provider needs model/key permissions but NOT
+// provider:create — the provider row is not written in reuse mode.
+func TestOnboarding_Commit_ReuseNeedsNoProviderCreate(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	org := int64(0)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "shared", DisplayName: "Shared", AdapterType: "openai_compatible",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-existing", Status: 1, OrgID: &org,
+	}).Error)
+
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: {"model:create": true, "key:create": true},
+	})
+	body := wizardBody("shared")
+	body["reuse_provider"] = true
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 7, "member")
+	h.Commit(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var providerCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	assert.EqualValues(t, 1, providerCount, "reuse must not create a second provider row")
+}
+
+// nil authorizer (wiring bug) must fail CLOSED, not fall back to allow.
+func TestOnboarding_Commit_NilAuthorizerDenied(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	cp, _ := crypto.NewProvider("standard")
+	h := NewOnboardingHandler(db, nil, cp, nil, provider.NewRegistry(), nil, nil, nil) // no SetAuthorizer
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("wiring-bug"))
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+}
+
+// Cross-tenant reuse: an org-scoped caller must not attach mappings to a
+// provider owned by another org, and the response must not disclose the other
+// tenant's provider id/name (no structured 409 fields; no model rows created).
+func TestOnboarding_Commit_ReuseCrossTenantDenied(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	otherOrg := int64(200)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "tenant-provider", DisplayName: "Other", AdapterType: "openai_compatible",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-other", Status: 1, OrgID: &otherOrg,
+	}).Error)
+
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: actionsSet(allActions),
+	})
+	body := wizardBody("tenant-provider")
+	body["reuse_provider"] = true
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 7, "member")
+	c.Set("org_id", int64(100))
+	h.Commit(c)
+
+	// The org-scoped pre-check does not see the other tenant's provider → falls
+	// through to create → global unique name → plain 409 WITHOUT disclosure.
+	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotContains(t, resp, "existing_provider_id", "cross-tenant provider id must not be disclosed")
+	assert.NotContains(t, resp, "existing_provider_name", "cross-tenant provider name must not be disclosed")
+
+	var modelCount, keyCount int64
+	db.Model(&model.ProviderModel{}).Count(&modelCount)
+	db.Model(&model.APIKey{}).Count(&keyCount)
+	assert.EqualValues(t, 0, modelCount, "no mappings may be attached to another tenant's provider")
+	assert.EqualValues(t, 0, keyCount)
+}
+
+// Same-tenant reuse still works for an org-scoped caller (regression guard
+// for the scoping change itself).
+func TestOnboarding_Commit_ReuseSameTenantAllowed(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	org := int64(100)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "own-provider", DisplayName: "Own", AdapterType: "openai_compatible",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-own", Status: 1, OrgID: &org,
+	}).Error)
+
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: {"model:create": true, "key:create": true},
+	})
+	body := wizardBody("own-provider")
+	body["reuse_provider"] = true
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 7, "member")
+	c.Set("org_id", org)
+	h.Commit(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var modelCount int64
+	db.Model(&model.ProviderModel{}).Count(&modelCount)
+	assert.EqualValues(t, 1, modelCount)
+}
+
+// Non-reuse duplicate under an org scope: same-org duplicates keep the
+// structured 409 (wizard UX), so scoping must not break that flow.
+func TestOnboarding_Commit_DuplicateSameOrgKeepsStructured409(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	org := int64(100)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "dup", DisplayName: "Dup", AdapterType: "openai_compatible",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-x", Status: 1, OrgID: &org,
+	}).Error)
+
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{1: actionsSet(allActions)})
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("dup"))
+	setAdminContext(c, 1, 1, "admin")
+	c.Set("org_id", org)
+	h.Commit(c)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "dup", resp["existing_provider_name"], "same-org duplicate keeps the reuse prompt UX")
+}
+
+// --- Acceptance boundary 2 (items 1/2) ---
+
+// Degraded permission data (JWT middleware could not resolve the caller's
+// role/status) must deny the composite writer — same posture as RequireAction.
+func TestOnboarding_Commit_AuthPermDegradedDenied(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("degraded"))
+	setAdminContext(c, 1, 1, "admin")
+	middleware.MarkAuthPermDegraded(c)
+	h.Commit(c)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "auth_degraded")
+	var providerCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	assert.EqualValues(t, 0, providerCount)
+}
+
+// A caller WITHOUT provider:create must get 403 (not the structured 409 that
+// discloses existing_provider_id/name) when the name collides — the permission
+// gate runs BEFORE the existence pre-check.
+func TestOnboarding_Commit_NoPermissionNoConflictDisclosure(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	require.NoError(t, db.Create(&model.Provider{
+		Name: "taken-name", DisplayName: "X", AdapterType: "openai_compatible",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-x", Status: 1,
+	}).Error)
+
+	// Role holds model/key create but NOT provider:create.
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: {"model:create": true, "key:create": true},
+	})
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("taken-name"))
+	setAdminContext(c, 1, 7, "member")
+	h.Commit(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "existing_provider_id", "permission denial must not disclose the provider id")
+	assert.NotContains(t, w.Body.String(), "existing_provider_name")
+	assert.Contains(t, w.Body.String(), "provider:create")
+}
+
+// Reuse requested but the name is FREE in scope → a new provider would be
+// written → provider:create is enforced at that point (before any write).
+func TestOnboarding_Commit_ReuseFreeNameStillNeedsProviderCreate(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerWithAuthz(db, map[int64]map[string]bool{
+		7: {"model:create": true, "key:create": true},
+	})
+	body := wizardBody("brand-new-name")
+	body["reuse_provider"] = true
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 7, "member")
+	h.Commit(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "provider:create")
+	var providerCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	assert.EqualValues(t, 0, providerCount)
 }
 
 // --- Commit: validation rejections ---

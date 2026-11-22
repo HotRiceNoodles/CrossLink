@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crosslink/internal/admission"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/middleware"
@@ -173,6 +174,25 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		return
 	}
 
+	// M3 admission (design §1/§2): the pre-cache middleware owns the verdict
+	// in production — reuse its envelope from the context; the local fallback
+	// covers direct handler invocations (tests) where the middleware chain
+	// did not run.
+	if v, ok := c.Get(middleware.AdmissionEnvelopeKey); ok {
+		if env, valid := v.(*domain.ProtocolExtensions); valid {
+			req.Extensions = env
+		}
+	} else if ext, aerr := admission.Admit("anthropic", bodyBytes, c.GetHeader("anthropic-beta")); aerr != nil {
+		logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "request", aerr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":  "error",
+			"error": gin.H{"type": "invalid_request_error", "message": aerr.Error()},
+		})
+		return
+	} else if ext != nil {
+		req.Extensions = ext
+	}
+
 	start := time.Now()
 	sessionID := c.GetHeader("X-Session-ID")
 
@@ -192,14 +212,15 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		c.Header("x-crosslink-capability", m.Name)
 	}
 
-	// C5: concurrency-safe budget reservation against the primary route's price,
-	// closing the check-then-act race in BudgetCheck's GET-based check. The
-	// Anthropic path delegates routing to GatewayService, so resolve the primary
-	// route here solely for the price estimate (resolver is cache-backed, cheap).
+	// C5/M5: concurrency-safe budget reservation against the CEILING price of
+	// the expanded fallback chain (cheapest-primary failover to a pricier
+	// fallback must not spend past the reservation). The Anthropic path
+	// delegates routing to GatewayService, so resolve here solely for the
+	// estimate (resolver is cache-backed, cheap).
 	var maxCtx *int // primary route's context window, captured synchronously (analysis input)
 	if routes, rerr := h.resolver.Resolve(c.Request.Context(), req.Model, orgID); rerr == nil && len(routes) > 0 {
 		maxCtx = routes[0].MaxContext
-		if !reserveBudgetForRequest(c, h.budgetSvc, estimateAnthropicInputTokens(&req), req.MaxTokens, routes[0].InputPrice, routes[0].OutputPrice) {
+		if !reserveBudgetCeilingForRequest(c, h.budgetSvc, h.resolver, estimateAnthropicInputTokens(&req), req.MaxTokens, routes, orgID) {
 			return
 		}
 	}
@@ -420,21 +441,23 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
-		GinRequestID:    c.GetString("request_id"),
-		RouteType:       "anthropic",
-		ModelRequested:  req.Model,
-		ModelUsed:       result.ModelUsed,
-		ProviderID:      result.ProviderID,
-		APIKeyID:        apiKeyID,
-		TeamID:          teamID,
-		OrgID:           orgID,
-		InputTokens:     result.InputTokens,
-		OutputTokens:    result.OutputTokens,
-		InputPrice:      result.InputPrice,
-		OutputPrice:     result.OutputPrice,
-		Currency:        result.Currency,
-		LatencyMs:       result.LatencyMs,
-		StatusCode:      http.StatusOK,
+		GinRequestID:   c.GetString("request_id"),
+		RouteType:      "anthropic",
+		ModelRequested: req.Model,
+		ModelUsed:      result.ModelUsed,
+		ProviderID:     result.ProviderID,
+		APIKeyID:       apiKeyID,
+		TeamID:         teamID,
+		OrgID:          orgID,
+		InputTokens:    result.InputTokens,
+		OutputTokens:   result.OutputTokens,
+		InputPrice:     result.InputPrice,
+		OutputPrice:    result.OutputPrice,
+		Currency:       result.Currency,
+		LatencyMs:      result.LatencyMs,
+		StatusCode:     http.StatusOK,
+		// M0: strips audit rides the attempts timeline even on success.
+		Attempts:        attemptsJSON(result.Attempts),
 		FallbackCount:   result.FallbackCount,
 		RetryCount:      result.RetryCount,
 		ReasoningTokens: result.ReasoningTokens,
@@ -885,22 +908,24 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	c.Set("cost", cost)
 
 	entry := &service.UsageEntry{
-		GinRequestID:    c.GetString("request_id"),
-		RouteType:       "anthropic",
-		ModelRequested:  req.Model,
-		ModelUsed:       result.ModelUsed,
-		ProviderID:      result.ProviderID,
-		APIKeyID:        apiKeyID,
-		TeamID:          teamID,
-		OrgID:           orgID,
-		InputTokens:     result.InputTokens,
-		OutputTokens:    result.OutputTokens,
-		InputPrice:      result.InputPrice,
-		OutputPrice:     result.OutputPrice,
-		Currency:        result.Currency,
-		LatencyMs:       result.LatencyMs,
-		FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
-		StatusCode:      http.StatusOK,
+		GinRequestID:   c.GetString("request_id"),
+		RouteType:      "anthropic",
+		ModelRequested: req.Model,
+		ModelUsed:      result.ModelUsed,
+		ProviderID:     result.ProviderID,
+		APIKeyID:       apiKeyID,
+		TeamID:         teamID,
+		OrgID:          orgID,
+		InputTokens:    result.InputTokens,
+		OutputTokens:   result.OutputTokens,
+		InputPrice:     result.InputPrice,
+		OutputPrice:    result.OutputPrice,
+		Currency:       result.Currency,
+		LatencyMs:      result.LatencyMs,
+		FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
+		StatusCode:     http.StatusOK,
+		// M0: strips audit rides the attempts timeline even on success.
+		Attempts:        attemptsJSON(result.Attempts),
 		FallbackCount:   result.FallbackCount,
 		RetryCount:      result.RetryCount,
 		ReasoningTokens: result.ReasoningTokens,

@@ -62,6 +62,8 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		Config      json.RawMessage `json:"config" binding:"required"`
 		Severity    string          `json:"severity"`
 		Action      string          `json:"action"`
+		ScopeMode   *string         `json:"scope_mode"`
+		APIKeyIDs   *[]int64        `json:"api_key_ids"`
 		ModelFilter *string         `json:"model_filter"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -120,6 +122,9 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 		severity = input.Severity
 	}
 	action := "block"
+	if input.Type == guardrail.ModelReview {
+		action = "log"
+	}
 	if input.Action != "" {
 		if !validActions[input.Action] {
 			if h.auditSvc != nil {
@@ -150,6 +155,12 @@ func (h *GuardrailHandler) Create(c *gin.Context) {
 	}
 	if orgID := GetOrgID(c); orgID != 0 {
 		rule.OrgID = &orgID
+	}
+	if !h.validateReviewRule(c, rule) {
+		return
+	}
+	if !h.setScope(c, rule, input.ScopeMode, input.APIKeyIDs) {
+		return
 	}
 	if err := versionedCreate(c, h.db, rule); err != nil {
 		if h.auditSvc != nil {
@@ -199,6 +210,8 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 		Config      json.RawMessage `json:"config"`
 		Severity    *string         `json:"severity"`
 		Action      *string         `json:"action"`
+		ScopeMode   *string         `json:"scope_mode"`
+		APIKeyIDs   *[]int64        `json:"api_key_ids"`
 		ModelFilter *string         `json:"model_filter"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -289,7 +302,7 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 	}
 	// 历史无效规则只允许单独停用，或将合并后的动作修正为合法值。
 	onlyDisable := input.Enabled != nil && !*input.Enabled && input.Name == nil && input.Type == nil &&
-		input.Direction == nil && input.Config == nil && input.Severity == nil && input.Action == nil && input.ModelFilter == nil
+		input.Direction == nil && input.Config == nil && input.Severity == nil && input.Action == nil && input.ModelFilter == nil && input.ScopeMode == nil && input.APIKeyIDs == nil
 	if err := guardrail.ValidateRuleAction(rule.Type, rule.Action); err != nil && !onlyDisable {
 		if h.auditSvc != nil {
 			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "invalid_action"}))
@@ -298,6 +311,12 @@ func (h *GuardrailHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if !onlyDisable && !h.setScope(c, &rule, input.ScopeMode, input.APIKeyIDs) {
+		return
+	}
+	if !onlyDisable && !h.validateReviewRule(c, &rule) {
+		return
+	}
 	if err := versionedUpdate(c, h.db, &rule, nil); err == errVersionConflict {
 		if h.auditSvc != nil {
 			h.auditSvc.LogFailure(c, "guardrail:update", "guardrail", fmt.Sprintf("%d", id), rule.Name, service.AuditDetail(map[string]any{"reason": "version_conflict"}))
@@ -385,6 +404,11 @@ func (h *GuardrailHandler) Test(c *gin.Context) {
 		return
 	}
 
+	if rule.Type == guardrail.ModelReview {
+		result := h.svc.TestModelReview(c.Request.Context(), rule, input.Text)
+		c.JSON(http.StatusOK, gin.H{"data": result})
+		return
+	}
 	eng, err := guardrail.CreateEngine(rule.Type, json.RawMessage(rule.Config))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create engine"})

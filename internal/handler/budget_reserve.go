@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -27,15 +28,63 @@ func reserveBudgetForRequest(c *gin.Context, budgetSvc *service.BudgetService, i
 	if budgetSvc == nil {
 		return true
 	}
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = defaultBudgetOutputTokens
+	}
+	estimate := (float64(inputTokens)*inPrice + float64(maxOutputTokens)*outPrice) / 1000
+	return reserveEstimate(c, budgetSvc, estimate)
+}
+
+// reserveBudgetCeilingForRequest is the M5 ceiling reservation: the estimate
+// covers the MOST EXPENSIVE candidate of the expanded fallback chain (primary
+// + fallback models, each with its own prices) instead of the primary route
+// only. The old routes[0] estimate under-reserved whenever a cheap primary
+// failed over to a pricier fallback: actual spend exceeded the reservation and
+// the reconciled budget drifted under (a pre-existing gap independent of the
+// extension work — plan M5). A request whose budget cannot cover the ceiling
+// is refused UP FRONT: fallback never descends into uncovered territory.
+func reserveBudgetCeilingForRequest(c *gin.Context, budgetSvc *service.BudgetService, resolver *router.Resolver, inputTokens, maxOutputTokens int, routes []*router.RouteResult, orgID int64) bool {
+	if budgetSvc == nil || len(routes) == 0 {
+		return true
+	}
+	expanded := service.ExpandFallbackRoutes(c.Request.Context(), resolver, routes, orgID)
+	if len(expanded) == 0 {
+		expanded = routes
+	}
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = defaultBudgetOutputTokens
+	}
+	estimate := budgetCeilingEstimate(inputTokens, maxOutputTokens, expanded)
+	return reserveEstimate(c, budgetSvc, estimate)
+}
+
+// budgetCeilingEstimate maximizes the per-attempt cost estimate over the
+// executable candidates. Zero on every candidate (all prices unknown/unmetered)
+// keeps the legacy skip-reservation behavior — actual cost is still reported by
+// ReportBudgetUsage.
+func budgetCeilingEstimate(inputTokens, maxOutputTokens int, routes []*router.RouteResult) float64 {
+	ceiling := 0.0
+	for _, r := range routes {
+		if r == nil {
+			continue
+		}
+		est := (float64(inputTokens)*r.InputPrice + float64(maxOutputTokens)*r.OutputPrice) / 1000
+		if est > ceiling {
+			ceiling = est
+		}
+	}
+	return ceiling
+}
+
+// reserveEstimate is the estimate-agnostic reservation core shared by the
+// single-route and ceiling variants: scope check, atomic ReserveForRequestE,
+// and the typed responses for enforcement-unavailable / budget-exceeded.
+func reserveEstimate(c *gin.Context, budgetSvc *service.BudgetService, estimate float64) bool {
 	scopesVal, _ := c.Get("budget_scopes")
 	scopes, _ := scopesVal.([]service.BudgetScope)
 	if len(scopes) == 0 {
 		return true // no budget limits configured → nothing to reserve
 	}
-	if maxOutputTokens <= 0 {
-		maxOutputTokens = defaultBudgetOutputTokens
-	}
-	estimate := (float64(inputTokens)*inPrice + float64(maxOutputTokens)*outPrice) / 1000
 	if estimate <= 0 {
 		// Prices unknown/zero (e.g. unmetered model): can't estimate, so skip
 		// reservation. Actual cost is still reported by ReportBudgetUsage.

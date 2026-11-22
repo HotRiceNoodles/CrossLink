@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crosslink/internal/secret"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/singleflight"
@@ -39,11 +40,13 @@ var severityOrder = map[string]int{
 }
 
 type GuardrailService struct {
-	db       *gorm.DB
-	deps     EngineDeps
-	enabled  atomic.Bool
-	logOnly  atomic.Bool
-	failOpen atomic.Bool
+	reviewResolver *secret.SecretResolver
+	reviewStore    *secret.EncryptedDBStore
+	db             *gorm.DB
+	deps           EngineDeps
+	enabled        atomic.Bool
+	logOnly        atomic.Bool
+	failOpen       atomic.Bool
 	// configTransform: optional Config seam (adaptive tuning, commercial-only
 	// injection; nil/identity in Community). Stored via atomic.Value so the
 	// setter is hot-swappable without locks on the check path.
@@ -503,7 +506,9 @@ func (s *GuardrailService) getModelConfig(ctx context.Context, model string) *Mo
 	return ec.Guardrails
 }
 
-func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*CheckResponse, error) {
+func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (response *CheckResponse, checkErr error) {
+	local := *req
+	req = &local // 截断仅作用于本次检查，不能改写调用方的原始视图。
 	if err := s.ensureRules(ctx); err != nil {
 		slog.Error("guardrail: failed to load rules", "error", err)
 		if !s.failOpen.Load() {
@@ -537,6 +542,9 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 			}, nil
 		}
 		runes := []rune(req.Content)
+		if req.Input == nil {
+			req.Input = PlainDetectionInput(req.Content)
+		}
 		req.Content = string(runes[:maxCheckContent])
 		truncated = true
 		s.emitEvent(ctx, GuardrailEvent{RuleName: "guardrail_partial_coverage", EngineType: "guardrail_service", Direction: string(req.Direction), Severity: "medium", Action: "log", Reason: "partial coverage: only the content prefix was inspected", Model: req.Model, APIKeyID: req.APIKeyID, TeamID: req.TeamID, OrgID: req.OrgID, Timestamp: time.Now()})
@@ -553,7 +561,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 		dirMatch := r.Direction == string(req.Direction) || r.Direction == string(DirectionBoth)
 		modelMatch := r.ModelFilter == nil || modelInFilter(req.Model, *r.ModelFilter)
 		orgMatch := r.OrgID == nil || *r.OrgID == req.OrgID
-		if dirMatch && modelMatch && orgMatch {
+		if dirMatch && modelMatch && orgMatch && r.matchesKey(req.APIKeyID) {
 			rules = append(rules, r)
 		}
 	}
@@ -585,6 +593,10 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 		return severityOrder[rules[i].Severity] > severityOrder[rules[j].Severity]
 	})
 
+	rules, finishReviews := s.prepareReviews(ctx, req, rules)
+	if finishReviews != nil {
+		defer func() { response, checkErr = finishReviews(response, checkErr) }()
+	}
 	logOnly := s.logOnly.Load()
 
 	// Helper to read AgentType from CheckContext (updated by engines during loop)
@@ -664,7 +676,7 @@ func (s *GuardrailService) Check(ctx context.Context, req *CheckRequest) (*Check
 			continue
 		}
 
-		result, err := eng.Check(ctx, req.Content, req.Direction, req.Model)
+		result, err := checkEngine(ctx, eng, req)
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}

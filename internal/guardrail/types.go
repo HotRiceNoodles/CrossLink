@@ -84,16 +84,18 @@ type EngineCloser interface {
 type ConfigTransformFunc func(ruleID int64, ruleType string, config json.RawMessage) (json.RawMessage, error)
 
 type GuardrailRule struct {
-	ID          int64          `gorm:"primaryKey" json:"id"`
-	OrgID       *int64         `gorm:"index" json:"org_id,omitempty"`
-	Name        string         `gorm:"size:255;not null" json:"name"`
-	Type        string         `gorm:"size:50;not null" json:"type"`
-	Direction   string         `gorm:"size:10;not null" json:"direction"`
-	Enabled     bool           `gorm:"default:true" json:"enabled"`
-	Config      datatypes.JSON `gorm:"type:jsonb;not null" json:"config"`
-	Severity    string         `gorm:"size:20;default:'medium'" json:"severity"`
-	Action      string         `gorm:"size:20;default:'block'" json:"action"`
-	ModelFilter *string        `gorm:"type:text" json:"model_filter"`
+	ID          int64                      `gorm:"primaryKey" json:"id"`
+	OrgID       *int64                     `gorm:"index" json:"org_id,omitempty"`
+	Name        string                     `gorm:"size:255;not null" json:"name"`
+	Type        string                     `gorm:"size:50;not null" json:"type"`
+	Direction   string                     `gorm:"size:10;not null" json:"direction"`
+	Enabled     bool                       `gorm:"default:true" json:"enabled"`
+	Config      datatypes.JSON             `gorm:"type:jsonb;not null" json:"config"`
+	Severity    string                     `gorm:"size:20;default:'medium'" json:"severity"`
+	Action      string                     `gorm:"size:20;default:'block'" json:"action"`
+	ScopeMode   string                     `gorm:"size:12;not null;default:all" json:"scope_mode"`
+	APIKeyIDs   datatypes.JSONSlice[int64] `json:"api_key_ids"`
+	ModelFilter *string                    `gorm:"type:text" json:"model_filter"`
 	// Version is the per-rule monotonic version maintained by the versioned
 	// write path (create/update/delete/rollback). Rows predating that path
 	// start at 1 via the rule-versions migrations, which also snapshot them
@@ -112,18 +114,20 @@ func (GuardrailRule) TableName() string { return "guardrail_rules" }
 // the admin sanitizers; raw Config is consumed only by the rollback write
 // path, which carries the same permissions and org scoping as rule updates.
 type GuardrailRuleVersion struct {
-	ID          int64          `gorm:"primaryKey" json:"id"`
-	RuleID      int64          `gorm:"index;uniqueIndex:uq_rule_versions,priority:1" json:"rule_id"`
-	Version     int64          `gorm:"uniqueIndex:uq_rule_versions,priority:2" json:"version"`
-	OrgID       *int64         `gorm:"index" json:"org_id,omitempty"`
-	Name        string         `gorm:"size:255;not null" json:"name"`
-	Type        string         `gorm:"size:50;not null" json:"type"`
-	Direction   string         `gorm:"size:10;not null" json:"direction"`
-	Enabled     bool           `json:"enabled"`
-	Config      datatypes.JSON `json:"config"`
-	Severity    string         `gorm:"size:20" json:"severity"`
-	Action      string         `gorm:"size:20" json:"action"`
-	ModelFilter *string        `gorm:"type:text" json:"model_filter"`
+	ID          int64                      `gorm:"primaryKey" json:"id"`
+	RuleID      int64                      `gorm:"index;uniqueIndex:uq_rule_versions,priority:1" json:"rule_id"`
+	Version     int64                      `gorm:"uniqueIndex:uq_rule_versions,priority:2" json:"version"`
+	OrgID       *int64                     `gorm:"index" json:"org_id,omitempty"`
+	Name        string                     `gorm:"size:255;not null" json:"name"`
+	Type        string                     `gorm:"size:50;not null" json:"type"`
+	Direction   string                     `gorm:"size:10;not null" json:"direction"`
+	Enabled     bool                       `json:"enabled"`
+	Config      datatypes.JSON             `json:"config"`
+	Severity    string                     `gorm:"size:20" json:"severity"`
+	Action      string                     `gorm:"size:20" json:"action"`
+	ScopeMode   string                     `gorm:"size:12;not null;default:all" json:"scope_mode"`
+	APIKeyIDs   datatypes.JSONSlice[int64] `json:"api_key_ids"`
+	ModelFilter *string                    `gorm:"type:text" json:"model_filter"`
 	// ChangeKind: create | update | delete | rollback | migrate
 	ChangeKind string    `gorm:"size:20;not null" json:"change_kind"`
 	Actor      string    `gorm:"size:64;not null;default:''" json:"actor"`
@@ -137,12 +141,16 @@ func (GuardrailRuleVersion) TableName() string { return "guardrail_rule_versions
 // decision, and the action applied. Only ids/versions/actions — nothing
 // content-bearing — so it is safe for events, alert logs and audit output.
 type MatchedRule struct {
-	RuleID  int64  `json:"rule_id"`
-	Version int64  `json:"version"`
-	Action  string `json:"action"`
+	EngineType  string `json:"engine_type,omitempty"`
+	AuditReason string `json:"-"`
+	RuleID      int64  `json:"rule_id"`
+	Version     int64  `json:"version"`
+	Action      string `json:"action"`
 }
 
 type CheckRequest struct {
+	Bypass    bool            // 独立护栏仅报告裁决。
+	Input     *DetectionInput // 可选结构化正文，不从 metadata 推导信任。
 	Content   string
 	Direction Direction
 	Model     string

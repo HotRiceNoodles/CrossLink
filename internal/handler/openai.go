@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crosslink/internal/admission"
 	"github.com/crosslink/internal/debug/upstream"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
@@ -176,6 +177,20 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 		return
 	}
 
+	// M3 admission (design §1/§2): reuse the pre-cache middleware's envelope
+	// when present; the local fallback covers direct handler invocations.
+	if v, ok := c.Get(middleware.AdmissionEnvelopeKey); ok {
+		if env, valid := v.(*domain.ProtocolExtensions); valid {
+			req.Extensions = env
+		}
+	} else if ext, aerr := admission.Admit("openai", body, ""); aerr != nil {
+		logRequestStageError(h.usageSvc, c, "openai", req.Model, http.StatusBadRequest, "invalid_request_error", "request", aerr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": map[string]string{"message": aerr.Error()}})
+		return
+	} else if ext != nil {
+		req.Extensions = ext
+	}
+
 	start := time.Now()
 
 	c.Set("model", req.Model)
@@ -210,12 +225,13 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 		maxOut = *req.MaxTokens
 	}
 
-	// C5: concurrency-safe budget reservation against the primary route's price,
-	// closing the check-then-act race in BudgetCheck's GET-based check. Aborts
-	// with budget_exceeded before any upstream call if a level would be exceeded.
+	// C5/M5: concurrency-safe budget reservation against the CEILING price of
+	// the expanded fallback chain (cheapest-primary failover to a pricier
+	// fallback must not spend past the reservation). Aborts with
+	// budget_exceeded before any upstream call if a level would be exceeded.
 	if len(routes) > 0 {
 		maxCtx = routes[0].MaxContext
-		if !reserveBudgetForRequest(c, h.budgetSvc, estimateOpenAIInputTokens(&req), maxOut, routes[0].InputPrice, routes[0].OutputPrice) {
+		if !reserveBudgetCeilingForRequest(c, h.budgetSvc, h.resolver, estimateOpenAIInputTokens(&req), maxOut, routes, orgID) {
 			return
 		}
 	}
@@ -321,6 +337,8 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	engine.SetClassifier(h.classifier)
 
 	var totalRetries int
+	// M0 audit: strip batches per attempt (same pattern as GatewayService).
+	var stripBatches [][]upstream.ParamStrip
 	result := engine.ExecuteNonStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
 		reqCopy := *req
 		reqCopy.Model = route.ProviderModel
@@ -343,14 +361,17 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 			retryCfg.NumRetries = 0
 		}
 		var resp *domain.OpenAIResponse
+		var attemptStrips []upstream.ParamStrip
 		rr := provider.WithRetry(ctx, retryCfg, h.budget, func(attemptCtx context.Context) error {
 			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
 			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
 			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
+			attemptCtx = upstream.WithStripSink(attemptCtx, &attemptStrips)
 			var callErr error
 			resp, callErr = route.Provider.Chat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
+		stripBatches = append(stripBatches, attemptStrips)
 		totalRetries += rr.RetriesUsed
 		if h.activeTracker != nil {
 			h.activeTracker.Decr(context.Background(), pn)
@@ -363,6 +384,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		}
 		return resp, nil
 	})
+	service.AttachStripsToAttempts(result.Attempts, stripBatches)
 
 	if result.FinalError != nil {
 		slog.Error("all openai providers failed", "model", req.Model, "attempts", len(result.Attempts))
@@ -550,21 +572,23 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
-		GinRequestID:    c.GetString("request_id"),
-		RouteType:       "openai",
-		ModelRequested:  req.Model,
-		ModelUsed:       route.ProviderModel,
-		ProviderID:      route.ProviderRow.ID,
-		APIKeyID:        apiKeyID,
-		TeamID:          teamID,
-		OrgID:           orgID,
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		InputPrice:      route.InputPrice,
-		Currency:        route.Currency,
-		OutputPrice:     route.OutputPrice,
-		StatusCode:      http.StatusOK,
-		LatencyMs:       latency,
+		GinRequestID:   c.GetString("request_id"),
+		RouteType:      "openai",
+		ModelRequested: req.Model,
+		ModelUsed:      route.ProviderModel,
+		ProviderID:     route.ProviderRow.ID,
+		APIKeyID:       apiKeyID,
+		TeamID:         teamID,
+		OrgID:          orgID,
+		InputTokens:    inputTokens,
+		OutputTokens:   outputTokens,
+		InputPrice:     route.InputPrice,
+		Currency:       route.Currency,
+		OutputPrice:    route.OutputPrice,
+		StatusCode:     http.StatusOK,
+		LatencyMs:      latency,
+		// M0: strips audit rides the attempts timeline even on success.
+		Attempts:        attemptsJSON(result.Attempts),
 		FallbackCount:   result.FallbackCount,
 		RetryCount:      totalRetries,
 		ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
@@ -665,6 +689,8 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	engine.SetClassifier(h.classifier)
 
 	var totalRetries int
+	// M0 audit: strip batches per attempt (same pattern as GatewayService).
+	var stripBatches [][]upstream.ParamStrip
 	result := engine.ExecuteStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {
 		reqCopy := *req
 		reqCopy.Model = route.ProviderModel
@@ -689,14 +715,17 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 			retryCfg.NumRetries = 0
 		}
 		var streamCh <-chan domain.SSEChunk
+		var attemptStrips []upstream.ParamStrip
 		rr := provider.WithRetry(ctx, retryCfg, h.budget, func(attemptCtx context.Context) error {
 			attemptCtx = upstream.WithProviderName(attemptCtx, route.Provider.Name())
 			attemptCtx = upstream.WithProviderModel(attemptCtx, route.ProviderModel)
 			attemptCtx = upstream.WithProviderBaseURL(attemptCtx, route.ProviderRow.BaseURL)
+			attemptCtx = upstream.WithStripSink(attemptCtx, &attemptStrips)
 			var callErr error
 			streamCh, callErr = route.Provider.StreamChat(attemptCtx, &reqCopy, route.ProviderRow.APIKey)
 			return callErr
 		})
+		stripBatches = append(stripBatches, attemptStrips)
 		totalRetries += rr.RetriesUsed
 		if h.activeTracker != nil {
 			h.activeTracker.Decr(context.Background(), pn)
@@ -709,6 +738,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		}
 		return streamCh, nil
 	})
+	service.AttachStripsToAttempts(result.Attempts, stripBatches)
 
 	if result.FinalError != nil {
 		slog.Error("all stream providers failed", "model", req.Model, "attempts", len(result.Attempts))
@@ -983,22 +1013,24 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	c.Set("provider", pn)
 	c.Set("usage_logged", true)
 	entry := &service.UsageEntry{
-		GinRequestID:    c.GetString("request_id"),
-		RouteType:       "openai",
-		ModelRequested:  req.Model,
-		ModelUsed:       route.ProviderModel,
-		ProviderID:      route.ProviderRow.ID,
-		APIKeyID:        apiKeyID,
-		TeamID:          teamID,
-		OrgID:           orgID,
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		InputPrice:      route.InputPrice,
-		Currency:        route.Currency,
-		OutputPrice:     route.OutputPrice,
-		StatusCode:      http.StatusOK,
-		LatencyMs:       latency,
-		FirstTokenMs:    firstTokenMsValue(start, firstTokenAt),
+		GinRequestID:   c.GetString("request_id"),
+		RouteType:      "openai",
+		ModelRequested: req.Model,
+		ModelUsed:      route.ProviderModel,
+		ProviderID:     route.ProviderRow.ID,
+		APIKeyID:       apiKeyID,
+		TeamID:         teamID,
+		OrgID:          orgID,
+		InputTokens:    inputTokens,
+		OutputTokens:   outputTokens,
+		InputPrice:     route.InputPrice,
+		Currency:       route.Currency,
+		OutputPrice:    route.OutputPrice,
+		StatusCode:     http.StatusOK,
+		LatencyMs:      latency,
+		FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
+		// M0: strips audit rides the attempts timeline even on success.
+		Attempts:        attemptsJSON(result.Attempts),
 		FallbackCount:   result.FallbackCount,
 		RetryCount:      totalRetries,
 		ReasoningTokens: reasoningTokens,

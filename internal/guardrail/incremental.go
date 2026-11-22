@@ -96,7 +96,7 @@ func (s *GuardrailService) NewResponseStream(ctx context.Context, meta CheckRequ
 	orgOverride := false
 	if meta.OrgID != 0 {
 		for _, rule := range s.rules {
-			if rule.Type == "content_compliance" && rule.OrgID != nil && *rule.OrgID == meta.OrgID {
+			if rule.matchesKey(meta.APIKeyID) && rule.Type == "content_compliance" && rule.OrgID != nil && *rule.OrgID == meta.OrgID {
 				orgOverride = true
 				break
 			}
@@ -106,7 +106,7 @@ func (s *GuardrailService) NewResponseStream(ctx context.Context, meta CheckRequ
 		if orgOverride && rule.Type == "content_compliance" && rule.OrgID == nil {
 			continue
 		}
-		if !rule.Enabled || (rule.Direction != string(DirectionResponse) && rule.Direction != string(DirectionBoth)) ||
+		if !rule.matchesKey(meta.APIKeyID) || !rule.Enabled || (rule.Direction != string(DirectionResponse) && rule.Direction != string(DirectionBoth)) ||
 			(rule.OrgID != nil && *rule.OrgID != meta.OrgID) ||
 			(rule.ModelFilter != nil && !modelInFilter(meta.Model, *rule.ModelFilter)) {
 			continue

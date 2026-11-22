@@ -193,6 +193,7 @@ func newStrictGuardrail(t *testing.T, blocklist []string) *guardrail.GuardrailSe
 	// AutoMigrate chokes on the model's jsonb/not-null-now() tags — same
 	// pattern as internal/guardrail/m3_reload_test.go).
 	require.NoError(t, db.Exec(`CREATE TABLE guardrail_rules (
+		scope_mode TEXT DEFAULT 'all', api_key_ids TEXT,
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		org_id INTEGER,
 		name TEXT NOT NULL,
