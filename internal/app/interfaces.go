@@ -63,6 +63,7 @@ type AppDeps struct {
 	VideoTaskSvc   *service.VideoTaskService
 	DataLensStore  repository.MetricsStore
 	DataLensRepo   *repository.DataLensRepository
+	DataLensAggSvc *service.DataLensAggregatorService // manual aggregate refresh seam (POST /datalens/refresh-aggregates); always constructed, only Run() is dialect-gated
 	AppCtx         context.Context // application-lifetime context for background goroutines
 }
 

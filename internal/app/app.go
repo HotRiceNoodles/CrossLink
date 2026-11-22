@@ -380,6 +380,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		OrgCache:       orgCache,
 		DataLensStore:  repository.NewPgMetricsStore(db, dia),
 		DataLensRepo:   repos.DataLensRepo,
+		DataLensAggSvc: svcs.DataLensAggSvc,
 		AppCtx:         appCtx,
 	}
 	openaiHandler, anthropicHandler := newGatewayProtocolHandlers(infra, svcs, guardrailSvc)
