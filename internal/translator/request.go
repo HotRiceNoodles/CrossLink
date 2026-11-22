@@ -43,6 +43,18 @@ func AnthropicToOpenAI(req *domain.AnthropicRequest, modelName string) (*domain.
 		Stream:      req.Stream,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
+		// M3 envelope carry (design §1.1): the translator is envelope-blind —
+		// one verbatim assignment, no semantic handling.
+		Extensions: req.Extensions,
+	}
+	if req.TopK != nil {
+		// top_k has no equivalent field in the internal OpenAI representation;
+		// carry it as metadata so an Anthropic-protocol upstream can enforce
+		// its version rules at the outbound checkpoint (M0). Old-version
+		// upstreams keep the existing drop-on-translate behavior — this carry
+		// does not restore top_k for them, it only prevents it from bypassing
+		// the 2026-10-21 rejection rule.
+		oaiReq.InboundSamplingMeta = &domain.InboundSamplingMeta{TopK: req.TopK}
 	}
 
 	if req.Stream {
