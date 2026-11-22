@@ -18,13 +18,17 @@ cd "$(dirname "$0")/.."
 fail=0
 
 # reserved_gaps: dialect:start:end (inclusive, 1-based sequence numbers).
-# postgres 96-98 / mysql 19-21 / sqlite 22-24 = kb_poison + rag_ledger
-# (commercial overlay); community behavior migrations deliberately sit above
-# them (postgres 99+, mysql 22+, sqlite 25+).
+# Cross-tree numbering contracts with the commercial overlay, whose migrations
+# merge into the release chain but are absent here. 2026-11-22: the earlier
+# kb_poison/rag_ledger slots (pg 96-98 / mysql 19-21 / sqlite 22-24) were
+# filled by community migrations (guardrail key scope, security profiles,
+# review services); the current reserved slots sit before the guard-ingest-key
+# migration (pg 104 / mysql 27 / sqlite 30) — confirm with the overlay tree
+# before renumbering anything into them.
 reserved_gaps="
-postgres:96:98
-mysql:19:21
-sqlite:22:24
+postgres:104:104
+mysql:27:27
+sqlite:30:30
 "
 
 is_reserved() {

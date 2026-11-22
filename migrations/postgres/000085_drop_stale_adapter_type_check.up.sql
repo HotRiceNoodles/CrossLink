@@ -5,4 +5,7 @@
 -- rejected by this constraint today. Adapter validity is enforced at runtime
 -- by the provider registry (RegisterAdapter); the DB-level whitelist only
 -- guarantees drift.
-ALTER TABLE providers DROP CONSTRAINT chk_adapter_type;
+-- IF EXISTS: on databases where the constraint was already dropped manually
+-- (e.g. to unblock 'mock' or Chinese-cloud adapter inserts), the plain DROP
+-- would fail migration startup.
+ALTER TABLE providers DROP CONSTRAINT IF EXISTS chk_adapter_type;
