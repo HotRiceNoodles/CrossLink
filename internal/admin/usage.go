@@ -97,7 +97,7 @@ func applyOrgScope(query *gorm.DB, c *gin.Context) *gorm.DB {
 var usageListColumns = []string{
 	"id", "request_id", "api_key_id", "provider_id", "route_type",
 	"model_requested", "model_used",
-	"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+	"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_creation_tokens",
 	"cost", "billable_cost", "currency",
 	"latency_ms", "first_token_ms", "status_code", "error_type",
 	"team_id", "org_id", "session_id", "template_id",
@@ -172,25 +172,26 @@ func (h *UsageHandler) List(c *gin.Context) {
 }
 
 type usageStats struct {
-	TotalRequests   int64   `json:"total_requests"`
-	TotalSessions   int64   `json:"total_sessions"`
-	TotalTokens     int64   `json:"total_tokens"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
-	ReasoningTokens int64   `json:"reasoning_tokens"`
-	CacheReadTokens int64   `json:"cache_read_tokens"`
-	TotalCost       float64 `json:"total_cost"`
-	CostPer1kTokens float64 `json:"cost_per_1k_tokens"`
-	CostPerRequest  float64 `json:"cost_per_request"`
-	AvgLatencyMs    float64 `json:"avg_latency_ms"`
-	AvgFirstTokenMs float64 `json:"avg_first_token_ms"`
-	ErrorRate       float64 `json:"error_rate"`
-	ActiveAPIKeys   int64   `json:"active_api_keys"`
-	TotalImages     int64   `json:"total_images"`
-	FallbackRate    float64 `json:"fallback_rate"`
-	RetryRate       float64 `json:"retry_rate"`
-	GuardrailRate   float64 `json:"guardrail_block_rate"`
-	Currency        string  `json:"currency"`
+	TotalRequests       int64   `json:"total_requests"`
+	TotalSessions       int64   `json:"total_sessions"`
+	TotalTokens         int64   `json:"total_tokens"`
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	ReasoningTokens     int64   `json:"reasoning_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	TotalCost           float64 `json:"total_cost"`
+	CostPer1kTokens     float64 `json:"cost_per_1k_tokens"`
+	CostPerRequest      float64 `json:"cost_per_request"`
+	AvgLatencyMs        float64 `json:"avg_latency_ms"`
+	AvgFirstTokenMs     float64 `json:"avg_first_token_ms"`
+	ErrorRate           float64 `json:"error_rate"`
+	ActiveAPIKeys       int64   `json:"active_api_keys"`
+	TotalImages         int64   `json:"total_images"`
+	FallbackRate        float64 `json:"fallback_rate"`
+	RetryRate           float64 `json:"retry_rate"`
+	GuardrailRate       float64 `json:"guardrail_block_rate"`
+	Currency            string  `json:"currency"`
 }
 
 func (h *UsageHandler) Stats(c *gin.Context) {
@@ -233,7 +234,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			"COALESCE(SUM(input_tokens), 0) as input_tokens, " +
 			"COALESCE(SUM(output_tokens), 0) as output_tokens, " +
 			"COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, " +
-			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, " +
+			"COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens, " +
 			"COALESCE(AVG(latency_ms), 0) as avg_latency_ms, " +
 			"COALESCE(AVG(CASE WHEN first_token_ms IS NOT NULL THEN first_token_ms END), 0) as avg_first_token_ms, " +
 			"COUNT(DISTINCT api_key_id) as active_api_keys, " +
@@ -282,26 +283,27 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		Scan(&currencySums)
 
 	data := gin.H{
-		"total_requests":       stats.TotalRequests,
-		"total_sessions":       stats.TotalSessions,
-		"total_tokens":         stats.TotalTokens,
-		"input_tokens":         stats.InputTokens,
-		"output_tokens":        stats.OutputTokens,
-		"reasoning_tokens":     stats.ReasoningTokens,
-		"cache_read_tokens":    stats.CacheReadTokens,
-		"total_cost":           stats.TotalCost,
-		"cost_per_1k_tokens":   stats.CostPer1kTokens,
-		"cost_per_request":     stats.CostPerRequest,
-		"avg_latency_ms":       stats.AvgLatencyMs,
-		"avg_first_token_ms":   stats.AvgFirstTokenMs,
-		"error_rate":           stats.ErrorRate,
-		"active_api_keys":      stats.ActiveAPIKeys,
-		"total_images":         stats.TotalImages,
-		"fallback_rate":        stats.FallbackRate,
-		"retry_rate":           stats.RetryRate,
-		"guardrail_block_rate": stats.GuardrailRate,
-		"currency":             stats.Currency,
-		"cost_by_currency":     currencySums,
+		"total_requests":        stats.TotalRequests,
+		"total_sessions":        stats.TotalSessions,
+		"total_tokens":          stats.TotalTokens,
+		"input_tokens":          stats.InputTokens,
+		"output_tokens":         stats.OutputTokens,
+		"reasoning_tokens":      stats.ReasoningTokens,
+		"cache_read_tokens":     stats.CacheReadTokens,
+		"cache_creation_tokens": stats.CacheCreationTokens,
+		"total_cost":            stats.TotalCost,
+		"cost_per_1k_tokens":    stats.CostPer1kTokens,
+		"cost_per_request":      stats.CostPerRequest,
+		"avg_latency_ms":        stats.AvgLatencyMs,
+		"avg_first_token_ms":    stats.AvgFirstTokenMs,
+		"error_rate":            stats.ErrorRate,
+		"active_api_keys":       stats.ActiveAPIKeys,
+		"total_images":          stats.TotalImages,
+		"fallback_rate":         stats.FallbackRate,
+		"retry_rate":            stats.RetryRate,
+		"guardrail_block_rate":  stats.GuardrailRate,
+		"currency":              stats.Currency,
+		"cost_by_currency":      currencySums,
 	}
 
 	// Global-view-only resource totals. These are point-in-time counts of
@@ -333,6 +335,7 @@ type DailyStat struct {
 	OutputTokens        int64   `json:"output_tokens"`
 	ReasoningTokens     int64   `json:"reasoning_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	FallbackCountDaily  int64   `json:"fallback_count_daily"`
 	RetryCountDaily     int64   `json:"retry_count_daily"`
 	GuardrailCountDaily int64   `json:"guardrail_count_daily"`
@@ -370,7 +373,7 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 	bucketExpr := dayBucketExpr(h.db.Dialector.Name(), "created_at")
 	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
-		Select(bucketExpr+" as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
+		Select(bucketExpr+" as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
 		Where("created_at >= ? AND currency = ?", localMidnight(time.Now().AddDate(0, 0, -days)), primaryCurrency).
 		Group(bucketExpr).
 		Order("date ASC")
@@ -383,7 +386,7 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 
 	for rows.Next() {
 		var s DailyStat
-		if err := rows.Scan(&s.Date, &s.Count, &s.Tokens, &s.InputTokens, &s.OutputTokens, &s.ReasoningTokens, &s.CacheReadTokens, &s.FallbackCountDaily, &s.RetryCountDaily, &s.GuardrailCountDaily, &s.ErrorCountDaily, &s.Cost); err != nil {
+		if err := rows.Scan(&s.Date, &s.Count, &s.Tokens, &s.InputTokens, &s.OutputTokens, &s.ReasoningTokens, &s.CacheReadTokens, &s.CacheCreationTokens, &s.FallbackCountDaily, &s.RetryCountDaily, &s.GuardrailCountDaily, &s.ErrorCountDaily, &s.Cost); err != nil {
 			continue
 		}
 		results = append(results, s)

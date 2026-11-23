@@ -91,6 +91,27 @@ func (t *ReverseStreamTranslator) handleContentBlockStart(data []byte) []domain.
 		return nil
 	}
 
+	// 类二 M-C: redacted_thinking blocks carry an opaque data payload that
+	// must reach the client verbatim (no deltas ever follow for them).
+	if evt.ContentBlock.Type == "redacted_thinking" {
+		var raw struct {
+			ContentBlock json.RawMessage `json:"content_block"`
+		}
+		_ = json.Unmarshal(data, &raw)
+		if len(raw.ContentBlock) > 0 {
+			chunk := &domain.OpenAIChunk{
+				ID:     t.messageID,
+				Object: "chat.completion.chunk",
+				Model:  t.model,
+				Choices: []domain.OpenAIChunkChoice{
+					{Index: 0, Delta: domain.OpenAIChunkDelta{RedactedThinking: raw.ContentBlock}},
+				},
+			}
+			return []domain.SSEChunk{{Chunk: chunk}}
+		}
+		return nil
+	}
+
 	if evt.ContentBlock.Type == "tool_use" {
 		t.activeToolID = evt.ContentBlock.ID
 		chunk := &domain.OpenAIChunk{
@@ -129,6 +150,8 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 		Delta struct {
 			Type        string `json:"type"`
 			Text        string `json:"text,omitempty"`
+			Thinking    string `json:"thinking,omitempty"`
+			Signature   string `json:"signature,omitempty"`
 			PartialJSON string `json:"partial_json,omitempty"`
 		} `json:"delta"`
 	}
@@ -138,12 +161,29 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 
 	switch evt.Delta.Type {
 	case "thinking_delta":
+		// Anthropic keys the reasoning text as "thinking" — the pre-类二 code
+		// read "text" and streaming reasoning was therefore always empty for
+		// real upstreams.
 		chunk := &domain.OpenAIChunk{
 			ID:     t.messageID,
 			Object: "chat.completion.chunk",
 			Model:  t.model,
 			Choices: []domain.OpenAIChunkChoice{
-				{Index: 0, Delta: domain.OpenAIChunkDelta{ReasoningContent: evt.Delta.Text}},
+				{Index: 0, Delta: domain.OpenAIChunkDelta{ReasoningContent: evt.Delta.Thinking}},
+			},
+		}
+		return []domain.SSEChunk{{Chunk: chunk}}
+
+	case "signature_delta":
+		// 类二 M-C: the thinking signature rides through the double
+		// translation (OpenAI wire has no field for it) and the synthesizer
+		// re-emits the signature_delta event verbatim for anthropic clients.
+		chunk := &domain.OpenAIChunk{
+			ID:     t.messageID,
+			Object: "chat.completion.chunk",
+			Model:  t.model,
+			Choices: []domain.OpenAIChunkChoice{
+				{Index: 0, Delta: domain.OpenAIChunkDelta{SignatureDelta: evt.Delta.Signature}},
 			},
 		}
 		return []domain.SSEChunk{{Chunk: chunk}}

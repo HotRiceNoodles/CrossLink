@@ -124,6 +124,26 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 		}
 	}
 
+	// 类二 M-C: thinking signature — re-emit the signature_delta verbatim so
+	// anthropic clients can echo the block back with its signature intact.
+	if delta.Delta.SignatureDelta != "" && t.state == stateBlockActive && t.activeBlockType == "thinking" {
+		events = append(events, signatureBlockDelta(t.blockIndex, delta.Delta.SignatureDelta))
+	}
+
+	// 类二 M-C: redacted_thinking block — the carried content_block object is
+	// re-emitted verbatim (open+implied close; redacted blocks emit no deltas).
+	if len(delta.Delta.RedactedThinking) > 0 {
+		if t.state == stateBlockActive {
+			events = append(events, contentBlockStop(t.blockIndex))
+			t.blockIndex++
+		}
+		events = append(events, redactedBlockStart(t.blockIndex, delta.Delta.RedactedThinking))
+		events = append(events, contentBlockStop(t.blockIndex))
+		t.blockIndex++
+		t.activeBlockType = ""
+		t.state = stateStarted
+	}
+
 	// Handle tool_calls in delta
 	if len(delta.Delta.ToolCalls) > 0 {
 		events = append(events, t.translateToolCallDelta(delta.Delta.ToolCalls)...)

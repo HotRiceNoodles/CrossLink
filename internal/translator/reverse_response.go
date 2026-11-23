@@ -1,6 +1,8 @@
 package translator
 
-import "github.com/crosslink/internal/domain"
+import (
+	"github.com/crosslink/internal/domain"
+)
 
 // AnthropicToOpenAIResponse translates an Anthropic Messages API response into OpenAI format.
 func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIResponse, error) {
@@ -8,10 +10,19 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 	var reasoningContent string
 	var toolCalls []domain.OpenAIToolCall
 
+	// Thinking-fidelity carry (M-B): collect thinking/redacted_thinking blocks
+	// as VALUES — the signature (and redacted data) bind to the block's
+	// content, not to our serialization, so value-level preservation through
+	// struct fields is sufficient and exact. reasoningContent text mapping
+	// continues for openai-inbound clients.
+	var thinkingBlocks []domain.ContentBlock
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
-			reasoningContent += block.Text
+			reasoningContent += block.Thinking
+			thinkingBlocks = append(thinkingBlocks, block)
+		case "redacted_thinking":
+			thinkingBlocks = append(thinkingBlocks, block)
 		case "text":
 			content += block.Text
 		case "tool_use":
@@ -44,6 +55,11 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 				FinishReason: finishReason,
 			},
 		},
+		// Thinking-fidelity carry (M-B): thinking/redacted blocks ride to the
+		// anthropic-facing response assembly (OpenAIToAnthropic), which emits
+		// them verbatim (signature intact) instead of synthesizing
+		// signature-less blocks from reasoningContent.
+		ThinkingBlocks: thinkingBlocks,
 		Usage: domain.OpenAIUsage{
 			// OpenAI semantics: prompt_tokens includes cached tokens. Anthropic's
 			// input_tokens excludes cache reads/writes, so fold them in here —

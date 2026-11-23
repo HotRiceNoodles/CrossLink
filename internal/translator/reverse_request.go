@@ -21,7 +21,7 @@ func OpenAIToAnthropicRequest(req *domain.OpenAIRequest) (*domain.AnthropicReque
 			// Current OpenAI spec: developer is the system-role alias.
 			systemParts = append(systemParts, domain.ContentText(msg.Content))
 		case "user":
-			msgs = append(msgs, domain.AnthropicMessage{Role: "user", Content: reverseUserContent(msg.Content)})
+			msgs = append(msgs, domain.AnthropicMessage{Role: "user", Content: reverseUserContent(msg.Content, msg.CacheMarker)})
 		case "assistant":
 			content, _ := json.Marshal(assistantToContentBlocks(msg))
 			msgs = append(msgs, domain.AnthropicMessage{Role: "assistant", Content: content})
@@ -52,21 +52,36 @@ func OpenAIToAnthropicRequest(req *domain.OpenAIRequest) (*domain.AnthropicReque
 	}
 
 	if len(systemParts) > 0 {
-		sys, _ := json.Marshal(strings.Join(systemParts, "\n"))
-		anthropicReq.System = sys
+		// Prompt-cache carry: an anthropic-inbound system block array carries
+		// cache_control inside its raw bytes — re-emit the ORIGINAL verbatim
+		// for same-protocol upstreams; the joined-string fallback covers the
+		// openai-inbound (no markers possible) path.
+		if req.InboundCacheMeta != nil && len(req.InboundCacheMeta.SystemRaw) > 0 {
+			anthropicReq.System = req.InboundCacheMeta.SystemRaw
+		} else {
+			sys, _ := json.Marshal(strings.Join(systemParts, "\n"))
+			anthropicReq.System = sys
+		}
 	}
 
 	if len(req.Tools) > 0 {
-		tools := make([]domain.AnthropicTool, len(req.Tools))
-		for i, t := range req.Tools {
-			tools[i] = domain.AnthropicTool{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				InputSchema: t.Function.Parameters,
+		// Prompt-cache carry: per-tool cache_control markers ride in the
+		// original tools bytes; re-emit verbatim (the structured rebuild below
+		// cannot express them). The rebuild stays for openai-inbound tools.
+		if req.InboundCacheMeta != nil && len(req.InboundCacheMeta.ToolsRaw) > 0 {
+			anthropicReq.Tools = req.InboundCacheMeta.ToolsRaw
+		} else {
+			tools := make([]domain.AnthropicTool, len(req.Tools))
+			for i, t := range req.Tools {
+				tools[i] = domain.AnthropicTool{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					InputSchema: t.Function.Parameters,
+				}
 			}
+			toolsJSON, _ := json.Marshal(tools)
+			anthropicReq.Tools = toolsJSON
 		}
-		toolsJSON, _ := json.Marshal(tools)
-		anthropicReq.Tools = toolsJSON
 	}
 
 	if req.ToolChoice != nil {
@@ -89,6 +104,29 @@ func OpenAIToAnthropicRequest(req *domain.OpenAIRequest) (*domain.AnthropicReque
 }
 
 func assistantToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
+	// 类二 M-A: a carried thinking-block sequence replays VERBATIM (values
+	// incl. signature/data) ahead of the rebuilt text/tool blocks — the
+	// model's own reasoning must return byte-for-byte in value terms, or the
+	// upstream rejects/loses continuity.
+	if len(msg.ThinkingBlocks) > 0 {
+		blocks := make([]domain.ContentBlock, 0, len(msg.ThinkingBlocks)+2)
+		blocks = append(blocks, msg.ThinkingBlocks...)
+		if text := domain.ContentText(msg.Content); text != "" {
+			blocks = append(blocks, domain.ContentBlock{Type: "text", Text: text})
+		}
+		for _, tc := range msg.ToolCalls {
+			blocks = append(blocks, domain.ContentBlock{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: jsonString(tc.Function.Arguments),
+			})
+		}
+		if len(blocks) == len(msg.ThinkingBlocks) {
+			blocks = append(blocks, domain.ContentBlock{Type: "text", Text: ""})
+		}
+		return blocks
+	}
 	var blocks []domain.ContentBlock
 	if text := domain.ContentText(msg.Content); text != "" {
 		blocks = append(blocks, domain.ContentBlock{Type: "text", Text: text})
@@ -104,13 +142,19 @@ func assistantToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
 	if len(blocks) == 0 {
 		blocks = append(blocks, domain.ContentBlock{Type: "text", Text: ""})
 	}
+	// Prompt-cache carry: re-attach the inbound marker onto the LAST block
+	// (the boundary position Anthropic's own guidance uses).
+	if len(msg.CacheMarker) > 0 {
+		blocks[len(blocks)-1].CacheControl = msg.CacheMarker
+	}
 	return blocks
 }
 
 func toolResultToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
 	block := domain.ContentBlock{
-		Type:      "tool_result",
-		ToolUseID: msg.ToolCallID,
+		Type:         "tool_result",
+		ToolUseID:    msg.ToolCallID,
+		CacheControl: msg.CacheMarker,
 	}
 	if msg.Content != nil {
 		if parts, ok := msg.Content.([]any); ok {
@@ -130,15 +174,42 @@ func toolResultToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
 // reverseUserContent converts an OpenAI user-message content (plain string or
 // array of content parts) into Anthropic message content. String or nil
 // content passes through verbatim; part arrays go through
-// reverseContentParts.
-func reverseUserContent(content any) json.RawMessage {
+// reverseContentParts. A carried prompt-cache marker upgrades a string into a
+// single-block array (a bare string cannot carry cache_control) or is
+// injected into the last rebuilt part.
+func reverseUserContent(content any, marker json.RawMessage) json.RawMessage {
 	parts, ok := content.([]any)
 	if !ok {
-		raw, _ := json.Marshal(content)
+		if len(marker) == 0 {
+			raw, _ := json.Marshal(content)
+			return raw
+		}
+		text, _ := content.(string)
+		blocks := []domain.ContentBlock{{Type: "text", Text: text, CacheControl: marker}}
+		raw, _ := json.Marshal(blocks)
 		return raw
 	}
-	raw, _ := json.Marshal(reverseContentParts(parts))
+	out := reverseContentParts(parts)
+	if len(marker) > 0 && len(out) > 0 {
+		out[len(out)-1] = withCacheMarker(out[len(out)-1], marker)
+	}
+	raw, _ := json.Marshal(out)
 	return raw
+}
+
+// withCacheMarker injects a cache_control marker into a raw content-part
+// block, preserving all other fields.
+func withCacheMarker(raw json.RawMessage, marker json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return raw
+	}
+	m["cache_control"] = marker
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // reverseContentParts maps OpenAI content parts onto Anthropic blocks:

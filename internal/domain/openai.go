@@ -28,6 +28,28 @@ type OpenAIRequest struct {
 	// (M0). json:"-" keeps it out of every wire encoding — never sent
 	// upstream, to clients, or accepted from client JSON.
 	InboundSamplingMeta *InboundSamplingMeta `json:"-"`
+	// InboundCacheMeta is the prompt-cache carry (system/tools half): original
+	// Anthropic bytes that carry cache_control markers no structured rebuild
+	// can preserve. Filled by AnthropicToOpenAI, consumed by
+	// OpenAIToAnthropicRequest for same-protocol upstreams.
+	InboundCacheMeta *InboundCacheMeta `json:"-"`
+
+	// Generation params below are OPENAI-WIRE NATIVE: the openai_compatible
+	// adapter marshals the struct straight to the upstream body, so these
+	// fields pass through openai→openai verbatim. The anthropic reverse
+	// translation simply does not map them (no protocol equivalent — dropped
+	// cross-protocol, like n). Deliberately NOT included: service_tier
+	// (priority processing = billing-coupled, stays observe-dropped at
+	// admission until its pricing gate exists).
+	ResponseFormat    json.RawMessage `json:"response_format,omitempty"` // structured outputs (json_object/json_schema), verbatim
+	FrequencyPenalty  *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty   *float64        `json:"presence_penalty,omitempty"`
+	Seed              *int            `json:"seed,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	Logprobs          *bool           `json:"logprobs,omitempty"`
+	TopLogprobs       *int            `json:"top_logprobs,omitempty"`
+	LogitBias         json.RawMessage `json:"logit_bias,omitempty"` // token-id → bias map, verbatim
+	Store             *bool           `json:"store,omitempty"`
 	// Extensions is the M3 admission envelope: protocol-level parameters and
 	// headers the gateway has ADMITTED (identified + validated) at the inbound
 	// handler, carried to the outbound adapter checkpoint. Handlers are the
@@ -46,6 +68,19 @@ type StreamOptions struct {
 // already round-trip as first-class pointer fields and need no carry.
 type InboundSamplingMeta struct {
 	TopK *int `json:"-"`
+}
+
+// InboundCacheMeta is the request-level prompt-cache carry (the system/tools
+// half; per-message markers ride on OpenAIMessage.CacheMarker). AnthropicToOpenAI
+// captures the ORIGINAL system block-array and tools bytes — cache_control
+// markers live inside them and no structured rebuild can preserve them — and
+// OpenAIToAnthropicRequest re-emits them verbatim for same-protocol upstreams.
+type InboundCacheMeta struct {
+	// SystemRaw: the original system field when it was a block array (a plain
+	// string system cannot carry markers and needs no carry).
+	SystemRaw json.RawMessage
+	// ToolsRaw: the original tools array bytes (per-tool cache_control).
+	ToolsRaw json.RawMessage
 }
 
 // ProtocolExtensions is the M3 internal envelope (design §1): admitted
@@ -95,6 +130,18 @@ type OpenAIMessage struct {
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	// CacheMarker carries the Anthropic prompt-cache marker of the inbound
+	// content block(s) this message was translated FROM (json:"-" keeps it
+	// off the OpenAI wire — the protocol has no such field). The reverse
+	// translation re-attaches it onto the last rebuilt block. See
+	// InboundCacheMeta for the system/tools level of the same carry.
+	CacheMarker json.RawMessage `json:"-"`
+	// ThinkingBlocks carries assistant thinking/redacted_thinking blocks
+	// (values: thinking text + signature, redacted data) translated FROM an
+	// anthropic inbound message (类二 M-A). The reverse translation prepends
+	// them verbatim onto the rebuilt assistant content; openai-inbound never
+	// sets them.
+	ThinkingBlocks []ContentBlock `json:"-"`
 }
 
 // ContentText extracts a text string from Content, which may be nil, a string,
@@ -155,12 +202,21 @@ type OpenAIResponse struct {
 	Usage             OpenAIUsage    `json:"usage"`
 	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 	ServiceTier       string         `json:"service_tier,omitempty"`
+	// ThinkingBlocks: thinking/redacted_thinking blocks captured from an
+	// anthropic upstream response (values incl. signature/data — 类二 M-B),
+	// re-emitted verbatim to anthropic-inbound clients by OpenAIToAnthropic.
+	// json:"-" keeps them off the OpenAI wire.
+	ThinkingBlocks []ContentBlock `json:"-"`
 }
 
 type OpenAIChoice struct {
 	Index        int           `json:"index"`
 	Message      OpenAIMessage `json:"message"`
 	FinishReason string        `json:"finish_reason"`
+	// Logprobs rides verbatim when the client asked for it (request-side
+	// Logprobs/TopLogprobs): passthrough keeps the pair functional
+	// openai→openai; anthropic upstreams never populate it.
+	Logprobs json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type OpenAIUsage struct {
@@ -204,6 +260,13 @@ type OpenAIChunkDelta struct {
 	Content          string                `json:"content,omitempty"`
 	ReasoningContent string                `json:"reasoning_content,omitempty"`
 	ToolCalls        []OpenAIChunkToolCall `json:"tool_calls,omitempty"`
+	// 类二 M-C stream carries (json:"-" — OpenAI wire has no such concepts):
+	// SignatureDelta rides an anthropic signature_delta event through the
+	// double translation so the client stream keeps the thinking signature;
+	// RedactedThinking carries a redacted_thinking content_block_start's raw
+	// content_block object to re-emit verbatim.
+	SignatureDelta   string          `json:"-"`
+	RedactedThinking json.RawMessage `json:"-"`
 }
 
 type OpenAIChunkToolCall struct {

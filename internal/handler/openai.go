@@ -588,14 +588,15 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		StatusCode:     http.StatusOK,
 		LatencyMs:      latency,
 		// M0: strips audit rides the attempts timeline even on success.
-		Attempts:        attemptsJSON(result.Attempts),
-		FallbackCount:   result.FallbackCount,
-		RetryCount:      totalRetries,
-		ReasoningTokens: extractReasoningTokens(resp.Usage.CompletionTokensDetails),
-		CacheReadTokens: extractCacheReadTokens(resp.Usage.PromptTokensDetails),
-		SessionID:       sessionID,
-		TemplateID:      templateID,
-		PriceMultiplier: priceMult,
+		Attempts:            attemptsJSON(result.Attempts),
+		FallbackCount:       result.FallbackCount,
+		RetryCount:          totalRetries,
+		ReasoningTokens:     extractReasoningTokens(resp.Usage.CompletionTokensDetails),
+		CacheReadTokens:     extractCacheReadTokens(resp.Usage.PromptTokensDetails),
+		CacheCreationTokens: resp.Usage.CacheCreationTokens,
+		SessionID:           sessionID,
+		TemplateID:          templateID,
+		PriceMultiplier:     priceMult,
 	}
 	submitUsageEntryFunc(h.usageSvc, entry, func() {
 		if h.latencySvc != nil {

@@ -29,14 +29,33 @@ type AnthropicMessage struct {
 }
 
 type ContentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking is the extended-thinking block's reasoning text — thinking
+	// blocks key it as "thinking", NOT "text" (the pre-类二 mapping read Text
+	// and was therefore always empty for real upstreams).
+	Thinking string          `json:"thinking,omitempty"`
+	ID       string          `json:"id,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"`
 
 	// image fields
 	Source json.RawMessage `json:"source,omitempty"`
+
+	// CacheControl is the Anthropic prompt-cache marker ("cache_control"),
+	// carried verbatim — RawMessage preserves the exact bytes (ephemeral and
+	// the 1h TTL variant). Forward translation captures it per block; reverse
+	// translation re-attaches it. Without this carry the marker dies at the
+	// gateway and the upstream's explicit prompt caching never activates.
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+
+	// Thinking fidelity (类二): extended-thinking blocks carry a signature
+	// that binds the block's content — clients MUST pass it back exactly, and
+	// redacted_thinking carries an opaque data blob. Without these fields the
+	// signature dies at the gateway and multi-turn tool-use-with-thinking
+	// breaks (upstream 400s or silently degrades).
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking: opaque encrypted payload
 
 	// tool_result fields
 	ToolUseID string          `json:"tool_use_id,omitempty"`

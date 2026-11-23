@@ -57,6 +57,17 @@ func AnthropicToOpenAI(req *domain.AnthropicRequest, modelName string) (*domain.
 		// the 2026-10-21 rejection rule.
 		oaiReq.InboundSamplingMeta = &domain.InboundSamplingMeta{TopK: req.TopK}
 	}
+	// Prompt-cache carry (system/tools half): a block-array system and the
+	// tools array carry cache_control markers INSIDE their raw bytes — no
+	// structured rebuild preserves them. Capture the originals verbatim; the
+	// reverse translation re-emits them for same-protocol upstreams. A plain
+	// string system cannot carry markers and needs no capture.
+	if isBlockArrayJSON(req.System) || len(req.Tools) > 0 {
+		oaiReq.InboundCacheMeta = &domain.InboundCacheMeta{
+			SystemRaw: blockArraySystem(req.System),
+			ToolsRaw:  req.Tools,
+		}
+	}
 
 	if req.Stream {
 		oaiReq.StreamOptions = &domain.StreamOptions{IncludeUsage: true}
@@ -104,7 +115,39 @@ func translateMessage(msg domain.AnthropicMessage) []domain.OpenAIMessage {
 		return []domain.OpenAIMessage{{Role: msg.Role, Content: string(msg.Content)}}
 	}
 
-	return translateContentBlocks(msg.Role, blocks)
+	out := translateContentBlocks(msg.Role, blocks)
+	// 类二 M-A: assistant thinking/redacted blocks have no OpenAI equivalent —
+	// carry their VALUES on the translated assistant message so the reverse
+	// translation can re-emit them (signature intact) for same-protocol
+	// upstreams. Only assistant messages legally contain thinking blocks.
+	if msg.Role == "assistant" {
+		for i := range out {
+			if out[i].Role == "assistant" && len(blocks) > 0 && hasThinkingBlocks(blocks) {
+				out[i].ThinkingBlocks = collectThinkingBlocks(blocks)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func hasThinkingBlocks(blocks []domain.ContentBlock) bool {
+	for _, b := range blocks {
+		if b.Type == "thinking" || b.Type == "redacted_thinking" {
+			return true
+		}
+	}
+	return false
+}
+
+func collectThinkingBlocks(blocks []domain.ContentBlock) []domain.ContentBlock {
+	var out []domain.ContentBlock
+	for _, b := range blocks {
+		if b.Type == "thinking" || b.Type == "redacted_thinking" {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.OpenAIMessage {
@@ -114,10 +157,21 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	var results []domain.OpenAIMessage
 	var imageParts []any
 
+	// Prompt-cache marker capture (per-message half of the carry): the marker
+	// of the last marked block contributing to each emitted message rides on
+	// that message's CacheMarker; the reverse translation re-attaches it to
+	// the last rebuilt block. Joined-text buckets keep the LAST marker seen
+	// (best effort: the boundary lands at message end, which is at or after
+	// the original position — cache prefixes only grow, never shrink).
+	var textMarker, assistantMarker, imageMarker json.RawMessage
+
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
 			textParts = append(textParts, b.Text)
+			if len(b.CacheControl) > 0 {
+				textMarker = b.CacheControl
+			}
 		case "tool_use":
 			toolCalls = append(toolCalls, domain.OpenAIToolCall{
 				ID:   b.ID,
@@ -127,16 +181,24 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 					Arguments: string(b.Input),
 				},
 			})
+			if len(b.CacheControl) > 0 {
+				assistantMarker = b.CacheControl
+			}
 		case "tool_result":
 			content := extractToolResultContent(b.Content)
-			results = append(results, domain.OpenAIMessage{
-				Role:       "tool",
-				Content:    content,
-				ToolCallID: b.ToolUseID,
-			})
+			m := domain.OpenAIMessage{
+				Role:        "tool",
+				Content:     content,
+				ToolCallID:  b.ToolUseID,
+				CacheMarker: b.CacheControl,
+			}
+			results = append(results, m)
 		case "image":
 			if part, ok := imageBlockToPart(b); ok {
 				imageParts = append(imageParts, part)
+				if len(b.CacheControl) > 0 {
+					imageMarker = b.CacheControl
+				}
 			}
 		}
 	}
@@ -144,14 +206,14 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	// If only text blocks, return a simple message
 	if len(toolCalls) == 0 && len(results) == 0 {
 		if len(imageParts) == 0 {
-			return []domain.OpenAIMessage{{Role: role, Content: strings.Join(textParts, "\n")}}
+			return []domain.OpenAIMessage{{Role: role, Content: strings.Join(textParts, "\n"), CacheMarker: textMarker}}
 		}
 		content := make([]any, 0, len(textParts)+len(imageParts))
 		if len(textParts) > 0 {
 			content = append(content, map[string]any{"type": "text", "text": strings.Join(textParts, "\n")})
 		}
 		content = append(content, imageParts...)
-		return []domain.OpenAIMessage{{Role: role, Content: content}}
+		return []domain.OpenAIMessage{{Role: role, Content: content, CacheMarker: lastMarker(textMarker, imageMarker)}}
 	}
 
 	var msgs []domain.OpenAIMessage
@@ -159,9 +221,10 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	// Text + tool_calls in assistant message
 	if len(textParts) > 0 || len(toolCalls) > 0 {
 		msg := domain.OpenAIMessage{
-			Role:      role,
-			Content:   strings.Join(textParts, "\n"),
-			ToolCalls: toolCalls,
+			Role:        role,
+			Content:     strings.Join(textParts, "\n"),
+			ToolCalls:   toolCalls,
+			CacheMarker: lastMarker(textMarker, assistantMarker),
 		}
 		msgs = append(msgs, msg)
 	}
@@ -172,10 +235,47 @@ func translateContentBlocks(role string, blocks []domain.ContentBlock) []domain.
 	// Images cannot ride along a tool-role message in OpenAI shape; emit them
 	// as a trailing message so they are not silently dropped.
 	if len(imageParts) > 0 {
-		msgs = append(msgs, domain.OpenAIMessage{Role: role, Content: imageParts})
+		msgs = append(msgs, domain.OpenAIMessage{Role: role, Content: imageParts, CacheMarker: imageMarker})
 	}
 
 	return msgs
+}
+
+// lastMarker returns the later of two captured prompt-cache markers (the
+// second wins when both exist — later block = later boundary).
+func lastMarker(a, b json.RawMessage) json.RawMessage {
+	if len(b) > 0 {
+		return b
+	}
+	return a
+}
+
+// isBlockArrayJSON reports whether raw is a JSON array (the anthropic system
+// field's block-array form — the only form that can carry cache_control).
+func isBlockArrayJSON(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// blockArraySystem returns the original system bytes when they are a block
+// array (markers preserved verbatim), nil otherwise.
+func blockArraySystem(raw json.RawMessage) json.RawMessage {
+	if isBlockArrayJSON(raw) {
+		return raw
+	}
+	return nil
 }
 
 // imageBlockToPart converts an Anthropic image block into an OpenAI

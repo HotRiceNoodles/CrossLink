@@ -126,26 +126,27 @@ type UsageEntry struct {
 	ErrorStage         string
 	// Attempts is the serialized fallback timeline; nil on clean single-attempt
 	// successes (error observability L2).
-	Attempts           datatypes.JSON
-	UserMessage        string
-	ModelResponse      string
-	FallbackCount      int
-	RetryCount         int
-	GuardrailTriggered bool
-	GuardrailRule      string
-	GuardrailTruncated bool
-	AgentType          string
-	SecurityEvents     datatypes.JSON
-	CacheHit           bool
-	ReasoningTokens    int
-	CacheReadTokens    int
-	SessionID          string
-	TemplateID         *int64 // prompt template that assembled this request (nil = none)
-	ImageCount         int
-	ImageSize          string
-	ImageQuality       string
-	PrecomputedCost    float64
-	PriceMultiplier    float64 // key's price multiplier (1.0 = no markup)
+	Attempts            datatypes.JSON
+	UserMessage         string
+	ModelResponse       string
+	FallbackCount       int
+	RetryCount          int
+	GuardrailTriggered  bool
+	GuardrailRule       string
+	GuardrailTruncated  bool
+	AgentType           string
+	SecurityEvents      datatypes.JSON
+	CacheHit            bool
+	ReasoningTokens     int
+	CacheReadTokens     int
+	CacheCreationTokens int
+	SessionID           string
+	TemplateID          *int64 // prompt template that assembled this request (nil = none)
+	ImageCount          int
+	ImageSize           string
+	ImageQuality        string
+	PrecomputedCost     float64
+	PriceMultiplier     float64 // key's price multiplier (1.0 = no markup)
 	// Context quality analysis fields — nil = unanalyzed (cache-hit or analysis failure).
 	SystemTokens         *int
 	HistoryTokens        *int
@@ -180,30 +181,31 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		eventID = uuid.New().String()
 	}
 	log := &model.UsageLog{
-		RequestID:          firstNonEmpty(entry.GinRequestID, uuid.New().String()),
-		EventID:            &eventID,
-		RouteType:          entry.RouteType,
-		ModelRequested:     entry.ModelRequested,
-		ModelUsed:          entry.ModelUsed,
-		InputTokens:        entry.InputTokens,
-		OutputTokens:       entry.OutputTokens,
-		Cost:               upstreamCost,
-		BillableCost:       upstreamCost * mult,
-		Currency:           model.ValidCurrency(entry.Currency),
-		LatencyMs:          int(entry.LatencyMs),
-		StatusCode:         entry.StatusCode,
-		ErrorType:          entry.ErrorType,
-		FallbackCount:      entry.FallbackCount,
-		RetryCount:         entry.RetryCount,
-		GuardrailTriggered: entry.GuardrailTriggered,
-		GuardrailRule:      entry.GuardrailRule,
-		GuardrailTruncated: entry.GuardrailTruncated,
-		CacheHit:           entry.CacheHit,
-		AgentType:          entry.AgentType,
-		SecurityEvents:     entry.SecurityEvents,
-		ReasoningTokens:    entry.ReasoningTokens,
-		CacheReadTokens:    entry.CacheReadTokens,
-		SessionID:          entry.SessionID,
+		RequestID:           firstNonEmpty(entry.GinRequestID, uuid.New().String()),
+		EventID:             &eventID,
+		RouteType:           entry.RouteType,
+		ModelRequested:      entry.ModelRequested,
+		ModelUsed:           entry.ModelUsed,
+		InputTokens:         entry.InputTokens,
+		OutputTokens:        entry.OutputTokens,
+		Cost:                upstreamCost,
+		BillableCost:        upstreamCost * mult,
+		Currency:            model.ValidCurrency(entry.Currency),
+		LatencyMs:           int(entry.LatencyMs),
+		StatusCode:          entry.StatusCode,
+		ErrorType:           entry.ErrorType,
+		FallbackCount:       entry.FallbackCount,
+		RetryCount:          entry.RetryCount,
+		GuardrailTriggered:  entry.GuardrailTriggered,
+		GuardrailRule:       entry.GuardrailRule,
+		GuardrailTruncated:  entry.GuardrailTruncated,
+		CacheHit:            entry.CacheHit,
+		AgentType:           entry.AgentType,
+		SecurityEvents:      entry.SecurityEvents,
+		ReasoningTokens:     entry.ReasoningTokens,
+		CacheReadTokens:     entry.CacheReadTokens,
+		CacheCreationTokens: entry.CacheCreationTokens,
+		SessionID:           entry.SessionID,
 	}
 	if entry.FirstTokenMs > 0 {
 		ms := int(entry.FirstTokenMs)

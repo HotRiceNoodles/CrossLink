@@ -62,6 +62,32 @@ func thinkingBlockDelta(index int, text string) domain.SSEEvent {
 	return domain.SSEEvent{Event: "content_block_delta", Data: data}
 }
 
+// signatureBlockDelta emits the anthropic signature_delta event that closes a
+// thinking block's signature (类二 M-C): the client needs it verbatim to echo
+// the block back in later turns.
+func signatureBlockDelta(index int, signature string) domain.SSEEvent {
+	data, _ := json.Marshal(map[string]any{
+		"type":  "content_block_delta",
+		"index": index,
+		"delta": map[string]any{
+			"type":      "signature_delta",
+			"signature": signature,
+		},
+	})
+	return domain.SSEEvent{Event: "content_block_delta", Data: data}
+}
+
+// redactedBlockStart re-emits a redacted_thinking content_block_start whose
+// content_block object was carried verbatim (类二 M-C).
+func redactedBlockStart(index int, contentBlock json.RawMessage) domain.SSEEvent {
+	data, _ := json.Marshal(map[string]any{
+		"type":          "content_block_start",
+		"index":         index,
+		"content_block": contentBlock,
+	})
+	return domain.SSEEvent{Event: "content_block_start", Data: data}
+}
+
 func toolUseBlockStart(index int, id, name string) domain.SSEEvent {
 	data, _ := json.Marshal(map[string]any{
 		"type":  "content_block_start",
