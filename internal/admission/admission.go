@@ -46,6 +46,7 @@ var billingCoupledParams = map[string]map[string]bool{
 		"diagnostics":   true, // prior-request server state
 		"cache_control": true, // request-level cache billing
 		"output_config": true, // effort semantics unverified until registered
+		"mcp_servers":   true, // server-side MCP connector: upstream-side tool execution + state
 	},
 	"openai": {
 		"web_search_options": true, // introduces tool execution + billing
@@ -70,6 +71,13 @@ var knownTopLevelParams = map[string]map[string]bool{
 		"temperature": true, "top_p": true, "stop": true, "user": true,
 		"stream_options": true, "tools": true, "tool_choice": true,
 		"reasoning_effort": true, "thinking": true,
+		// Wire-native generation params (struct fields — openai→openai
+		// passthrough). service_tier stays OFF this list on purpose:
+		// priority processing is billing-coupled.
+		"response_format": true, "frequency_penalty": true,
+		"presence_penalty": true, "seed": true,
+		"parallel_tool_calls": true, "logprobs": true,
+		"top_logprobs": true, "logit_bias": true, "store": true,
 	},
 }
 

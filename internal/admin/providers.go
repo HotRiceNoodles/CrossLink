@@ -334,6 +334,17 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// G2: providers.name carries a plain unique index, and the soft-deleted
+	// row keeps occupying it — recreating under the same name would fail with
+	// a phantom "already exists" pointing at a row no list shows. Rename the
+	// tombstone (name + "#del#" + id) before the soft delete so the name is
+	// immediately reusable. Portable across all three dialects; no index
+	// change needed.
+	p.Name = fmt.Sprintf("%s#del#%d", p.Name, p.ID)
+	if err := h.repo.Update(c.Request.Context(), p); err != nil {
+		slog.Warn("provider delete: tombstone rename failed (proceeding with delete)", "id", id, "error", err)
+	}
+
 	if err := h.repo.Delete(c.Request.Context(), id); err != nil {
 		if h.auditSvc != nil {
 			h.auditSvc.LogFailure(c, "provider:delete", "provider", fmt.Sprintf("%d", id), p.Name, service.AuditDetail(map[string]any{"reason": "internal_error", "error": err.Error()}))

@@ -28,6 +28,11 @@ const migParityDn = migDir + "000004_usage_model_parity.down.sql"
 const migEventIDUp = migDir + "000007_usage_event_id.up.sql"
 const migEventIDDn = migDir + "000007_usage_event_id.down.sql"
 
+// Prompt-cache observability column (sqlite chain 000111, cache-fidelity
+// line): usage_logs.cache_creation_tokens.
+const migCacheCreationUp = migDir + "000111_usage_cache_creation.up.sql"
+const migCacheCreationDn = migDir + "000111_usage_cache_creation.down.sql"
+
 func applyChain(t *testing.T, db *gorm.DB, files ...string) {
 	t.Helper()
 	for _, f := range files {
@@ -68,7 +73,7 @@ func fullUsageLog() *model.UsageLog {
 		FallbackCount: 1, RetryCount: 2, GuardrailTriggered: true, GuardrailRule: "keyword",
 		GuardrailTruncated: true, CacheHit: false, AgentType: "codex",
 		SecurityEvents:  datatypes.JSON(`[{"rule":"keyword"}]`),
-		ReasoningTokens: 5, CacheReadTokens: 6, SessionID: "sess-1", TemplateID: &tpl,
+		ReasoningTokens: 5, CacheReadTokens: 6, CacheCreationTokens: 7, SessionID: "sess-1", TemplateID: &tpl,
 		ImageCount: &imgCount, ImageSize: &imgSize, ImageQuality: &imgQuality,
 		SystemTokens: &sys, HistoryTokens: &hist, QuestionTokens: &q, ToolTokens: &tool,
 		ToolOutputTokens: &toolOut, ContextWindow: &ctxWin, ContextUtilizationBp: &util,
@@ -143,7 +148,7 @@ func insertAndReadBack(t *testing.T, db *gorm.DB, label string) {
 // the current model writes and reads back EVERY field.
 func TestFreshInstallFullChainModelWriteAllFields(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
 	// Parity columns must come from 000004 only — the duplicate-column guard
 	// for this migration class.
 	if !hasUsageColumn(t, db, "billable_cost") || !hasUsageColumn(t, db, "attempts") || !hasUsageColumn(t, db, "context_snapshot") {
@@ -165,7 +170,7 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 	} else {
 		t.Logf("pre-upgrade write fails as expected: %v", err)
 	}
-	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp)
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
 	insertAndReadBack(t, db, "deployed upgrade 000003+000004+000007")
 }
 
@@ -175,7 +180,7 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 // parity-column DATA (column-drop semantics), which is asserted explicitly.
 func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
 	insertAndReadBack(t, db, "before rollback")
 
 	applyChain(t, db, migEventIDDn)
@@ -200,7 +205,7 @@ func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 		t.Fatal("000003 down left guardrail_truncated behind")
 	}
 
-	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp)
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
 	if err := db.Exec("DELETE FROM usage_logs").Error; err != nil {
 		t.Fatal(err)
 	}

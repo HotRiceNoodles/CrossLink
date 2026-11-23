@@ -94,3 +94,18 @@ func (r *ProviderModelCRUDRepo) CountByProviderID(ctx context.Context, providerI
 	err := r.db.WithContext(ctx).Model(&model.ProviderModel{}).Where("provider_id = ?", providerID).Count(&count).Error
 	return count, err
 }
+
+// FindByProviderAndName returns the LIVE mapping row for (providerID,
+// modelName) — soft-deleted rows excluded. Used by the admin Create handler's
+// duplicate check (G3): a DB unique index cannot express "unique among live
+// rows" portably across the three dialects with gorm soft delete, so the
+// check is a pre-create query instead.
+func (r *ProviderModelCRUDRepo) FindByProviderAndName(ctx context.Context, providerID int64, modelName string) (*model.ProviderModel, error) {
+	var m model.ProviderModel
+	if err := r.db.WithContext(ctx).
+		Where("provider_id = ? AND model_name = ?", providerID, modelName).
+		First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}

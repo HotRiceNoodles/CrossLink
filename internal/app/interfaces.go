@@ -64,7 +64,7 @@ type AppDeps struct {
 	DataLensStore  repository.MetricsStore
 	DataLensRepo   *repository.DataLensRepository
 	DataLensAggSvc *service.DataLensAggregatorService // manual aggregate refresh seam (POST /datalens/refresh-aggregates); always constructed, only Run() is dialect-gated
-	AppCtx         context.Context // application-lifetime context for background goroutines
+	AppCtx         context.Context                    // application-lifetime context for background goroutines
 }
 
 // Extensions holds Commercial-only plugins injected at startup.

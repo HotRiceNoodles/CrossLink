@@ -69,6 +69,10 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		Currency        string          `json:"currency"`
 		RoutingStrategy string          `json:"routing_strategy"`
 		ExtraConfig     json.RawMessage `json:"extra_config"`
+		// MaxContext: the upstream model's context window (tokens). Consumed
+		// by context analysis and budget estimation; absent (nil) = unknown,
+		// analysis degrades to the FlagWindowUnknown path.
+		MaxContext *int `json:"max_context"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		if h.auditSvc != nil {
@@ -82,6 +86,32 @@ func (h *ModelHandler) Create(c *gin.Context) {
 			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "prices_negative"}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "prices must be non-negative")
+		return
+	}
+	// G4: routing fields bounds — a negative weight silently lands in the
+	// fallback-only pool (strategy splits primaries at >0); priority < 1 has
+	// no defined meaning (the column default is 1).
+	if input.Weight < 0 || input.Priority < 1 {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "routing_fields_invalid"}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "weight must be >= 0 and priority must be >= 1")
+		return
+	}
+	// G1: context window, when declared, must be positive.
+	if input.MaxContext != nil && *input.MaxContext <= 0 {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "max_context must be a positive token count")
+		return
+	}
+	// G3: duplicate live mapping (provider, model_name) skews weighted
+	// routing (the same candidate appears twice). Soft-deleted rows are
+	// excluded — a DB unique index cannot express that portably across the
+	// three dialects, so the check is a pre-create query.
+	if existing, err := h.repo.FindByProviderAndName(c.Request.Context(), input.ProviderID, input.ModelName); err == nil && existing != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "model_mapping_exists"}))
+		}
+		errorResp(c, http.StatusConflict, ErrModelMappingExists, fmt.Sprintf("provider %d already has a live mapping for model %q", input.ProviderID, input.ModelName))
 		return
 	}
 	// M3.2 write half: request_overrides / allowed_extensions keys are
@@ -117,6 +147,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		Currency:        model.ValidCurrency(input.Currency),
 		RoutingStrategy: input.RoutingStrategy,
 		ExtraConfig:     datatypes.JSON(input.ExtraConfig),
+		MaxContext:      input.MaxContext,
 		Status:          1,
 	}
 	orgID := GetOrgID(c)
@@ -196,6 +227,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		Status          *int16          `json:"status"`
 		RoutingStrategy *string         `json:"routing_strategy"`
 		ExtraConfig     json.RawMessage `json:"extra_config"`
+		// MaxContext: non-nil sets the window (0 clears it back to unknown);
+		// nil leaves it unchanged.
+		MaxContext *int `json:"max_context"`
 		// M4/P-8: recognized only so a rename attempt gets an explicit 400
 		// instead of being silently dropped by the update whitelist. The two
 		// keys key the resolver/response caches — changing them in place would
@@ -215,6 +249,16 @@ func (h *ModelHandler) Update(c *gin.Context) {
 			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "prices_negative"}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrPricesNegative, "prices must be non-negative")
+		return
+	}
+	// G4: same bounds as Create.
+	if (input.Weight != nil && *input.Weight < 0) || (input.Priority != nil && *input.Priority < 1) {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "weight must be >= 0 and priority must be >= 1")
+		return
+	}
+	// G1: 0 clears (unknown), positive sets, negative rejects.
+	if input.MaxContext != nil && *input.MaxContext < 0 {
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "max_context must be a positive token count (0 clears)")
 		return
 	}
 	if input.RoutingStrategy != nil && !router.IsValidStrategy(router.StrategyName(*input.RoutingStrategy), nil) {
@@ -282,6 +326,13 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	}
 	if input.ExtraConfig != nil {
 		m.ExtraConfig = datatypes.JSON(input.ExtraConfig)
+	}
+	if input.MaxContext != nil {
+		if *input.MaxContext == 0 {
+			m.MaxContext = nil // explicit clear back to unknown
+		} else {
+			m.MaxContext = input.MaxContext
+		}
 	}
 
 	if err := h.repo.Update(c.Request.Context(), m, orgID); err != nil {
