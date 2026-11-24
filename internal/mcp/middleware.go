@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,7 +22,11 @@ type KeyValidator interface {
 // ErrKeyExpired is returned when the API key has expired.
 var errKeyExpired = errors.New("api key expired")
 
-func MCPAuth(configAuthKey string, keySvc KeyValidator) gin.HandlerFunc {
+// MCPAuth authenticates MCP-surface requests. windowPolicy mirrors the
+// gateway Auth seam (design: docs/design/api-key-time-window-control.md §5):
+// a time-window-restricted key must be denied here too — deny is deny, the
+// debug/MCP surfaces do not widen admission. nil policy = no restriction.
+func MCPAuth(configAuthKey string, keySvc KeyValidator, windowPolicy service.KeyWindowPolicy) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey := middleware.ExtractAPIKey(c)
 		if apiKey == "" {
@@ -33,6 +39,34 @@ func MCPAuth(configAuthKey string, keySvc KeyValidator) gin.HandlerFunc {
 		if keySvc != nil {
 			key, err := keySvc.Validate(c.Request.Context(), apiKey)
 			if err == nil && key != nil {
+				if windowPolicy != nil {
+					if werr := windowPolicy.Check(key, time.Now()); werr != nil {
+						var twe *service.TimeWindowError
+						if !errors.As(werr, &twe) {
+							twe = &service.TimeWindowError{Invalid: true}
+						}
+						if twe.Invalid {
+							middleware.RecordTimeWindowDenial("invalid")
+							c.JSON(http.StatusForbidden, gin.H{"error": "api key time-window policy is invalid; contact an administrator", "error_code": "time_window_invalid"})
+							c.Abort()
+							return
+						}
+						middleware.RecordTimeWindowDenial("denied")
+						msg := "API key is outside its allowed time windows."
+						if !twe.NextOpen.IsZero() {
+							msg = fmt.Sprintf("API key is outside its allowed time windows. Next open at %s.", middleware.FormatWallClock(twe.NextOpen, twe.TZ))
+							if wait := time.Until(twe.NextOpen); wait > 0 {
+								if wait > 24*time.Hour {
+									wait = 24 * time.Hour
+								}
+								c.Header("Retry-After", fmt.Sprintf("%d", int(wait.Seconds()+0.5)))
+							}
+						}
+						c.JSON(http.StatusForbidden, gin.H{"error": msg, "error_code": "time_window_denied"})
+						c.Abort()
+						return
+					}
+				}
 				c.Set("api_key", key)
 				c.Set("api_key_id", key.ID)
 				c.Set("auth_via", "database")

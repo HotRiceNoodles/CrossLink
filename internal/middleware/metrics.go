@@ -40,6 +40,11 @@ var (
 		Name: "cl_provider_failures_total",
 	}, []string{"provider", "error_type"})
 
+	timeWindowDecisions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cl_time_window_decisions_total",
+		Help: "API-key time-window admission denials. result=denied: request fell outside the allowed windows; result=invalid: stored policy unparseable, denied fail-closed (each invalid hit means a locked key — wire to an alert).",
+	}, []string{"result"})
+
 	activeRequests = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cl_active_requests",
 	}, []string{"route_type"})
@@ -71,6 +76,13 @@ func RecordTPMSettlementCorrection(delta int) {
 // RecordProviderFailure increments the provider failure counter.
 func RecordProviderFailure(provider, errorType string) {
 	providerFailuresTotal.WithLabelValues(provider, errorType).Inc()
+}
+
+// RecordTimeWindowDenial increments the time-window denial counter.
+// result: "denied" (outside the allowed windows) or "invalid" (stored policy
+// unparseable, fail-closed — alertable).
+func RecordTimeWindowDenial(result string) {
+	timeWindowDecisions.WithLabelValues(result).Inc()
 }
 
 // RecordCacheHit increments cache hit counter.

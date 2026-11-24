@@ -199,7 +199,7 @@ func main() {
 			if ext.Deps.KeySvc != nil {
 				mcpKeyValidator = ext.Deps.KeySvc
 			}
-			mcpGroup.Use(mcp.MCPAuth(cfg.Gateway.AuthKey, mcpKeyValidator))
+			mcpGroup.Use(mcp.MCPAuth(cfg.Gateway.AuthKey, mcpKeyValidator, ext.KeyWindowPolicy))
 			if cfg.MCP.RateLimitEnabled {
 				rpm := cfg.MCP.RateLimitDefaultRPM
 				if rpm <= 0 {

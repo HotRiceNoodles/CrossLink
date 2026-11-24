@@ -85,6 +85,7 @@ type Extensions struct {
 	MCPEncSetter             func(encStore *secret.EncryptedDBStore) // called by app.go after encStore is ready
 	MCPSettingsSetter        func(p mcp.MCPSettingsProvider)         // called by app.go after the settings provider is ready
 	IPPolicy                 service.IPPolicy
+	KeyWindowPolicy          service.KeyWindowPolicy  // pro seam: API-key time-window admission (design: api-key-time-window-control); Noop in Community
 	AssemblerHook            middleware.AssemblerHook // enterprise seam: per-Key template permission check; nil in Community
 	ToolObserver             domain.ToolObserver      // pro seam: agent toolset profiling collector; nil in Community
 	Gate                     GateInterface
@@ -96,5 +97,6 @@ func NoopExtensions() *Extensions {
 		Gate:            NoopGate{},
 		ExtraStrategies: map[router.StrategyName]router.RoutingStrategy{},
 		IPPolicy:        service.NoopPolicy{},
+		KeyWindowPolicy: service.NoopWindowPolicy{},
 	}
 }

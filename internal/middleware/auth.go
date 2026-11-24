@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +28,7 @@ type OrgStatusChecker interface {
 
 // NOTE: This middleware enforces IP-based rate limiting on failed authentication attempts.
 // If an IP exceeds the failure threshold, it is blocked before any key validation attempt.
-func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy, orgStatus OrgStatusChecker) gin.HandlerFunc {
+func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy service.IPPolicy, windowPolicy service.KeyWindowPolicy, orgStatus OrgStatusChecker) gin.HandlerFunc {
 	// 租户停用强制点：key 所属 org status != 1 → 403（org 查不到时按限流中间件同策略跳过——
 	// 查询失败不等于停用，fail-open 只放宽到「与未配置检查一致」）
 	orgDisabled := func(c *gin.Context, key *model.APIKey) bool {
@@ -42,6 +44,56 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 			"error": gin.H{"type": "permission_error", "message": "organization is disabled"},
 		})
 		c.Abort()
+	}
+	// Time-window admission (docs/design/api-key-time-window-control.md): one
+	// seam inside Auth covers every authenticated surface (gateway, usage,
+	// RAG, replay). Runs AFTER the IP binding so both admission checks share
+	// this position ahead of rate-limit/budget/TPM reservations. nil policy =
+	// no restriction (Community default is NoopWindowPolicy).
+	denyWindow := func(c *gin.Context, key *model.APIKey, err error) {
+		var twe *service.TimeWindowError
+		if !errors.As(err, &twe) {
+			// Non-conforming policy verdict: fail closed as invalid — an
+			// unknown error must never widen admission.
+			twe = &service.TimeWindowError{Invalid: true}
+		}
+		if twe.Invalid {
+			RecordTimeWindowDenial("invalid")
+			slog.Error("time window policy invalid (fail-closed)",
+				"key_id", key.ID, "key_prefix", key.KeyPrefix, "err", err)
+			c.JSON(http.StatusForbidden, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "time_window_invalid", "message": "api key time-window policy is invalid; contact an administrator"},
+			})
+			c.Abort()
+			return
+		}
+		RecordTimeWindowDenial("denied")
+		msg := "API key is outside its allowed time windows."
+		if !twe.NextOpen.IsZero() {
+			msg = fmt.Sprintf("API key is outside its allowed time windows. Next open at %s.", FormatWallClock(twe.NextOpen, twe.TZ))
+			if wait := time.Until(twe.NextOpen); wait > 0 {
+				if wait > 24*time.Hour {
+					wait = 24 * time.Hour // cap: extremely long closures must not pin clients
+				}
+				c.Header("Retry-After", strconv.Itoa(int(wait.Seconds()+0.5)))
+			}
+		}
+		c.JSON(http.StatusForbidden, gin.H{
+			"type":  "error",
+			"error": gin.H{"type": "time_window_denied", "message": msg},
+		})
+		c.Abort()
+	}
+	checkWindow := func(c *gin.Context, key *model.APIKey) bool {
+		if windowPolicy == nil {
+			return true
+		}
+		if err := windowPolicy.Check(key, time.Now()); err != nil {
+			denyWindow(c, key, err)
+			return false
+		}
+		return true
 	}
 	return func(c *gin.Context) {
 		// IP-based auth-failure blocking is enforced by the AuthFailureLimit
@@ -66,6 +118,12 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 					(key.ExpiresAt == nil || key.ExpiresAt.After(time.Now())) {
 					if orgDisabled(c, key) {
 						denyDisabledOrg(c)
+						return
+					}
+					// Replay is a re-run as the original key: the window
+					// verdict must match the normal path (deny is deny, even
+					// for the debug replay surface).
+					if !checkWindow(c, key) {
 						return
 					}
 					c.Set("api_key", key)
@@ -118,6 +176,9 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 						return
 					}
 				}
+				if !checkWindow(c, key) {
+					return
+				}
 				ClearAuthFailures(rdb, c.ClientIP(), "")
 				c.Next()
 				return
@@ -164,6 +225,18 @@ func Auth(authKey string, keySvc *service.KeyService, rdb *redis.Client, policy 
 		})
 		c.Abort()
 	}
+}
+
+// FormatWallClock renders t in the named IANA zone (falling back to UTC when
+// the zone is empty or unresolvable) so time-window denials name the next
+// opening instant in the key holder's own wall clock.
+func FormatWallClock(t time.Time, tz string) string {
+	if tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			return t.In(loc).Format(time.RFC3339)
+		}
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // parseAcceptLang maps an Accept-Language header to a template locale.

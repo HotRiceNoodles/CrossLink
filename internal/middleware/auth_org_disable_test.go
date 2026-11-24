@@ -39,7 +39,7 @@ func TestAuthOrgDisabledDeniesGatewayKey(t *testing.T) {
 		orgID: {ID: orgID, Status: 0}, // 停用
 	}}
 	r := setupRouter()
-	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, status))
+	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil, status))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
@@ -73,7 +73,7 @@ func TestAuthOrgActiveOrUnknownPasses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			keySvc, _ := newKeyServiceWithCachedKey(t, "secret-key-123", makeKey())
 			r := setupRouter()
-			r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, &fakeOrgStatus{m: map[int64]*model.Organization{orgID: tc.org}}))
+			r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil, &fakeOrgStatus{m: map[int64]*model.Organization{orgID: tc.org}}))
 			r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 			w := httptest.NewRecorder()
@@ -96,7 +96,7 @@ func TestAuthNilCheckerKeepsLegacyBehavior(t *testing.T) {
 	keySvc, _ := newKeyServiceWithCachedKey(t, "secret-key-123", key)
 
 	r := setupRouter()
-	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil))
+	r.Use(Auth("", keySvc, nil, service.NoopPolicy{}, nil, nil))
 	r.GET("/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()

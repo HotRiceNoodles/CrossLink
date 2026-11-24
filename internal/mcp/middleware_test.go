@@ -24,7 +24,7 @@ func (m *mockKeyValidator) Validate(ctx context.Context, rawKey string) (*model.
 func TestMCPAuth_MissingAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(MCPAuth("test-config-key", nil))
+	r.Use(MCPAuth("test-config-key", nil, nil))
 	r.POST("/:server", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -41,7 +41,7 @@ func TestMCPAuth_MissingAPIKey(t *testing.T) {
 func TestMCPAuth_ConfigKeyMatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(MCPAuth("test-config-key", nil))
+	r.Use(MCPAuth("test-config-key", nil, nil))
 	r.POST("/:server", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -62,7 +62,7 @@ func TestMCPAuth_DBKeyValid(t *testing.T) {
 		key: &model.APIKey{ID: 42},
 	}
 	r := gin.New()
-	r.Use(MCPAuth("config-key", validator))
+	r.Use(MCPAuth("config-key", validator, nil))
 	r.POST("/:server", func(c *gin.Context) {
 		keyID, _ := c.Get("api_key_id")
 		authVia, _ := c.Get("auth_via")
@@ -83,7 +83,7 @@ func TestMCPAuth_DBKeyExpired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	validator := &mockKeyValidator{err: errKeyExpired}
 	r := gin.New()
-	r.Use(MCPAuth("config-key", validator))
+	r.Use(MCPAuth("config-key", validator, nil))
 	r.POST("/:server", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -102,7 +102,7 @@ func TestMCPAuth_DBKeyInvalid_ConfigFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	validator := &mockKeyValidator{err: errors.New("not found")}
 	r := gin.New()
-	r.Use(MCPAuth("config-key", validator))
+	r.Use(MCPAuth("config-key", validator, nil))
 	r.POST("/:server", func(c *gin.Context) {
 		authVia, _ := c.Get("auth_via")
 		c.JSON(200, gin.H{"auth_via": authVia})

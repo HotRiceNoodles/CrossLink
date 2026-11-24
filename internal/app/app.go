@@ -922,7 +922,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	gwGroup.Use(debug.Middleware(debugStore))
 	gwGroup.Use(middleware.UsageLog(svcs.UsageSvc))
 	gwGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
-	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
+	gwGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, ext.KeyWindowPolicy, orgCache))
 	gwGroup.Use(middleware.RequireModel())
 	gwGroup.Use(middleware.OrgResolve())
 	gwGroup.Use(middleware.GuardrailsRequest(guardrailSvc, ext.ToolObserver))
@@ -981,7 +981,7 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 	// credential lookup at all (previously mounted after Auth, the check could
 	// never fire for invalid credentials on this surface).
 	usageGroup.Use(middleware.AuthFailureLimit(rdb, 20, 15*time.Minute, ""))
-	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, orgCache))
+	usageGroup.Use(middleware.Auth(cfg.Gateway.AuthKey, svcs.KeySvc, rdb, ext.IPPolicy, ext.KeyWindowPolicy, orgCache))
 	usageGroup.GET("/v1/usage", usageQueryHandler.GetUsage)
 	// Portal self-service API: same auth, but returns the portal-owned clean
 	// contract (decoupled from /v1/usage internal shape). See PortalUsageHandler.
