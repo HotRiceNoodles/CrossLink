@@ -125,7 +125,7 @@ func TestModelReviewAdminToGateway(t *testing.T) {
 	admin("POST", "/guardrails", gin.H{"name": "客服审核", "type": "model_review", "direction": "request", "scope_mode": "api_keys", "api_key_ids": ids, "config": gin.H{"service_id": 1}}, 201)
 	env.svcA.SetEnabled(true)
 	gw := gin.New()
-	gw.Use(middleware.Auth("", ks, nil, nil, nil), middleware.OrgResolve(), middleware.GuardrailsRequest(env.svcA, nil))
+	gw.Use(middleware.Auth("", ks, nil, nil, nil, nil), middleware.OrgResolve(), middleware.GuardrailsRequest(env.svcA, nil))
 	gw.POST("/v1/chat/completions", func(c *gin.Context) { c.String(200, "business response") })
 	ask := func(i int, stream bool, code int) {
 		t.Helper()

@@ -63,7 +63,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		ModelName       string          `json:"model_name" binding:"required"`
 		ProviderModel   string          `json:"provider_model" binding:"required"`
 		Weight          int             `json:"weight"`
-		Priority        int             `json:"priority"`
+		Priority        *int            `json:"priority"`
 		InputPrice      float64         `json:"input_price"`
 		OutputPrice     float64         `json:"output_price"`
 		Currency        string          `json:"currency"`
@@ -90,13 +90,22 @@ func (h *ModelHandler) Create(c *gin.Context) {
 	}
 	// G4: routing fields bounds — a negative weight silently lands in the
 	// fallback-only pool (strategy splits primaries at >0); priority < 1 has
-	// no defined meaning (the column default is 1).
-	if input.Weight < 0 || input.Priority < 1 {
+	// no defined meaning (the column default is 1). Priority is a pointer so
+	// an ABSENT field defaults to 1 (matching the column default and Update's
+	// nil-means-untouched semantics); only an explicitly-sent value <1 is
+	// rejected. The enterprise sync dialog (ProviderSyncDialog) intentionally
+	// creates mappings with the three identity fields only — the int zero
+	// value made those requests 400 (r81x field incident).
+	if input.Weight < 0 || (input.Priority != nil && *input.Priority < 1) {
 		if h.auditSvc != nil {
 			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "routing_fields_invalid"}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "weight must be >= 0 and priority must be >= 1")
 		return
+	}
+	priority := 1
+	if input.Priority != nil {
+		priority = *input.Priority
 	}
 	// G1: context window, when declared, must be positive.
 	if input.MaxContext != nil && *input.MaxContext <= 0 {
@@ -141,7 +150,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		ModelName:       input.ModelName,
 		ProviderModel:   input.ProviderModel,
 		Weight:          input.Weight,
-		Priority:        input.Priority,
+		Priority:        priority,
 		InputPrice:      input.InputPrice,
 		OutputPrice:     input.OutputPrice,
 		Currency:        model.ValidCurrency(input.Currency),

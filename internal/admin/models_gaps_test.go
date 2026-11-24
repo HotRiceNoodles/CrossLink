@@ -114,6 +114,29 @@ func TestModelCreate_RoutingFieldBounds(t *testing.T) {
 	}
 }
 
+// TestModelCreate_RoutingFieldsAbsentDefaults: an absent priority must NOT be
+// treated as the int zero value (the r81x field incident — the enterprise
+// sync dialog creates mappings with the identity fields only). Absent →
+// priority defaults to 1 (column default), weight stays 0 (fallback-only is
+// a legal routing state); explicitly-sent values keep G4 semantics above.
+func TestModelCreate_RoutingFieldsAbsentDefaults(t *testing.T) {
+	t.Parallel()
+	h, repo, providerID, _ := newModelGapEnv(t)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/models", gin.H{
+		"provider_id": providerID, "model_name": "sync-model", "provider_model": "up-sync",
+		"routing_strategy": "weighted_random",
+	})
+	h.Create(c)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	got, err := repo.FindByProviderAndName(context.Background(), providerID, "sync-model")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 1, got.Priority, "absent priority must default to 1")
+	assert.Equal(t, 0, got.Weight, "absent weight must stay 0 (fallback-only pool)")
+}
+
 func TestModelCreate_DuplicateLiveMappingRejected(t *testing.T) {
 	t.Parallel()
 	h, repo, providerID, _ := newModelGapEnv(t)

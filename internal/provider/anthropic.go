@@ -64,13 +64,20 @@ type AnthropicProvider struct {
 	apiKey              string
 	apiVersion          string
 	samplingRules       bool // apiVersion is in anthropicAPIVersionsWithSamplingRules
+	samplingPassThrough bool // sampling_policy=pass: compatible endpoint, official semantics do NOT apply
 	samplingCompatStrip bool // extra_config.sampling_compat_strip
 	httpClient          *http.Client
 	streamClient        *http.Client
 }
 
 type anthropicExtraConfig struct {
-	APIVersion          string `json:"api_version"`
+	APIVersion string `json:"api_version"`
+	// SamplingPolicy decouples OFFICIAL SEMANTICS from the wire version
+	// (DeepSeek-anthropic incident 2026-11-23): "official" (default) applies
+	// the version's official sampling policy — correct for the real
+	// Anthropic API; "pass" disables it for Anthropic-COMPATIBLE endpoints
+	// (DeepSeek /anthropic, cloud shells) that never adopted the removal.
+	SamplingPolicy      string `json:"sampling_policy"`
 	SamplingCompatStrip bool   `json:"sampling_compat_strip"`
 }
 
@@ -112,6 +119,13 @@ func NewAnthropicProvider(name, baseURL, apiKey string, extraConfig []byte, time
 					return nil, fmt.Errorf("unsupported anthropic api_version %q (supported: 2023-06-01, 2026-10-21)", cfg.APIVersion)
 				}
 				p.apiVersion = cfg.APIVersion
+			}
+			if cfg.SamplingPolicy == "" || cfg.SamplingPolicy == "official" {
+				p.samplingPassThrough = false
+			} else if cfg.SamplingPolicy == "pass" {
+				p.samplingPassThrough = true
+			} else {
+				return nil, fmt.Errorf("unsupported sampling_policy %q (supported: official, pass)", cfg.SamplingPolicy)
 			}
 			p.samplingCompatStrip = cfg.SamplingCompatStrip
 		}
@@ -306,7 +320,10 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, apiKey string) {
 // Every strip is recorded to the context's audit sink (upstream.ParamStrip →
 // usage-log attempts timeline); rejections surface via the typed error.
 func (p *AnthropicProvider) applyVersionSamplingRules(ctx context.Context, ar *domain.AnthropicRequest, meta *domain.InboundSamplingMeta) error {
-	if !p.samplingRules {
+	// sampling_policy=pass: this upstream is an Anthropic-COMPATIBLE endpoint
+	// (not the official API) that never adopted the version's official
+	// sampling policy — the gateway must not be stricter than the upstream.
+	if !p.samplingRules || p.samplingPassThrough {
 		return nil
 	}
 	var stripped []string
@@ -321,7 +338,7 @@ func (p *AnthropicProvider) applyVersionSamplingRules(ctx context.Context, ar *d
 			StatusCode: http.StatusBadRequest,
 			ErrorType:  ErrorBadRequest,
 			Param:      param,
-			Message: fmt.Sprintf("sampling parameter %q is not supported by Anthropic API version %s on provider %q; remove it or enable sampling_compat_strip on the provider",
+			Message: fmt.Sprintf("sampling parameter %q is not supported by Anthropic API version %s on provider %q; remove it, enable sampling_compat_strip, or set sampling_policy=pass if this upstream is an Anthropic-compatible endpoint rather than the official API",
 				param, p.apiVersion, p.name),
 		}
 	}
@@ -444,8 +461,16 @@ func init() {
 			{
 				Name: "api_version", Type: "select", Label: "API Version", DefaultValue: "2023-06-01",
 				Options: []FieldOption{
-					{Label: "2023-06-01（旧版）", Value: "2023-06-01"},
-					{Label: "2026-10-21（sampling 参数已移除）", Value: "2026-10-21"},
+					{Label: "2023-06-01（兼容端点请用此版）", Value: "2023-06-01"},
+					{Label: "2026-10-21（仅官方 API；sampling 已移除）", Value: "2026-10-21"},
+				},
+			},
+			{
+				Name: "sampling_policy", Type: "select", Label: "Sampling 策略", DefaultValue: "official",
+				ShowWhen: "api_version=2026-10-21",
+				Options: []FieldOption{
+					{Label: "official（官方 API：默认值剥离/非默认拒绝）", Value: "official"},
+					{Label: "pass（兼容端点：透传，不执行官方政策）", Value: "pass"},
 				},
 			},
 			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
