@@ -11,8 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// manageableKeys 圈定当前会话有权管理的 Key。org=0 表示无租户作用域（社区/Pro
+// 单租户的 admin 上下文，或企业平台 admin 的全局视角），不过滤组织——与
+// providers.go / guardrail.go 列表查询的 org=0 惯例一致；org>0 精确到租户。
 func manageableKeys(c *gin.Context, db *gorm.DB, org int64) *gorm.DB {
-	q := db.WithContext(c.Request.Context()).Model(&model.APIKey{}).Where("org_id = ? AND status = 1 AND (expires_at IS NULL OR expires_at > ?)", org, time.Now())
+	q := db.WithContext(c.Request.Context()).Model(&model.APIKey{}).Where("status = 1 AND (expires_at IS NULL OR expires_at > ?)", time.Now())
+	if org > 0 {
+		q = q.Where("org_id = ?", org)
+	}
 	permission := db.Model(&model.RolePermission{}).Select("1").Where("role_id=? AND action=?", GetRoleID(c), "key:update")
 	q = q.Where("EXISTS (?)", permission)
 	if !IsAdmin(c) {
@@ -39,9 +45,16 @@ func (h *GuardrailHandler) setScope(c *gin.Context, rule *guardrail.GuardrailRul
 			return true
 		}
 	case "api_keys":
-		if rule.OrgID != nil && len(rule.APIKeyIDs) > 0 {
+		if len(rule.APIKeyIDs) > 0 {
+			// 单租户 admin 建的规则无组织作用域（OrgID=nil，与 guardrail.go 的
+			// 赋值语义一致），按 org=0 校验即无租户过滤（manageableKeys 口径）；
+			// 企业档规则带组织，仍按同组织校验。
+			org := int64(0)
+			if rule.OrgID != nil {
+				org = *rule.OrgID
+			}
 			var count int64
-			if err := manageableKeys(c, h.db, *rule.OrgID).Where("id IN ?", []int64(rule.APIKeyIDs)).Count(&count).Error; err != nil {
+			if err := manageableKeys(c, h.db, org).Where("id IN ?", []int64(rule.APIKeyIDs)).Count(&count).Error; err != nil {
 				internalErr(c, err, "validate key scope")
 				return false
 			}

@@ -7,31 +7,45 @@ import (
 	"strings"
 
 	"github.com/crosslink/internal/guardrail"
+	"github.com/crosslink/internal/license"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 func (h *GuardrailHandler) RegisterPromptSecurity(group *gin.RouterGroup, read, write, bind gin.HandlerFunc) {
-	g := group.Group("/prompt-security", func(c *gin.Context) {
+	// 审核服务侧（含 /keys：规则编辑器按 Key 限定范围时取可选 Key 列表）。
+	// 企业档仍要求租户上下文；社区/Pro 单租户 org=0 是常态（对齐 org_scope.go
+	// denyNoOrgScope 口径），放行——社区档由 RequireAction 的 guardrail:*
+	// 动作位（Pro 集）拦截。2026-11-24 审核模型下放 Pro。
+	gReview := group.Group("/prompt-security", func(c *gin.Context) {
+		if GetOrgID(c) == 0 && license.G().CurrentTier() == license.TierEnterprise {
+			c.AbortWithStatusJSON(403, gin.H{"error": "请先选择组织"})
+			return
+		}
+		c.Next()
+	})
+	gReview.GET("/review-services", read, h.listReviewServices)
+	gReview.GET("/catalog", read, h.reviewCatalog)
+	gReview.GET("/review-services/:id/health", read, h.reviewHealth)
+	gReview.POST("/review-services", write, h.connectReview)
+	gReview.GET("/keys", read, h.profileKeys)
+	// 应用场景侧：数据按组织隔离，仅企业多租户具备组织上下文，
+	// Pro/社区 org=0 不可用（2026-11-24 产品口径：社区/Pro 隐藏）。
+	gProfile := group.Group("/prompt-security", func(c *gin.Context) {
 		if GetOrgID(c) <= 0 {
 			c.AbortWithStatusJSON(403, gin.H{"error": "请先选择组织"})
 			return
 		}
 		c.Next()
 	})
-	g.GET("/review-services", read, h.listReviewServices)
-	g.GET("/catalog", read, h.reviewCatalog)
-	g.GET("/review-services/:id/health", read, h.reviewHealth)
-	g.POST("/review-services", write, h.connectReview)
-	g.GET("/keys", read, h.profileKeys)
-	g.GET("/profiles", read, h.listProfiles)
-	g.POST("/profiles", write, h.saveProfile)
-	g.PUT("/profiles/:id", write, h.saveProfile)
-	g.POST("/profiles/:id/publish", write, h.publishProfile)
-	g.GET("/profiles/:id/versions", read, h.profileHistory)
-	g.PUT("/bindings", write, bind, h.bindProfile)
-	g.DELETE("/profiles/:id", write, bind, h.deleteProfile)
+	gProfile.GET("/profiles", read, h.listProfiles)
+	gProfile.POST("/profiles", write, h.saveProfile)
+	gProfile.PUT("/profiles/:id", write, h.saveProfile)
+	gProfile.POST("/profiles/:id/publish", write, h.publishProfile)
+	gProfile.GET("/profiles/:id/versions", read, h.profileHistory)
+	gProfile.PUT("/bindings", write, bind, h.bindProfile)
+	gProfile.DELETE("/profiles/:id", write, bind, h.deleteProfile)
 }
 
 func (h *GuardrailHandler) profileKeys(c *gin.Context) {

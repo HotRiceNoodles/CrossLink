@@ -11,12 +11,18 @@ func (h *GuardrailHandler) validateReviewRule(c *gin.Context, r *guardrail.Guard
 		return true
 	}
 	var cfg guardrail.ReviewConfig
-	if r.OrgID == nil || r.Direction != "request" || (r.Action != "block" && r.Action != "log") || json.Unmarshal(r.Config, &cfg) != nil {
-		errorResp(c, 400, ErrInvalidConfig, "模型审核仅支持组织内请求正文的记录或阻断")
+	if r.Direction != "request" || (r.Action != "block" && r.Action != "log") || json.Unmarshal(r.Config, &cfg) != nil {
+		errorResp(c, 400, ErrInvalidConfig, "模型审核仅支持请求正文的记录或阻断")
 		return false
 	}
+	// 社区/Pro 单租户 admin 建的规则无组织作用域（OrgID=nil，guardrail.go 同款
+	// 语义），按 org=0 与审核服务对齐；企业档规则带组织，仍校验同组织服务。
+	org := int64(0)
+	if r.OrgID != nil {
+		org = *r.OrgID
+	}
 	var count int64
-	if err := h.db.WithContext(c.Request.Context()).Model(&guardrail.ReviewService{}).Where("id=? AND org_id=?", cfg.ServiceID, *r.OrgID).Count(&count).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Model(&guardrail.ReviewService{}).Where("id=? AND org_id=?", cfg.ServiceID, org).Count(&count).Error; err != nil {
 		internalErr(c, err, "validate review service")
 		return false
 	}

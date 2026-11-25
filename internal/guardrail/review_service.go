@@ -37,9 +37,12 @@ type ReviewCatalogEntry struct {
 	Model    string `json:"model"`
 }
 
+// ReviewCatalog 列出可接入为审核服务的供应商模型。org=0（社区/Pro 单租户的
+// admin 上下文）不按组织过滤：供应商行经 boot 回填落在 default org，精确匹配
+// 会落空；企业档 org=0 请求在端点组门已被拒，到不了这里。
 func ReviewCatalog(db *gorm.DB, org int64) *gorm.DB {
 	return db.Model(&model.ProviderModel{}).Joins("JOIN providers p ON p.id=provider_models.provider_id").
-		Where("p.org_id=? AND p.status=1 AND p.deleted_at IS NULL AND p.adapter_type='openai_compatible' AND provider_models.status=1", org)
+		Where("(p.org_id=? OR ?=0) AND p.status=1 AND p.deleted_at IS NULL AND p.adapter_type='openai_compatible' AND provider_models.status=1", org, org)
 }
 
 var reviewVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,127}$`)
@@ -49,7 +52,9 @@ func (s *GuardrailService) SetReviewSecrets(resolver *secret.SecretResolver, sto
 }
 
 func (s *GuardrailService) ConnectReview(ctx context.Context, r *ReviewService, token string) error {
-	if r.OrgID <= 0 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 128 || r.TimeoutMS < 1 || r.TimeoutMS > 60000 {
+	// OrgID=0 合法：社区/Pro 单租户 admin 上下文无组织（企业档 org=0 在端点
+	// 组门被拒，走不到这里）；org 由 handler 从 GetOrgID 注入，不做下限校验。
+	if strings.TrimSpace(r.Name) == "" || len(r.Name) > 128 || r.TimeoutMS < 1 || r.TimeoutMS > 60000 {
 		return errors.New("名称或超时无效")
 	}
 	switch r.Kind {

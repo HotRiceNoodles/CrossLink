@@ -141,7 +141,10 @@ func (s *GuardrailService) classifyProvider(ctx context.Context, r ReviewService
 
 func (s *GuardrailService) reviewOne(ctx context.Context, org int64, cfg ReviewConfig, in *DetectionInput, profile *SecurityProfileVersion, profileErr error) (out reviewOutcome) {
 	var r ReviewService
-	err := s.db.WithContext(ctx).Where("id=? AND org_id=?", cfg.ServiceID, org).Take(&r).Error
+	// org=0 的审核服务是社区/Pro 单租户的无租户作用域接入，对任意请求 org
+	// 可见（Key 可能经 boot 回填落在 default org）；企业档端点门拦 org=0
+	// 上下文，不存在 org=0 服务行，谓词不影响租户隔离。
+	err := s.db.WithContext(ctx).Where("id=? AND (org_id=? OR org_id=0)", cfg.ServiceID, org).Take(&r).Error
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return reviewOutcome{Status: "timeout"}
@@ -295,7 +298,9 @@ func (s *GuardrailService) applyReviews(ctx context.Context, req *CheckRequest, 
 		}
 		start := time.Now()
 		out := reviewOutcome{Status: "invalid_config"}
-		if r.OrgID != nil && *r.OrgID == req.OrgID {
+		// 无组织作用域规则（社区/Pro 单租户 admin 所建，OrgID=nil）对任意请求
+		// org 执行；带组织规则仍要求请求同组织。
+		if r.OrgID == nil || *r.OrgID == req.OrgID {
 			out = s.reviewOne(ctx, req.OrgID, cfg, in, profile, profileErr)
 		}
 		incomplete := out.Status != "safe" && out.Status != "unsafe"
@@ -340,12 +345,15 @@ func (s *GuardrailService) applyReviews(ctx context.Context, req *CheckRequest, 
 }
 
 func (s *GuardrailService) TestModelReview(ctx context.Context, rule GuardrailRule, text string) *CheckResponse {
-	if rule.OrgID == nil {
-		return &CheckResponse{Reason: "缺少组织"}
+	// 无组织作用域规则（单租户 admin 所建，OrgID=nil）按 org=0 执行——
+	// reviewOne 的解析谓词对 org=0 审核服务放行。
+	org := int64(0)
+	if rule.OrgID != nil {
+		org = *rule.OrgID
 	}
 	cfg, onHit, ok := reviewFromRule(rule)
 	if !ok {
 		return &CheckResponse{}
 	}
-	return s.applyReviews(ctx, &CheckRequest{Content: text, Direction: DirectionRequest, OrgID: *rule.OrgID}, []reviewSelection{{rule: rule, cfg: cfg, onRuleHit: onHit}}, &CheckResponse{}, nil, nil)
+	return s.applyReviews(ctx, &CheckRequest{Content: text, Direction: DirectionRequest, OrgID: org}, []reviewSelection{{rule: rule, cfg: cfg, onRuleHit: onHit}}, &CheckResponse{}, nil, nil)
 }
