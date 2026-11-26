@@ -148,7 +148,7 @@ func insertAndReadBack(t *testing.T, db *gorm.DB, label string) {
 // the current model writes and reads back EVERY field.
 func TestFreshInstallFullChainModelWriteAllFields(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp, migResponsesObsUp)
 	// Parity columns must come from 000004 only — the duplicate-column guard
 	// for this migration class.
 	if !hasUsageColumn(t, db, "billable_cost") || !hasUsageColumn(t, db, "attempts") || !hasUsageColumn(t, db, "context_snapshot") {
@@ -170,7 +170,7 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 	} else {
 		t.Logf("pre-upgrade write fails as expected: %v", err)
 	}
-	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp, migResponsesObsUp)
 	insertAndReadBack(t, db, "deployed upgrade 000003+000004+000007")
 }
 
@@ -180,7 +180,7 @@ func TestDeployedUpgradeFullChainModelWrite(t *testing.T) {
 // parity-column DATA (column-drop semantics), which is asserted explicitly.
 func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 	db := parityMigrationDB(t)
-	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
+	applyChain(t, db, migInit, migAllowedIPs, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp, migResponsesObsUp)
 	insertAndReadBack(t, db, "before rollback")
 
 	applyChain(t, db, migEventIDDn)
@@ -205,7 +205,7 @@ func TestFullChainDownAndReUpgradeModelWrite(t *testing.T) {
 		t.Fatal("000003 down left guardrail_truncated behind")
 	}
 
-	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp)
+	applyChain(t, db, migTruncatedUp, migParityUp, migEventIDUp, migCacheCreationUp, migResponsesObsUp)
 	if err := db.Exec("DELETE FROM usage_logs").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -384,3 +384,7 @@ func TestSQLiteRunMigrationsReturnsErrorWhenDiskFull(t *testing.T) {
 		t.Fatal("failed run left the version marker recorded (would mark an uncommitted schema as applied)")
 	}
 }
+
+// Responses observability columns (community chain 000113, 方案 L1): extend
+// the hand-written chain list per the migration-sync lesson (e510ed4).
+const migResponsesObsUp = migDir + "000113_usage_responses_observation.up.sql"

@@ -140,13 +140,17 @@ type UsageEntry struct {
 	ReasoningTokens     int
 	CacheReadTokens     int
 	CacheCreationTokens int
-	SessionID           string
-	TemplateID          *int64 // prompt template that assembled this request (nil = none)
-	ImageCount          int
-	ImageSize           string
-	ImageQuality        string
-	PrecomputedCost     float64
-	PriceMultiplier     float64 // key's price multiplier (1.0 = no markup)
+	// Responses observability (方案 L1): populated by the overlay responses
+	// handler — service_tier (empty = default) and tools_used audit JSON.
+	ServiceTier     string
+	ToolsUsed       datatypes.JSON
+	SessionID       string
+	TemplateID      *int64 // prompt template that assembled this request (nil = none)
+	ImageCount      int
+	ImageSize       string
+	ImageQuality    string
+	PrecomputedCost float64
+	PriceMultiplier float64 // key's price multiplier (1.0 = no markup)
 	// Context quality analysis fields — nil = unanalyzed (cache-hit or analysis failure).
 	SystemTokens         *int
 	HistoryTokens        *int
@@ -205,6 +209,8 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		ReasoningTokens:     entry.ReasoningTokens,
 		CacheReadTokens:     entry.CacheReadTokens,
 		CacheCreationTokens: entry.CacheCreationTokens,
+		ServiceTier:         entry.ServiceTier,
+		ToolsUsed:           entry.ToolsUsed,
 		SessionID:           entry.SessionID,
 	}
 	if entry.FirstTokenMs > 0 {

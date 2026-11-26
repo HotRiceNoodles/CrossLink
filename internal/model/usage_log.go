@@ -67,12 +67,19 @@ type UsageLog struct {
 	// CacheCreationTokens: Anthropic prompt-cache WRITE tokens (billed at
 	// 1.25× input price; folded into InputTokens for cost, split out here for
 	// observability).
-	CacheCreationTokens int     `gorm:"default:0" json:"cache_creation_tokens"`
-	SessionID           string  `gorm:"size:255;index" json:"session_id,omitempty"`
-	TemplateID          *int64  `gorm:"index" json:"template_id,omitempty"`        // which prompt template assembled this request (NULL = none)
-	ImageCount          *int64  `gorm:"default:null" json:"image_count,omitempty"` // image requests: number of images (NULL = non-image)
-	ImageSize           *string `gorm:"size:16" json:"image_size,omitempty"`       // image requests: e.g. "1024x1024"
-	ImageQuality        *string `gorm:"size:16" json:"image_quality,omitempty"`    // image requests: e.g. "hd"
+	CacheCreationTokens int `gorm:"default:0" json:"cache_creation_tokens"`
+	// Responses observability (方案 L1): effective service tier on /v1/responses
+	// passthrough (empty = default / non-responses request) and the tool audit
+	// object {"requested":[],"executed":[],"cost":{}} — TYPES ONLY, never
+	// payloads. Populated by the overlay responses handler; ImageCount
+	// precedent (community column, overlay fills).
+	ServiceTier  string         `gorm:"size:16;not null;default:''" json:"service_tier,omitempty"`
+	ToolsUsed    datatypes.JSON `gorm:"default:null" json:"tools_used,omitempty"`
+	SessionID    string         `gorm:"size:255;index" json:"session_id,omitempty"`
+	TemplateID   *int64         `gorm:"index" json:"template_id,omitempty"`        // which prompt template assembled this request (NULL = none)
+	ImageCount   *int64         `gorm:"default:null" json:"image_count,omitempty"` // image requests: number of images (NULL = non-image)
+	ImageSize    *string        `gorm:"size:16" json:"image_size,omitempty"`       // image requests: e.g. "1024x1024"
+	ImageQuality *string        `gorm:"size:16" json:"image_quality,omitempty"`    // image requests: e.g. "hd"
 	// Context quality analysis (docs/plans/2026-08-18-context-analysis-design.md §4.1).
 	// NULL = unanalyzed (cache-hit or analysis failure), never 0.
 	SystemTokens         *int           `gorm:"default:null" json:"system_tokens,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/provider"
 	"github.com/crosslink/internal/repository"
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/service"
@@ -131,6 +132,12 @@ func (h *ModelHandler) Create(c *gin.Context) {
 			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "model_extension_invalid", "error": err.Error()}))
 		}
 		errorResp(c, http.StatusBadRequest, ErrModelExtensionInvalid, err.Error())
+		return
+	}
+	// supports_responses capability gate: the 3A flag on an adapter that
+	// cannot serve it (anthropic protocol) would silently no-op at runtime —
+	// fail the write instead (same no-silent-ignore principle).
+	if !h.validateResponsesCapability(c, input.ExtraConfig, input.ProviderID, GetOrgID(c), "model:create", "", input.ModelName) {
 		return
 	}
 
@@ -299,6 +306,13 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		return
 	}
 	before := map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "currency": m.Currency, "status": m.Status, "routing_strategy": m.RoutingStrategy}
+	// supports_responses capability gate (same rule as Create, here against
+	// the loaded mapping's provider).
+	if input.ExtraConfig != nil {
+		if !h.validateResponsesCapability(c, input.ExtraConfig, m.ProviderID, orgID, "model:update", fmt.Sprintf("%d", id), m.ModelName) {
+			return
+		}
+	}
 
 	// M4/P-8: model_name and provider_model are immutable — passing a
 	// DIFFERENT value is an explicit 400; passing the same value (or omitting
@@ -366,4 +380,35 @@ func (h *ModelHandler) Update(c *gin.Context) {
 func parseID(s string) int64 {
 	n, _ := strconv.ParseInt(s, 10, 64)
 	return n
+}
+
+// validateResponsesCapability rejects a supports_responses=true mapping whose
+// target provider cannot serve the 3A passthrough (anthropic-protocol
+// adapters). Returns false after writing the 400 when the flag is set and the
+// provider is clearly incapable; true otherwise (flag absent, provider
+// capable, or provider row unavailable — the runtime double gate still
+// protects the unavailable case).
+func (h *ModelHandler) validateResponsesCapability(c *gin.Context, extraConfig json.RawMessage, providerID, orgID int64, action, targetID, modelName string) bool {
+	var flag struct {
+		SupportsResponses bool `json:"supports_responses"`
+	}
+	if len(extraConfig) == 0 || json.Unmarshal(extraConfig, &flag) != nil || !flag.SupportsResponses {
+		return true
+	}
+	p, err := h.repo.GetProvider(c.Request.Context(), providerID, orgID)
+	if err != nil {
+		// Provider row unreachable here (should not happen — Create already
+		// requires an accessible provider): let the runtime gate decide
+		// rather than blocking the write on a lookup failure.
+		return true
+	}
+	if provider.AdapterServesResponses(p.AdapterType, p.ExtraConfig) {
+		return true
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogFailure(c, action, "model", targetID, modelName, service.AuditDetail(map[string]any{"reason": "model_extension_invalid", "error": "supports_responses on a provider that cannot serve it"}))
+	}
+	errorResp(c, http.StatusBadRequest, ErrModelExtensionInvalid,
+		fmt.Sprintf("provider %q (adapter %s) cannot serve /v1/responses passthrough; supports_responses is only meaningful on OpenAI-compatible upstreams", p.Name, p.AdapterType))
+	return false
 }
