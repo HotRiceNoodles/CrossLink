@@ -413,14 +413,16 @@ func TestSetPermissions_RejectsExclusiveForNonAdmin(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Non-admin role + admin-exclusive action -> rejected. error_rule:list is
-	// both Community-tier and AdminExclusiveActions, so it reaches our check.
-	err = repo.SetPermissions(ctx, custom.ID, []string{"error_rule:list"})
+	// Non-admin role + admin-exclusive action -> rejected. template:list is
+	// both Community-tier and AdminExclusiveActions, so it reaches our check
+	// (error_rule:* moved to Pro on 2026-11-09 and now fails the TIER check
+	// before the exclusive check).
+	err = repo.SetPermissions(ctx, custom.ID, []string{"template:list"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reserved")
 
 	// Admin role may hold admin-exclusive actions.
-	err = repo.SetPermissions(ctx, roleIDByName(t, db, model.RoleAdmin), []string{"error_rule:list"})
+	err = repo.SetPermissions(ctx, roleIDByName(t, db, model.RoleAdmin), []string{"template:list"})
 	assert.NoError(t, err)
 }
 
@@ -433,7 +435,7 @@ func TestCreateWithPermissions_RejectsExclusiveActions(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := repo.CreateWithPermissions(ctx, &RoleCreateInput{
-		Name: "evil", DisplayName: "Evil", Permissions: []string{"error_rule:list"},
+		Name: "evil", DisplayName: "Evil", Permissions: []string{"template:list"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reserved")
