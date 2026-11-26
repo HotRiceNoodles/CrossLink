@@ -43,7 +43,7 @@ func TestSettle_DuplicateReleasesLingeringReservation(t *testing.T) {
 	s := NewBudgetService(rdb)
 	ctx := context.Background()
 	// Reserve e=2 for reqX.
-	if _, _, w, x := s.ReserveScopeMarked(ctx, "team", "10", "monthly", "2026-10", "dup-1", 2.0, 1000); !w || x {
+	if _, _, w, x := s.ReserveScopeMarked(ctx, "team", "10", "monthly", PeriodKey("monthly"), "dup-1", 2.0, 1000); !w || x {
 		t.Fatalf("reserve failed")
 	}
 	// Someone else certified reqX (far convergence): settledmark present.
@@ -52,12 +52,12 @@ func TestSettle_DuplicateReleasesLingeringReservation(t *testing.T) {
 	}
 	// The owner's settle now duplicates: must release e, not strand it.
 	if code, err := s.runSettleScript(ctx, settleRetryTask{
-		scope: "team", targetID: "10", period: "monthly", pk: "2026-10",
+		scope: "team", targetID: "10", period: "monthly", pk: PeriodKey("monthly"),
 		reqID: "dup-1", cost: 5.0,
 	}); err != nil || code != 2 {
 		t.Fatalf("settle code=%d err=%v want duplicate(2)", code, err)
 	}
-	rv, err := rdb.Get(ctx, "budgetresv:team:10:2026-10").Result()
+	rv, err := rdb.Get(ctx, "budgetresv:team:10:"+PeriodKey("monthly")).Result()
 	if err == nil && rv != "0" {
 		t.Fatalf("resv=%q want released-to-0 (or nil)", rv)
 	}

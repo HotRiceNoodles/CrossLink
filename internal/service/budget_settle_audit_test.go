@@ -39,7 +39,7 @@ func newAuditBudget(t *testing.T) (*BudgetService, *redis.Client) {
 
 func auditTask(scope, reqID string, deadline time.Time) settleRetryTask {
 	return settleRetryTask{
-		scope: scope, targetID: "902", period: "monthly", pk: "2026-10",
+		scope: scope, targetID: "902", period: "monthly", pk: PeriodKey("monthly"),
 		reqID: reqID, cost: 0.002992, deadline: deadline,
 	}
 }
@@ -328,7 +328,7 @@ func TestSettleAudit_T16_IndependentRequestsEachBilledOnce(t *testing.T) {
 	a := auditTask("org", "11111111-2222-4333-8444-555555555555", time.Now().Add(10*time.Minute))
 	b := auditTask("org", "99999999-8888-4777-9666-555555555555", time.Now().Add(10*time.Minute))
 	for _, task := range []settleRetryTask{a, b} {
-		if err := rdb.Set(context.Background(), resvMarkKey(task.scope, task.targetID, task.reqID), "0.002992000|2026-10", 0).Err(); err != nil {
+		if err := rdb.Set(context.Background(), resvMarkKey(task.scope, task.targetID, task.reqID), "0.002992000|"+PeriodKey("monthly"), 0).Err(); err != nil {
 			t.Fatalf("seed resvmark: %v", err)
 		}
 	}
@@ -344,7 +344,7 @@ func TestSettleAudit_T16_IndependentRequestsEachBilledOnce(t *testing.T) {
 			t.Fatalf("request %s mark not released", task.reqID)
 		}
 	}
-	settled := rdb.Get(context.Background(), budgetSettledKey("org", "902", "2026-10")).Val()
+	settled := rdb.Get(context.Background(), budgetSettledKey("org", "902", PeriodKey("monthly"))).Val()
 	if settled != "0.005984" { // 2 x 0.002992 — each request counted EXACTLY once despite double settle
 		t.Fatalf("settled = %q, want 0.005984 (each independent request billed once)", settled)
 	}

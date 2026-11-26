@@ -20,7 +20,7 @@ import (
 // Ledger member codec round-trip (and malformed rejection).
 func TestLedgerMember_RoundTrip(t *testing.T) {
 	task := settleRetryTask{
-		scope: "key", targetID: "42", period: "monthly", pk: "2026-10",
+		scope: "key", targetID: "42", period: "monthly", pk: PeriodKey("monthly"),
 		reqID: "req-abc", cost: 0.002512,
 		deadline: time.Now().Add(settleRetryHorizon).Truncate(time.Second),
 	}
