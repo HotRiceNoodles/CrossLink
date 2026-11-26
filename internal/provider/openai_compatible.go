@@ -68,6 +68,12 @@ func (p *OpenAICompatibleProvider) Name() string { return p.name }
 // envelope carry. Only admission-registered keys with a wire name are merged;
 // everything else on the envelope stays off the wire. Bodies without
 // extension params marshal exactly as before (byte-for-byte unchanged path).
+//
+// anthropic.output_config is the one VALUE-TRANSLATING carry (Phase-1 effort,
+// 2026-11-25 checklist §6.1): {"effort":"high"} becomes openai's
+// reasoning_effort:"high". Its branch MUST precede the identity path — the
+// generic DialectWireName lookup would otherwise re-emit the raw object under
+// "output_config", which openai-protocol upstreams do not accept.
 func marshalChatBodyWithExtensions(req *domain.OpenAIRequest) []byte {
 	body, _ := json.Marshal(req)
 	if req.Extensions == nil || len(req.Extensions.Params) == 0 {
@@ -79,6 +85,27 @@ func marshalChatBodyWithExtensions(req *domain.OpenAIRequest) []byte {
 	}
 	merged := false
 	for key, raw := range req.Extensions.Params {
+		if key == "anthropic.output_config" {
+			// Phase-2: format (structured outputs) shares openai's
+			// response_format wire shape — the translation is a key rename.
+			var oc struct {
+				Effort string          `json:"effort"`
+				Format json.RawMessage `json:"format"`
+			}
+			if json.Unmarshal(raw, &oc) == nil {
+				if oc.Effort != "" {
+					if effortJSON, err := json.Marshal(oc.Effort); err == nil {
+						top["reasoning_effort"] = effortJSON
+						merged = true
+					}
+				}
+				if len(oc.Format) > 0 {
+					top["response_format"] = oc.Format
+					merged = true
+				}
+			}
+			continue
+		}
 		wire, ok := admission.DialectWireName(key)
 		if !ok {
 			continue

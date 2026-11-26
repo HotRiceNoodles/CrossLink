@@ -15,6 +15,9 @@ type ReverseStreamTranslator struct {
 	cacheReadTokens     int
 	cacheCreationTokens int
 	activeToolID        string
+	// passthroughIdx marks block indexes whose type was unrecognized — their
+	// start/delta/stop events ride verbatim (Phase-2 compact 前置).
+	passthroughIdx map[int]bool
 }
 
 func NewReverseStreamTranslator() *ReverseStreamTranslator {
@@ -31,6 +34,17 @@ func (t *ReverseStreamTranslator) TranslateEvent(eventType string, data []byte) 
 		return t.handleContentBlockDelta(data)
 	case "message_delta":
 		return t.handleMessageDelta(data)
+	case "content_block_stop":
+		// Phase-2 compact 前置: the stop of a passthrough block rides
+		// verbatim; stops of known blocks stay dropped (stream.go closes its
+		// own blocks on type transitions, as before).
+		var probe struct {
+			Index int `json:"index"`
+		}
+		if json.Unmarshal(data, &probe) == nil && t.passthroughIdx[probe.Index] {
+			return []domain.SSEChunk{{Chunk: t.passthroughChunk("content_block_stop", data)}}
+		}
+		return nil
 	case "message_stop":
 		return []domain.SSEChunk{{Done: true}}
 	}
@@ -140,8 +154,34 @@ func (t *ReverseStreamTranslator) handleContentBlockStart(data []byte) []domain.
 	}
 
 	// Thinking blocks are intentionally dropped in reverse translation -
-	// OpenAI format has no formal thinking event type.
-	return nil
+	// OpenAI format has no formal thinking event type. Text starts likewise
+	// (stream.go opens blocks from deltas).
+	if evt.ContentBlock.Type == "text" || evt.ContentBlock.Type == "thinking" {
+		return nil
+	}
+	// Phase-2 compact 前置: any OTHER block type rides VERBATIM as a
+	// passthrough event (compaction blocks etc.) — the index is recorded so
+	// the block's deltas and stop passthrough too.
+	if t.passthroughIdx == nil {
+		t.passthroughIdx = map[int]bool{}
+	}
+	t.passthroughIdx[evt.Index] = true
+	return []domain.SSEChunk{{Chunk: t.passthroughChunk("content_block_start", data)}}
+}
+
+// passthroughChunk wraps original anthropic event bytes in an openai chunk
+// envelope so the client-facing translator can re-emit them verbatim.
+func (t *ReverseStreamTranslator) passthroughChunk(event string, data []byte) *domain.OpenAIChunk {
+	raw := make(json.RawMessage, len(data))
+	copy(raw, data)
+	return &domain.OpenAIChunk{
+		ID:     t.messageID,
+		Object: "chat.completion.chunk",
+		Model:  t.model,
+		Choices: []domain.OpenAIChunkChoice{
+			{Index: 0, Delta: domain.OpenAIChunkDelta{PassthroughEvent: event, PassthroughData: raw}},
+		},
+	}
 }
 
 func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.SSEChunk {
@@ -157,6 +197,12 @@ func (t *ReverseStreamTranslator) handleContentBlockDelta(data []byte) []domain.
 	}
 	if err := json.Unmarshal(data, &evt); err != nil {
 		return nil
+	}
+
+	// Phase-2 compact 前置: deltas of a passthrough (unrecognized-typed)
+	// block ride verbatim — their delta types are unknown to the switch below.
+	if t.passthroughIdx[evt.Index] {
+		return []domain.SSEChunk{{Chunk: t.passthroughChunk("content_block_delta", data)}}
 	}
 
 	switch evt.Delta.Type {

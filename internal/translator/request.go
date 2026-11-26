@@ -120,31 +120,25 @@ func translateMessage(msg domain.AnthropicMessage) []domain.OpenAIMessage {
 	// carry their VALUES on the translated assistant message so the reverse
 	// translation can re-emit them (signature intact) for same-protocol
 	// upstreams. Only assistant messages legally contain thinking blocks.
+	// Phase-2 compact 前置: unrecognized-typed blocks (compaction replay)
+	// carry their Raw bytes the same way.
 	if msg.Role == "assistant" {
-		for i := range out {
-			if out[i].Role == "assistant" && len(blocks) > 0 && hasThinkingBlocks(blocks) {
-				out[i].ThinkingBlocks = collectThinkingBlocks(blocks)
-				break
+		var thinking, unknown []domain.ContentBlock
+		for _, b := range blocks {
+			switch {
+			case b.Type == "thinking" || b.Type == "redacted_thinking":
+				thinking = append(thinking, b)
+			case len(b.Raw) > 0:
+				unknown = append(unknown, b)
 			}
 		}
-	}
-	return out
-}
-
-func hasThinkingBlocks(blocks []domain.ContentBlock) bool {
-	for _, b := range blocks {
-		if b.Type == "thinking" || b.Type == "redacted_thinking" {
-			return true
-		}
-	}
-	return false
-}
-
-func collectThinkingBlocks(blocks []domain.ContentBlock) []domain.ContentBlock {
-	var out []domain.ContentBlock
-	for _, b := range blocks {
-		if b.Type == "thinking" || b.Type == "redacted_thinking" {
-			out = append(out, b)
+		for i := range out {
+			if out[i].Role != "assistant" {
+				continue
+			}
+			out[i].ThinkingBlocks = thinking
+			out[i].UnknownBlocks = unknown
+			break
 		}
 	}
 	return out

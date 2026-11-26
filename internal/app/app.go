@@ -665,6 +665,10 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Providers
 		// Intentionally no RequireAction: read-only metadata endpoint, not sensitive.
 		adminGroup.GET("/adapters", handlers.Provider.ListAdapters)
+		// Protocol capability mirror (Phase-2 frontend card): beta whitelist,
+		// registered dialect params, effort-supporting api_versions — read-only
+		// view over code-level tables, same no-RequireAction rationale.
+		adminGroup.GET("/gateway/capabilities", admin.GatewayCapabilitiesHandler())
 		// 运行时熔断视图（2026-11-10）：内存态只读快照 + 管理员强制闭合（审计）
 		adminGroup.GET("/providers/health", middleware.RequireAction(permCache, "provider:list"), handlers.Provider.Circuits)
 		adminGroup.POST("/providers/health/reset", middleware.RequireAction(permCache, "provider:update"), handlers.Provider.ResetCircuit)

@@ -12,9 +12,13 @@ func generateMessageID() string {
 }
 
 var finishReasonMap = map[string]string{
-	"stop":           "end_turn",
-	"length":         "max_tokens",
-	"content_filter": "end_turn",
+	"stop":   "end_turn",
+	"length": "max_tokens",
+	// Phase-2 refusal fidelity: content_filter is the openai-internal pair of
+	// an anthropic refusal — mapping it to end_turn made a refused answer
+	// indistinguishable from a normal completion on the anthropic-inbound
+	// round trip.
+	"content_filter": "refusal",
 	"tool_calls":     "tool_use",
 }
 

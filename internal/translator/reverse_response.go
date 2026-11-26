@@ -16,6 +16,10 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 	// struct fields is sufficient and exact. reasoningContent text mapping
 	// continues for openai-inbound clients.
 	var thinkingBlocks []domain.ContentBlock
+	// Phase-2 block fidelity: unrecognized-typed blocks (e.g. compaction
+	// blocks under beta) carry their Raw bytes through the internal
+	// representation instead of being silently dropped.
+	var extraBlocks []domain.ContentBlock
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
@@ -34,6 +38,10 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 					Arguments: string(block.Input),
 				},
 			})
+		default:
+			if len(block.Raw) > 0 {
+				extraBlocks = append(extraBlocks, block)
+			}
 		}
 	}
 
@@ -60,6 +68,9 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 		// them verbatim (signature intact) instead of synthesizing
 		// signature-less blocks from reasoningContent.
 		ThinkingBlocks: thinkingBlocks,
+		// Phase-2 block fidelity: unrecognized-typed blocks ride with their
+		// Raw bytes for verbatim re-emission.
+		AnthropicExtraBlocks: extraBlocks,
 		Usage: domain.OpenAIUsage{
 			// OpenAI semantics: prompt_tokens includes cached tokens. Anthropic's
 			// input_tokens excludes cache reads/writes, so fold them in here —
@@ -75,6 +86,7 @@ func AnthropicToOpenAIResponse(resp *domain.AnthropicResponse) (*domain.OpenAIRe
 				return nil
 			}(),
 			CacheCreationTokens: resp.Usage.CacheCreationInputTokens,
+			AnthropicIterations: resp.Usage.Iterations,
 		},
 	}, nil
 }
@@ -84,6 +96,10 @@ var stopReasonToFinishReasonMap = map[string]string{
 	"max_tokens":    "length",
 	"stop_sequence": "stop",
 	"tool_use":      "tool_calls",
+	// Phase-2 refusal fidelity (checklist §3 B 档 fallbacks 前置): an
+	// upstream refusal must not round-trip into a normal end_turn — the
+	// openai-internal pair of a refusal is content_filter.
+	"refusal": "content_filter",
 }
 
 func stopReasonToFinishReason(reason string) string {

@@ -55,7 +55,9 @@ func TestOpenAIToAnthropic_FinishReasonLength_MaxTokens(t *testing.T) {
 	assert.Equal(t, "max_tokens", got.StopReason)
 }
 
-func TestOpenAIToAnthropic_FinishReasonContentFilter_EndTurn(t *testing.T) {
+// Phase-2 refusal fidelity: content_filter maps to refusal (was end_turn —
+// a refused answer must not look like a normal completion).
+func TestOpenAIToAnthropic_FinishReasonContentFilter_Refusal(t *testing.T) {
 	resp := &domain.OpenAIResponse{
 		Choices: []domain.OpenAIChoice{
 			{FinishReason: "content_filter", Message: domain.OpenAIMessage{Content: ""}},
@@ -64,7 +66,7 @@ func TestOpenAIToAnthropic_FinishReasonContentFilter_EndTurn(t *testing.T) {
 	}
 	got, err := OpenAIToAnthropic(resp, "claude-sonnet-4-20250514")
 	require.NoError(t, err)
-	assert.Equal(t, "end_turn", got.StopReason)
+	assert.Equal(t, "refusal", got.StopReason)
 }
 
 func TestOpenAIToAnthropic_FinishReasonUnknown_EndTurn(t *testing.T) {

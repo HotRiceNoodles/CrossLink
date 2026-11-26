@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/crosslink/internal/domain"
@@ -110,6 +111,36 @@ func (t *StreamTranslator) TranslateChunk(sseChunk domain.SSEChunk) []domain.SSE
 	}
 
 	delta := chunk.Choices[0]
+
+	// Phase-2 compact 前置: unrecognized-typed block events re-emit VERBATIM
+	// (event type + original bytes, upstream block index intact). Starts close
+	// any locally-active block first (anthropic streams never nest blocks);
+	// stops sync the local index counter to the upstream sequence so later
+	// locally-generated blocks cannot collide with an index already seen.
+	if delta.Delta.PassthroughEvent != "" {
+		var probe struct {
+			Index int `json:"index"`
+		}
+		_ = json.Unmarshal(delta.Delta.PassthroughData, &probe)
+		switch delta.Delta.PassthroughEvent {
+		case "content_block_start":
+			if t.state == stateBlockActive {
+				events = append(events, contentBlockStop(t.blockIndex))
+				t.blockIndex++
+				t.activeBlockType = ""
+				t.state = stateStarted
+			}
+			if probe.Index > t.blockIndex {
+				t.blockIndex = probe.Index
+			}
+		case "content_block_stop":
+			t.blockIndex = probe.Index + 1
+			t.activeBlockType = ""
+			t.state = stateStarted
+		}
+		events = append(events, domain.SSEEvent{Event: delta.Delta.PassthroughEvent, Data: delta.Delta.PassthroughData})
+		return events
+	}
 
 	// Handle reasoning content (thinking blocks)
 	if delta.Delta.ReasoningContent != "" {

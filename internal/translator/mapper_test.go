@@ -26,7 +26,8 @@ func TestFinishReasonToStopReason(t *testing.T) {
 	}{
 		{"stop", "end_turn"},
 		{"length", "max_tokens"},
-		{"content_filter", "end_turn"},
+		// Phase-2 refusal fidelity: content_filter is the pair of refusal.
+		{"content_filter", "refusal"},
 		{"tool_calls", "tool_use"},
 		{"unknown", "end_turn"},
 		{"", "end_turn"},

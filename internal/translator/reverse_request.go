@@ -104,12 +104,19 @@ func OpenAIToAnthropicRequest(req *domain.OpenAIRequest) (*domain.AnthropicReque
 }
 
 func assistantToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
+	// Phase-2 compact 前置: carried unrecognized-typed blocks (Raw bytes —
+	// e.g. compaction replay) re-emit VERBATIM after the rebuilt blocks in
+	// both paths below; dropping them would break the upstream's
+	// replace-compacted-history protocol on the next turn.
+	appendUnknown := func(blocks []domain.ContentBlock) []domain.ContentBlock {
+		return append(blocks, msg.UnknownBlocks...)
+	}
 	// 类二 M-A: a carried thinking-block sequence replays VERBATIM (values
 	// incl. signature/data) ahead of the rebuilt text/tool blocks — the
 	// model's own reasoning must return byte-for-byte in value terms, or the
 	// upstream rejects/loses continuity.
 	if len(msg.ThinkingBlocks) > 0 {
-		blocks := make([]domain.ContentBlock, 0, len(msg.ThinkingBlocks)+2)
+		blocks := make([]domain.ContentBlock, 0, len(msg.ThinkingBlocks)+len(msg.UnknownBlocks)+2)
 		blocks = append(blocks, msg.ThinkingBlocks...)
 		if text := domain.ContentText(msg.Content); text != "" {
 			blocks = append(blocks, domain.ContentBlock{Type: "text", Text: text})
@@ -122,10 +129,10 @@ func assistantToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
 				Input: jsonString(tc.Function.Arguments),
 			})
 		}
-		if len(blocks) == len(msg.ThinkingBlocks) {
+		if len(blocks) == len(msg.ThinkingBlocks) && len(msg.UnknownBlocks) == 0 {
 			blocks = append(blocks, domain.ContentBlock{Type: "text", Text: ""})
 		}
-		return blocks
+		return appendUnknown(blocks)
 	}
 	var blocks []domain.ContentBlock
 	if text := domain.ContentText(msg.Content); text != "" {
@@ -139,6 +146,7 @@ func assistantToContentBlocks(msg domain.OpenAIMessage) []domain.ContentBlock {
 			Input: jsonString(tc.Function.Arguments),
 		})
 	}
+	blocks = appendUnknown(blocks)
 	if len(blocks) == 0 {
 		blocks = append(blocks, domain.ContentBlock{Type: "text", Text: ""})
 	}

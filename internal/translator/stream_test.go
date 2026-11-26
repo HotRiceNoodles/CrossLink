@@ -73,7 +73,8 @@ func TestStreamTranslator_ContentFilter(t *testing.T) {
 		} `json:"delta"`
 	}
 	_ = json.Unmarshal(events[1].Data, &msgDelta)
-	assert.Equal(t, "end_turn", msgDelta.Delta.StopReason)
+	// Phase-2 refusal fidelity: content_filter maps to refusal (was end_turn).
+	assert.Equal(t, "refusal", msgDelta.Delta.StopReason)
 }
 
 func TestStreamTranslator_EmptyDeltaIgnored(t *testing.T) {

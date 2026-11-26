@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -52,10 +53,36 @@ type anthropicVersionCapabilities struct {
 	// strips losslessly (the upstream only accepts defaults anyway); a
 	// parameter with NO registered default is always the non-default tier.
 	SamplingDefaults map[string]float64
+	// EffortSupport: the version accepts output_config.effort (Phase-1
+	// admission, 2026-11-25 checklist §6.1). Absent = false: a route on such a
+	// version never passes candidate eligibility, and the serialization
+	// checkpoint strips the field defensively (audited) if it arrives anyway.
+	EffortSupport bool
 }
 
 var anthropicVersionCaps = map[string]anthropicVersionCapabilities{
-	"2026-10-21": {SamplingDefaults: map[string]float64{"temperature": 1.0}},
+	"2026-10-21": {SamplingDefaults: map[string]float64{"temperature": 1.0}, EffortSupport: true},
+}
+
+// AnthropicVersionSupportsEffort reports whether an api_version accepts
+// output_config.effort. Used by the candidate eligibility filter (service
+// layer) — the same table gates serialization, so a version opted in here is
+// forwarded, anything else is not.
+func AnthropicVersionSupportsEffort(apiVersion string) bool {
+	return anthropicVersionCaps[apiVersion].EffortSupport
+}
+
+// AnthropicEffortVersions lists the api_versions with EffortSupport — the
+// read-only admin view (Phase-2 frontend capability card).
+func AnthropicEffortVersions() []string {
+	var out []string
+	for v, caps := range anthropicVersionCaps {
+		if caps.EffortSupport {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 type AnthropicProvider struct {
@@ -200,12 +227,14 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *domain.OpenAIRequest,
 	}
 
 	body, _ := json.Marshal(anthropicReq)
+	body = p.mergeOutputConfig(ctx, req.Extensions, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	p.setHeaders(httpReq, key)
+	p.setBetaHeader(httpReq, req.Extensions)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -241,12 +270,14 @@ func (p *AnthropicProvider) StreamChat(ctx context.Context, req *domain.OpenAIRe
 	}
 
 	body, _ := json.Marshal(anthropicReq)
+	body = p.mergeOutputConfig(ctx, req.Extensions, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	p.setHeaders(httpReq, key)
+	p.setBetaHeader(httpReq, req.Extensions)
 
 	resp, err := p.streamClient.Do(httpReq)
 	if err != nil {
@@ -298,6 +329,54 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", p.apiVersion)
+}
+
+// setBetaHeader forwards the admission-whitelisted anthropic-beta header
+// (Phase-2 checklist §4: the envelope carries it only when EVERY token is on
+// the code-level whitelist — admission's reject-early contract). This was the
+// missing outbound half: the envelope stored the header but the adapter never
+// set it, so no whitelisted token could ever reach the upstream.
+func (p *AnthropicProvider) setBetaHeader(req *http.Request, ext *domain.ProtocolExtensions) {
+	if ext == nil || len(ext.Headers) == 0 {
+		return
+	}
+	if v := ext.Headers["anthropic-beta"]; v != "" {
+		req.Header.Set("anthropic-beta", v)
+	}
+}
+
+// mergeOutputConfig merges the envelope-carried output_config (Phase-1 effort
+// admission, 2026-11-25 checklist §6) into the outbound anthropic body — the
+// final hop of the envelope carry for native anthropic upstreams. A version
+// without EffortSupport strips the field and records a ParamStrip (audited):
+// eligible routes never reach this branch with an unsupported version, so the
+// strip is defense-in-depth (stale route row, direct provider call).
+func (p *AnthropicProvider) mergeOutputConfig(ctx context.Context, ext *domain.ProtocolExtensions, body []byte) []byte {
+	if ext == nil || len(ext.Params) == 0 {
+		return body
+	}
+	raw, ok := ext.Params["anthropic.output_config"]
+	if !ok || len(raw) == 0 {
+		return body
+	}
+	if !anthropicVersionCaps[p.apiVersion].EffortSupport {
+		upstream.RecordParamStrip(ctx, upstream.ParamStrip{
+			Provider:   p.name,
+			APIVersion: p.apiVersion,
+			Param:      "output_config",
+			Reason:     "version_without_effort_support",
+		})
+		return body
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
+		return body
+	}
+	top["output_config"] = raw
+	if out, err := json.Marshal(top); err == nil {
+		return out
+	}
+	return body
 }
 
 // applyVersionSamplingRules enforces the 2026-10-21 sampling-parameter removal

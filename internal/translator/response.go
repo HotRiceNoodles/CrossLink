@@ -29,9 +29,11 @@ func OpenAIToAnthropic(resp *domain.OpenAIResponse, requestedModel string) (*dom
 	}
 	if len(thinkingBlocks) > 0 {
 		rest := buildContentBlocks(content, "", toolCalls) // text/tool only, no synthesized thinking
-		contentBlocks := make([]domain.ContentBlock, 0, len(thinkingBlocks)+len(rest))
+		contentBlocks := make([]domain.ContentBlock, 0, len(thinkingBlocks)+len(rest)+len(resp.AnthropicExtraBlocks))
 		contentBlocks = append(contentBlocks, thinkingBlocks...)
 		contentBlocks = append(contentBlocks, rest...)
+		// Phase-2 block fidelity: verbatim replay of unrecognized-typed blocks.
+		contentBlocks = append(contentBlocks, resp.AnthropicExtraBlocks...)
 		return &domain.AnthropicResponse{
 			ID:           generateMessageID(),
 			Type:         "message",
@@ -50,11 +52,18 @@ func OpenAIToAnthropic(resp *domain.OpenAIResponse, requestedModel string) (*dom
 					return 0
 				}(),
 				CacheCreationInputTokens: resp.Usage.CacheCreationTokens,
+				Iterations:               resp.Usage.AnthropicIterations,
 			},
 		}, nil
 	}
 
 	contentBlocks := buildContentBlocks(content, reasoningContent, toolCalls)
+	// Phase-2 block fidelity: unrecognized-typed blocks captured from an
+	// anthropic upstream replay verbatim (Raw bytes) after the rebuilt
+	// text/thinking/tool blocks.
+	if len(resp.AnthropicExtraBlocks) > 0 {
+		contentBlocks = append(contentBlocks, resp.AnthropicExtraBlocks...)
+	}
 
 	return &domain.AnthropicResponse{
 		ID:           generateMessageID(),
@@ -77,6 +86,7 @@ func OpenAIToAnthropic(resp *domain.OpenAIResponse, requestedModel string) (*dom
 			// OpenAI wire) surfaces here so anthropic-inbound clients see the
 			// full cache accounting (writes bill at 1.25× on Anthropic).
 			CacheCreationInputTokens: resp.Usage.CacheCreationTokens,
+			Iterations:               resp.Usage.AnthropicIterations,
 		},
 	}, nil
 }
