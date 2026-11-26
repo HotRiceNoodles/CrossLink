@@ -88,6 +88,43 @@ func GetAdapterMeta(adapterType string) *AdapterMeta {
 	return adapterMetas[adapterType]
 }
 
+// AdapterServesResponses reports whether a provider row can serve the 3A
+// raw-passthrough path (/v1/responses) at all — the write-side gate that
+// keeps the model-level supports_responses flag from being configured where
+// it can only silently no-op (runtime keeps its own double gate: flag AND
+// the ResponsesProvider interface assertion).
+//
+// Rules, most specific first:
+//   - the native anthropic adapter never serves Responses;
+//   - an api_protocol-switched shell (cloud shells) in anthropic mode never does;
+//   - a registered adapter that declares the "responses" capability does
+//     (openai_compatible, ollama — mirrors of their ResponsesProvider impls);
+//   - a registered adapter with an api_protocol switch left in openai mode does;
+//   - a registered adapter with NEITHER (azure_openai, mock in community)
+//     does not;
+//   - an unregistered type (an overlay shell under a community build, where
+//     its factory never ran) is allowed — the runtime gate decides.
+func AdapterServesResponses(adapterType string, extraConfig []byte) bool {
+	if adapterType == "anthropic" || extractProtocol(extraConfig) == "anthropic" {
+		return false
+	}
+	meta := GetAdapterMeta(adapterType)
+	if meta == nil {
+		return true
+	}
+	for _, c := range meta.Capabilities {
+		if c == "responses" {
+			return true
+		}
+	}
+	for _, f := range meta.ExtraFields {
+		if f.Name == "api_protocol" {
+			return true // protocol-switched shell; anthropic mode already rejected above
+		}
+	}
+	return false
+}
+
 // extractProtocol reads api_protocol from ExtraConfig JSON, defaults to "openai".
 func extractProtocol(extraConfig []byte) string {
 	if len(extraConfig) == 0 {
@@ -166,6 +203,74 @@ func ResolveHTTPTimeout(extraConfig []byte, fallback time.Duration) time.Duratio
 	return time.Duration(sec * float64(time.Second))
 }
 
+// Bounds for the three poll knobs (图片方案 P1, design §3.5 评审 F4): the
+// adapter-internal async bridge (PollUntil) tuning keys. Ranges mirror
+// PollConfigFromExtra's runtime acceptance so a row that passes write-time
+// validation behaves exactly as configured.
+const (
+	minPollTimeoutSeconds = 10
+	maxPollTimeoutSeconds = 600
+	minPollIntervalMs     = 500
+	maxPollIntervalMs     = 30000
+	minPollMaxIntervalMs  = 500
+	maxPollMaxIntervalMs  = 60000
+)
+
+// ValidatePollConfig checks the poll_* keys of an extra_config JSON (图片方案
+// P1, design §3.5 评审 F4): absent keys are valid (callers use defaults); when
+// present each must be a number within its legal range, and poll_max_interval_ms
+// must not be below poll_interval_ms when both are set. Meant to run BEFORE
+// persisting provider rows, alongside ValidateHTTPTimeout — without it an
+// out-of-range knob is silently ignored at runtime (PollConfigFromExtra falls
+// back to the default) and the misconfiguration is undiagnosable.
+func ValidatePollConfig(extraConfig []byte) error {
+	if len(extraConfig) == 0 {
+		return nil
+	}
+	var cfg struct {
+		PollTimeoutSeconds json.Number `json:"poll_timeout_seconds"`
+		PollIntervalMs     json.Number `json:"poll_interval_ms"`
+		PollMaxIntervalMs  json.Number `json:"poll_max_interval_ms"`
+	}
+	if err := json.Unmarshal(extraConfig, &cfg); err != nil {
+		return fmt.Errorf("poll_*: invalid extra_config JSON: %w", err)
+	}
+	var interval, maxIv float64
+	if cfg.PollTimeoutSeconds != "" {
+		v, err := cfg.PollTimeoutSeconds.Float64()
+		if err != nil {
+			return fmt.Errorf("poll_timeout_seconds must be a number (got %q)", cfg.PollTimeoutSeconds.String())
+		}
+		if v < minPollTimeoutSeconds || v > maxPollTimeoutSeconds {
+			return fmt.Errorf("poll_timeout_seconds must be within [%d, %d] seconds (async poll total budget)", minPollTimeoutSeconds, maxPollTimeoutSeconds)
+		}
+	}
+	if cfg.PollIntervalMs != "" {
+		v, err := cfg.PollIntervalMs.Float64()
+		if err != nil {
+			return fmt.Errorf("poll_interval_ms must be a number (got %q)", cfg.PollIntervalMs.String())
+		}
+		if v < minPollIntervalMs || v > maxPollIntervalMs {
+			return fmt.Errorf("poll_interval_ms must be within [%d, %d] (initial poll sleep)", minPollIntervalMs, maxPollIntervalMs)
+		}
+		interval = v
+	}
+	if cfg.PollMaxIntervalMs != "" {
+		v, err := cfg.PollMaxIntervalMs.Float64()
+		if err != nil {
+			return fmt.Errorf("poll_max_interval_ms must be a number (got %q)", cfg.PollMaxIntervalMs.String())
+		}
+		if v < minPollMaxIntervalMs || v > maxPollMaxIntervalMs {
+			return fmt.Errorf("poll_max_interval_ms must be within [%d, %d] (backoff cap)", minPollMaxIntervalMs, maxPollMaxIntervalMs)
+		}
+		maxIv = v
+	}
+	if cfg.PollIntervalMs != "" && cfg.PollMaxIntervalMs != "" && maxIv < interval {
+		return fmt.Errorf("poll_max_interval_ms (%s) must be >= poll_interval_ms (%s) — a cap below the initial sleep is degenerate", cfg.PollMaxIntervalMs.String(), cfg.PollIntervalMs.String())
+	}
+	return nil
+}
+
 // ValidateCommonExtraConfig runs the pre-persist validations shared by every
 // provider write path (admin CRUD, onboarding wizard, import): the
 // adapter-agnostic keys every protocol implementation honors. Add new
@@ -175,5 +280,55 @@ func ValidateCommonExtraConfig(extraConfig []byte) error {
 	if err := ValidateAnthropicAPIVersion(extraConfig); err != nil {
 		return err
 	}
-	return ValidateHTTPTimeout(extraConfig)
+	if err := ValidateHTTPTimeout(extraConfig); err != nil {
+		return err
+	}
+	return ValidatePollConfig(extraConfig)
+}
+
+// PollConfigFromExtra reads the three poll knobs (图片方案 P1) from a
+// provider's extra_config. Defaults: 120s / 3s / 5s. Out-of-range values
+// fall back to the default with a warning (defense-in-depth: write-time
+// validation already rejects them, but a stale row written before validation
+// existed must not produce a mis-behaving loop — and must not fail silently).
+func PollConfigFromExtra(extraConfig []byte) PollConfig {
+	cfg := PollConfig{
+		Timeout:     120 * time.Second,
+		Interval:    3 * time.Second,
+		MaxInterval: 5 * time.Second,
+	}
+	if len(extraConfig) == 0 {
+		return cfg
+	}
+	var v struct {
+		TimeoutSec    int `json:"poll_timeout_seconds"`
+		IntervalMs    int `json:"poll_interval_ms"`
+		MaxIntervalMs int `json:"poll_max_interval_ms"`
+	}
+	if json.Unmarshal(extraConfig, &v) != nil {
+		return cfg
+	}
+	if v.TimeoutSec != 0 {
+		if v.TimeoutSec >= minPollTimeoutSeconds && v.TimeoutSec <= maxPollTimeoutSeconds {
+			cfg.Timeout = time.Duration(v.TimeoutSec) * time.Second
+		} else {
+			slog.Warn("ignoring invalid poll_timeout_seconds, using default", "value", v.TimeoutSec)
+		}
+	}
+	if v.IntervalMs != 0 {
+		if v.IntervalMs >= minPollIntervalMs && v.IntervalMs <= maxPollIntervalMs {
+			cfg.Interval = time.Duration(v.IntervalMs) * time.Millisecond
+		} else {
+			slog.Warn("ignoring invalid poll_interval_ms, using default", "value", v.IntervalMs)
+		}
+	}
+	if v.MaxIntervalMs != 0 {
+		if v.MaxIntervalMs >= int(cfg.Interval/time.Millisecond) && v.MaxIntervalMs <= maxPollMaxIntervalMs {
+			cfg.MaxInterval = time.Duration(v.MaxIntervalMs) * time.Millisecond
+		} else {
+			slog.Warn("ignoring invalid poll_max_interval_ms, capping at interval (no backoff)", "value", v.MaxIntervalMs)
+			cfg.MaxInterval = cfg.Interval // degenerate: cap at interval (no backoff)
+		}
+	} // v.MaxIntervalMs == 0 (not set): keep default
+	return cfg
 }

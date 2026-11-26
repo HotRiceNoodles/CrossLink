@@ -109,3 +109,18 @@ func (r *ProviderModelCRUDRepo) FindByProviderAndName(ctx context.Context, provi
 	}
 	return &m, nil
 }
+
+// GetProvider returns the provider row a mapping belongs to (org-scoped when
+// orgID != 0) — used by the model-write validation path (supports_responses
+// capability check).
+func (r *ProviderModelCRUDRepo) GetProvider(ctx context.Context, providerID, orgID int64) (*model.Provider, error) {
+	var p model.Provider
+	q := r.db.WithContext(ctx)
+	if orgID != 0 {
+		q = q.Where("org_id = ? OR org_id IS NULL", orgID)
+	}
+	if err := q.First(&p, providerID).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
+}

@@ -78,7 +78,7 @@ func (h *AnthropicHandler) idemEffortTargetAuthorized(c *gin.Context, req *domai
 	if len(expanded) == 0 {
 		expanded = routes
 	}
-	eligible, _ := service.FilterEffortEligibleRoutes(expanded, true)
+	eligible, _ := service.FilterEffortEligibleRoutes(expanded, req.Extensions)
 	if cached.ExecProvider != "" {
 		for _, r := range eligible {
 			if r.Provider != nil && r.Provider.Name() == cached.ExecProvider && r.ProviderModel == cached.ExecModel {
@@ -266,7 +266,7 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		// inputs via the cache-backed resolver), so reserve set == execution
 		// set. Empty filtered chain = the stable gateway 400.
 		if service.RequestCarriesEffort(req.Extensions) {
-			filtered, _ := service.FilterEffortEligibleRoutes(expanded, true)
+			filtered, _ := service.FilterEffortEligibleRoutes(expanded, req.Extensions)
 			if len(filtered) == 0 {
 				logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrNoEffortCompatibleRoute.Error())
 				c.JSON(http.StatusBadRequest, gin.H{

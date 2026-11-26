@@ -91,7 +91,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 	// timeline; an empty filtered chain is the stable 400 sentinel.
 	var effortSkips []FallbackAttempt
 	if RequestCarriesEffort(openaiReq.Extensions) {
-		routes, effortSkips = FilterEffortEligibleRoutes(routes, true)
+		routes, effortSkips = FilterEffortEligibleRoutes(routes, openaiReq.Extensions)
 		if len(routes) == 0 {
 			return nil, &RouteError{Inner: ErrNoEffortCompatibleRoute, Model: req.Model, Attempts: effortSkips}
 		}
@@ -256,7 +256,7 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 	// Phase-1 effort eligibility — same placement rule as Chat (checklist §6.1).
 	var effortSkips []FallbackAttempt
 	if RequestCarriesEffort(openaiReq.Extensions) {
-		routes, effortSkips = FilterEffortEligibleRoutes(routes, true)
+		routes, effortSkips = FilterEffortEligibleRoutes(routes, openaiReq.Extensions)
 		if len(routes) == 0 {
 			return nil, &RouteError{Inner: ErrNoEffortCompatibleRoute, Model: req.Model, Attempts: effortSkips}
 		}

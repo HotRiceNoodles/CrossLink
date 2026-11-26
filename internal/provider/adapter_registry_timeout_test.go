@@ -7,6 +7,7 @@ import (
 
 // M4: the provider-level http_timeout_seconds key — pre-persist validation,
 // runtime resolution, and the shared write-path validator aggregation.
+// 图片方案 P1 (design §3.5 评审 F4): the poll_* knobs get the same treatment.
 
 func TestValidateHTTPTimeout(t *testing.T) {
 	t.Parallel()
@@ -68,6 +69,50 @@ func TestResolveHTTPTimeout(t *testing.T) {
 	}
 }
 
+func TestValidatePollConfig(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		extra   string
+		wantErr bool
+	}{
+		{"empty", ``, false},
+		{"other keys only", `{"http_timeout_seconds":60}`, false},
+		{"absent via null", `{"poll_timeout_seconds":null}`, false},
+		{"all three valid", `{"poll_timeout_seconds":300,"poll_interval_ms":2000,"poll_max_interval_ms":8000}`, false},
+		{"timeout lower bound", `{"poll_timeout_seconds":10}`, false},
+		{"timeout upper bound", `{"poll_timeout_seconds":600}`, false},
+		{"timeout below range", `{"poll_timeout_seconds":9}`, true},
+		{"timeout above range", `{"poll_timeout_seconds":601}`, true},
+		{"interval lower bound", `{"poll_interval_ms":500}`, false},
+		{"interval upper bound", `{"poll_interval_ms":30000}`, false},
+		{"interval below range", `{"poll_interval_ms":499}`, true},
+		{"interval above range", `{"poll_interval_ms":30001}`, true},
+		{"max lower bound", `{"poll_max_interval_ms":500}`, false},
+		{"max upper bound", `{"poll_max_interval_ms":60000}`, false},
+		{"max above range", `{"poll_max_interval_ms":60001}`, true},
+		{"max below interval rejected", `{"poll_interval_ms":5000,"poll_max_interval_ms":1000}`, true},
+		{"max above interval accepted", `{"poll_interval_ms":5000,"poll_max_interval_ms":6000}`, false},
+		// Cross-check only fires when BOTH keys are present: max alone below
+		// the default interval is in-range (runtime clamps degenerately).
+		{"max alone small tolerated", `{"poll_max_interval_ms":2000}`, false},
+		// json.Number tolerates a quoted number, same as http_timeout_seconds.
+		{"quoted number tolerated", `{"poll_timeout_seconds":"300"}`, false},
+		{"wrong type bool rejected", `{"poll_interval_ms":true}`, true},
+		{"malformed json rejected", `{"poll_timeout_seconds":`, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidatePollConfig([]byte(tc.extra))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ValidatePollConfig(%q) error = %v, wantErr %v", tc.extra, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateCommonExtraConfig(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -79,6 +124,8 @@ func TestValidateCommonExtraConfig(t *testing.T) {
 		{"bad version", `{"api_version":"nope","http_timeout_seconds":60}`, true},
 		{"bad timeout", `{"api_version":"2023-06-01","http_timeout_seconds":9999}`, true},
 		{"both bad reports version first", `{"api_version":"nope","http_timeout_seconds":9999}`, true},
+		{"bad poll timeout reaches aggregator", `{"http_timeout_seconds":60,"poll_timeout_seconds":5}`, true},
+		{"all keys valid", `{"http_timeout_seconds":60,"poll_timeout_seconds":300,"poll_interval_ms":2000,"poll_max_interval_ms":8000}`, false},
 		{"empty", ``, false},
 	}
 	for _, tc := range cases {

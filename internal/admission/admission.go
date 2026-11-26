@@ -187,6 +187,27 @@ func Admit(source string, rawBody []byte, betaHeader string) (*domain.ProtocolEx
 			return nil, &AdmissionError{Param: k, Reason: "unsupported_parameter"}
 		}
 		if known[k] {
+			// Reverse mapping (2026-11-26, checklist 已知问题 #1): openai-native
+			// effort/format ALSO envelope-ize as anthropic.output_config, so the
+			// anthropic-upstream translation (mergeOutputConfig) and the whole
+			// governance chain inherit automatically. Openai wire behavior is
+			// unchanged — the struct field keeps serializing natively; the
+			// envelope copy only rides the cross-protocol lane. Only shared-enum
+			// effort values map (openai "minimal" has no anthropic pair).
+			if source == "openai" {
+				switch k {
+				case "reasoning_effort":
+					var s string
+					if json.Unmarshal(v, &s) == nil && allowedEfforts[s] {
+						env = carryOutputConfigField(env, source, "effort", v)
+					}
+				case "response_format":
+					var probe map[string]json.RawMessage
+					if json.Unmarshal(v, &probe) == nil && len(probe) > 0 {
+						env = carryOutputConfigField(env, source, "format", v)
+					}
+				}
+			}
 			continue
 		}
 		if rule, ok := extRules[k]; ok {
@@ -284,6 +305,30 @@ func validateOutputConfig(param string, v json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// carryOutputConfigField merges one field into the envelope's
+// anthropic.output_config object (reverse mapping: openai-native params ride
+// the same carry the anthropic-side admission produces).
+func carryOutputConfigField(env *domain.ProtocolExtensions, source, field string, raw json.RawMessage) *domain.ProtocolExtensions {
+	if env == nil {
+		env = &domain.ProtocolExtensions{SourceProtocol: source}
+	}
+	if env.Params == nil {
+		env.Params = make(map[string]json.RawMessage)
+	}
+	var fields map[string]json.RawMessage
+	if oc := env.Params["anthropic.output_config"]; len(oc) > 0 {
+		_ = json.Unmarshal(oc, &fields)
+	}
+	if fields == nil {
+		fields = make(map[string]json.RawMessage)
+	}
+	fields[field] = raw
+	if merged, err := json.Marshal(fields); err == nil {
+		env.Params["anthropic.output_config"] = merged
+	}
+	return env
 }
 
 // ParseBetaTokens splits and dedupes an anthropic-beta header value.

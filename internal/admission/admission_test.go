@@ -196,3 +196,41 @@ func TestProtocolExtensionsClone(t *testing.T) {
 		t.Fatal("nil envelope clones to nil")
 	}
 }
+
+// TestAdmit_OpenAIReverseMapping (2026-11-26 checklist 已知问题 #1):
+// openai-native reasoning_effort/response_format envelope-ize as
+// anthropic.output_config so the anthropic-upstream translation and the
+// governance chain inherit; wire behavior for openai upstreams is unchanged
+// (the struct field keeps serializing — admission only adds the carry).
+func TestAdmit_OpenAIReverseMapping(t *testing.T) {
+	t.Parallel()
+	formatJSON := `{"type":"json_schema","json_schema":{"name":"out","strict":true}}`
+	env, err := Admit("openai", []byte(`{"model":"g","reasoning_effort":"high","response_format":`+formatJSON+`}`), "")
+	if err != nil {
+		t.Fatalf("reverse mapping must pass: %v", err)
+	}
+	if env == nil || env.SourceProtocol != "openai" {
+		t.Fatalf("envelope expected with openai source, got %+v", env)
+	}
+	var oc struct {
+		Effort string          `json:"effort"`
+		Format json.RawMessage `json:"format"`
+	}
+	if err := json.Unmarshal(env.Params["anthropic.output_config"], &oc); err != nil || oc.Effort != "high" {
+		t.Fatalf("effort not carried: %s", env.Params["anthropic.output_config"])
+	}
+	var f map[string]any
+	if err := json.Unmarshal(oc.Format, &f); err != nil || f["type"] != "json_schema" {
+		t.Fatalf("format not carried verbatim: %s", oc.Format)
+	}
+	// openai-only enum values (no anthropic pair) do NOT envelope-ize.
+	env2, err := Admit("openai", []byte(`{"model":"g","reasoning_effort":"minimal"}`), "")
+	if err != nil {
+		t.Fatalf("minimal is a legal openai value: %v", err)
+	}
+	if env2 != nil && env2.Params != nil {
+		if _, ok := env2.Params["anthropic.output_config"]; ok {
+			t.Fatal("openai-only enum must not envelope-ize")
+		}
+	}
+}

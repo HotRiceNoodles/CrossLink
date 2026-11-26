@@ -41,16 +41,21 @@ func RequestCarriesEffort(ext *domain.ProtocolExtensions) bool {
 
 // FilterEffortEligibleRoutes splits the expanded candidate chain into
 // effort-eligible routes plus recorded skips for the attempts timeline. A
-// request that carries no effort passes through unchanged (zero overhead on
-// the legacy path beyond the boolean check).
-func FilterEffortEligibleRoutes(routes []*router.RouteResult, carriesEffort bool) ([]*router.RouteResult, []FallbackAttempt) {
-	if !carriesEffort {
+// request that carries no effort (nil envelope / no output_config) passes
+// through unchanged. Source-protocol awareness (reverse mapping,
+// 2026-11-26): an openai-NATIVE carry (reasoning_effort envelope-ized at
+// admission) does not gate openai-protocol routes — the param is native
+// there and pre-existing traffic must not regress; anthropic routes still
+// require opt-in + version caps (cross-protocol synthesis is the gated act).
+func FilterEffortEligibleRoutes(routes []*router.RouteResult, ext *domain.ProtocolExtensions) ([]*router.RouteResult, []FallbackAttempt) {
+	if !RequestCarriesEffort(ext) {
 		return routes, nil
 	}
+	openaiNative := ext != nil && ext.SourceProtocol == "openai"
 	eligible := make([]*router.RouteResult, 0, len(routes))
 	var skips []FallbackAttempt
 	for _, r := range routes {
-		if reason := effortSkipReason(r); reason != "" {
+		if reason := effortSkipReason(r, openaiNative); reason != "" {
 			skips = append(skips, FallbackAttempt{
 				ProviderName:  routeProviderName(r),
 				ProviderModel: r.ProviderModel,
@@ -79,11 +84,16 @@ func routeProviderName(r *router.RouteResult) string {
 // the actual upstream combination — checklist "首发范围收敛") AND adapter
 // family capability (anthropic: registered version caps; openai_compatible:
 // reasoning_effort translation; everything else conservatively incompatible).
-func effortSkipReason(r *router.RouteResult) string {
+func effortSkipReason(r *router.RouteResult, openaiNative bool) string {
+	row := r.ProviderRow
+	if row != nil && openaiNative && row.AdapterType == "openai_compatible" {
+		// Reverse mapping: openai-native effort on its native protocol — no
+		// cross-protocol act, no gate (pre-existing traffic).
+		return ""
+	}
 	if !routeAllowsOutputConfig(r) {
 		return "route has not opted in to output_config (allowed_extensions)"
 	}
-	row := r.ProviderRow
 	if row == nil {
 		return "candidate carries no provider row: cannot verify output_config support"
 	}

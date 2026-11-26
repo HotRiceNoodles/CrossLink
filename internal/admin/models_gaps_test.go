@@ -184,3 +184,62 @@ func TestProviderDelete_TombstoneFreesName(t *testing.T) {
 	assert.Equal(t, "dup-name#del#42", updatedName)
 	assert.Equal(t, int64(42), deletedID)
 }
+
+// supports_responses capability gate: the flag on an anthropic-protocol
+// provider must fail the write (no silent no-op); on an openai-compatible
+// provider it passes.
+func TestModelCreate_SupportsResponsesCapabilityGate(t *testing.T) {
+	t.Parallel()
+	h, _, providerID, _ := newModelGapEnv(t)
+
+	body := gin.H{
+		"provider_id": providerID, "model_name": "sr-model", "provider_model": "up-sr",
+		"weight": 1, "priority": 1, "routing_strategy": "weighted_random",
+		"extra_config": map[string]any{"supports_responses": true},
+	}
+
+	// The gap env's provider is openai_compatible — the flag is legitimate.
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/models", body)
+	h.Create(c)
+	require.Equal(t, http.StatusCreated, w.Code, "openai-compatible provider must accept supports_responses: %s", w.Body.String())
+
+	// Same flag against an anthropic-protocol provider → 400.
+	db2 := newGapDB(t)
+	p2 := &model.Provider{Name: "p-anth", DisplayName: "p", AdapterType: "anthropic", BaseURL: "https://api.anthropic.com", APIKey: "k", Status: 1}
+	require.NoError(t, db2.Create(p2).Error)
+	h2 := NewModelHandler(repository.NewProviderModelCRUDRepo(db2), &noopCacheInvalidator{}, gapCache(t, db2), nil)
+	c2, w2 := newTestContext(t, http.MethodPost, "/admin/api/models", gin.H{
+		"provider_id": p2.ID, "model_name": "sr-model", "provider_model": "up-sr",
+		"weight": 1, "priority": 1, "routing_strategy": "weighted_random",
+		"extra_config": map[string]any{"supports_responses": true},
+	})
+	h2.Create(c2)
+	assert.Equal(t, http.StatusBadRequest, w2.Code)
+	assert.Contains(t, w2.Body.String(), "cannot serve /v1/responses")
+
+	// Flag absent on the same provider → unaffected.
+	c3, w3 := newTestContext(t, http.MethodPost, "/admin/api/models", gin.H{
+		"provider_id": p2.ID, "model_name": "plain-model", "provider_model": "up-plain",
+		"weight": 1, "priority": 1, "routing_strategy": "weighted_random",
+	})
+	h2.Create(c3)
+	assert.Equal(t, http.StatusCreated, w3.Code)
+}
+
+// newGapDB/newGapCache: shared fixtures split out of newModelGapEnv for the
+// second-provider scenario.
+func newGapDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Provider{}, &model.ProviderModel{}))
+	return db
+}
+
+func gapCache(t *testing.T, db *gorm.DB) *service.CacheService {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return service.NewCacheService(rdb, db, config.CacheConfig{})
+}

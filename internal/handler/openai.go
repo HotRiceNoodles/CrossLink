@@ -231,21 +231,40 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	// the expanded fallback chain (cheapest-primary failover to a pricier
 	// fallback must not spend past the reservation). Aborts with
 	// budget_exceeded before any upstream call if a level would be exceeded.
+	// Reverse mapping (2026-11-26): effort-carrying envelopes (openai-native
+	// reasoning_effort/response_format envelope-ized at admission) gate the
+	// same way — expand → filter → reserve AND execute the filtered set; an
+	// empty filtered chain is the stable gateway 400.
+	execRoutes := routes
 	if len(routes) > 0 {
 		maxCtx = routes[0].MaxContext
-		if !reserveBudgetCeilingForRequest(c, h.budgetSvc, h.resolver, estimateOpenAIInputTokens(&req), maxOut, routes, orgID) {
+		expanded := service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
+		if len(expanded) == 0 {
+			expanded = routes
+		}
+		if service.RequestCarriesEffort(req.Extensions) {
+			filtered, _ := service.FilterEffortEligibleRoutes(expanded, req.Extensions)
+			if len(filtered) == 0 {
+				logRequestStageError(h.usageSvc, c, "openai", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrNoEffortCompatibleRoute.Error())
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": service.ErrNoEffortCompatibleRoute.Error()}})
+				return
+			}
+			expanded = filtered
+		}
+		if !reserveBudgetCeilingExpanded(c, h.budgetSvc, estimateOpenAIInputTokens(&req), maxOut, expanded) {
 			return
 		}
+		execRoutes = expanded
 	}
 
 	sessionID := c.GetHeader("X-Session-ID")
 
 	if req.Stream {
-		h.handleStream(c, routes, &req, maxCtx, maxOut, start, sessionID)
+		h.handleStream(c, execRoutes, &req, maxCtx, maxOut, start, sessionID)
 		return
 	}
 
-	h.handleNonStream(c, routes, &req, maxCtx, maxOut, start, sessionID)
+	h.handleNonStream(c, execRoutes, &req, maxCtx, maxOut, start, sessionID)
 }
 
 // idemOpenAIBodyFingerprint binds an idempotency entry to the request shape:
@@ -353,7 +372,9 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
 	}
 
-	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
+	// Caller (Handle) passes the ALREADY-EXPANDED (and, for effort-carrying
+	// requests, already-FILTERED) chain — expanding again here would
+	// double-expand fallback models.
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
 	engine.SetClassifier(h.classifier)
@@ -711,7 +732,9 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		defer h.idemCache.Release(context.Background(), idemKeyID, idemKey)
 	}
 
-	routes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
+	// Caller (Handle) passes the ALREADY-EXPANDED (and, for effort-carrying
+	// requests, already-FILTERED) chain — expanding again here would
+	// double-expand fallback models.
 	config := service.ResolveFallbackConfig(routes)
 	engine := service.NewFallbackEngine(h.health, config)
 	engine.SetClassifier(h.classifier)

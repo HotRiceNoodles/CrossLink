@@ -41,6 +41,13 @@ func TestRequestCarriesEffort(t *testing.T) {
 	}
 }
 
+func anthropicEffortEnvelope() *domain.ProtocolExtensions {
+	return &domain.ProtocolExtensions{
+		SourceProtocol: "anthropic",
+		Params:         map[string]json.RawMessage{"anthropic.output_config": json.RawMessage(`{"effort":"high"}`)},
+	}
+}
+
 func TestFilterEffortEligibleRoutes(t *testing.T) {
 	t.Parallel()
 	routes := []*router.RouteResult{
@@ -51,7 +58,7 @@ func TestFilterEffortEligibleRoutes(t *testing.T) {
 		effortRoute("azure_openai", "v1", "output_config"),                      // unverified family
 		{ProviderModel: "no-row", AllowedExtensions: []string{"output_config"}}, // no provider row
 	}
-	eligible, skips := FilterEffortEligibleRoutes(routes, true)
+	eligible, skips := FilterEffortEligibleRoutes(routes, anthropicEffortEnvelope())
 	if len(eligible) != 2 {
 		t.Fatalf("eligible = %d, want 2", len(eligible))
 	}
@@ -77,15 +84,39 @@ func TestFilterEffortEligibleRoutes(t *testing.T) {
 	}
 
 	// No-effort requests pass through untouched.
-	same, noSkips := FilterEffortEligibleRoutes(routes, false)
+	same, noSkips := FilterEffortEligibleRoutes(routes, nil)
 	if len(same) != len(routes) || noSkips != nil {
 		t.Fatal("no-effort request must pass through unchanged")
 	}
 }
 
+// Reverse mapping (2026-11-26): an openai-NATIVE carry (reasoning_effort
+// envelope-ized at admission) must not gate its native protocol — existing
+// openai traffic regresses nothing — while anthropic routes stay gated.
+func TestFilterEffortEligibleRoutes_OpenAINativeException(t *testing.T) {
+	t.Parallel()
+	env := &domain.ProtocolExtensions{
+		SourceProtocol: "openai",
+		Params:         map[string]json.RawMessage{"anthropic.output_config": json.RawMessage(`{"effort":"high"}`)},
+	}
+	routes := []*router.RouteResult{
+		effortRoute("openai_compatible", "v1"), // native, NOT opted in → still eligible
+		effortRoute("openai_compatible", "v1", "output_config"),
+		effortRoute("anthropic", "2026-10-21"), // cross-protocol → still needs opt-in
+		effortRoute("anthropic", "2026-10-21", "output_config"),
+	}
+	eligible, skips := FilterEffortEligibleRoutes(routes, env)
+	if len(eligible) != 3 {
+		t.Fatalf("eligible = %d, want 3 (both openai + opted anthropic)", len(eligible))
+	}
+	if len(skips) != 1 || !containsStr(skips[0].Error.Error(), "has not opted in") {
+		t.Fatalf("only the non-opted anthropic route may skip: %v", skips)
+	}
+}
+
 func TestFilterEffortEligibleRoutes_EmptyIsSentinelTerritory(t *testing.T) {
 	t.Parallel()
-	eligible, _ := FilterEffortEligibleRoutes([]*router.RouteResult{effortRoute("anthropic", "2026-10-21")}, true)
+	eligible, _ := FilterEffortEligibleRoutes([]*router.RouteResult{effortRoute("anthropic", "2026-10-21")}, anthropicEffortEnvelope())
 	if len(eligible) != 0 {
 		t.Fatal("sole incompatible candidate must filter to empty (caller maps to the stable 400)")
 	}

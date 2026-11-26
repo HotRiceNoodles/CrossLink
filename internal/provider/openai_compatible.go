@@ -786,7 +786,7 @@ func init() {
 		AdapterVersion: "1",
 		NeedsBaseURL:   true,
 		NeedsAPIKey:    true,
-		Capabilities:   []string{"chat", "stream", "embeddings", "images", "video", "audio_speech", "audio_transcription", "audio_translation", "batch"},
+		Capabilities:   []string{"chat", "stream", "embeddings", "images", "video", "audio_speech", "audio_transcription", "audio_translation", "batch", "responses"},
 		ExtraFields: []AdapterField{
 			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},
@@ -801,7 +801,7 @@ func init() {
 		AdapterVersion: "1",
 		NeedsBaseURL:   true,
 		NeedsAPIKey:    false,
-		Capabilities:   []string{"chat", "stream"},
+		Capabilities:   []string{"chat", "stream", "responses"}, // ollama dispatches to NewOpenAICompatible → ResponsesProvider
 		ExtraFields: []AdapterField{
 			{Name: "http_timeout_seconds", Type: "number", Label: "HTTP 超时（秒，非流式，5–600）", Placeholder: "300", DefaultValue: "300"},
 			{Name: "record", Label: "录制响应（Mock 回放）", Type: "switch", DefaultValue: "false"},

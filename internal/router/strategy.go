@@ -149,8 +149,10 @@ func ValidateModelExtensionConfig(raw json.RawMessage) error {
 		return nil
 	}
 	var cfg struct {
-		RequestOverrides  map[string]any `json:"request_overrides"`
-		AllowedExtensions []string       `json:"allowed_extensions"`
+		RequestOverrides       map[string]any     `json:"request_overrides"`
+		AllowedExtensions      []string           `json:"allowed_extensions"`
+		ServiceTierMultipliers map[string]float64 `json:"service_tier_multipliers"`
+		ToolPrices             map[string]float64 `json:"tool_prices"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil // malformed extra_config as a whole is not this validator's lane
@@ -172,6 +174,19 @@ func ValidateModelExtensionConfig(raw json.RawMessage) error {
 			}
 			sort.Strings(allowed)
 			return fmt.Errorf("allowed_extensions: %q is not a registered dialect param (allowed: %s)", k, strings.Join(allowed, ", "))
+		}
+	}
+	// Responses billing (方案 L2 write half): multipliers and tool prices are
+	// neutral by default; when configured they must be positive so a typo
+	// cannot silently zero-out (or explode) settlement.
+	for tier, mult := range cfg.ServiceTierMultipliers {
+		if mult <= 0 {
+			return fmt.Errorf("service_tier_multipliers: %q must be > 0 (got %v)", tier, mult)
+		}
+	}
+	for tool, price := range cfg.ToolPrices {
+		if price < 0 {
+			return fmt.Errorf("tool_prices: %q must be >= 0 (got %v)", tool, price)
 		}
 	}
 	return nil
@@ -247,6 +262,12 @@ type extraConfig struct {
 	// bills thinking tokens as output).
 	RequestOverrides  map[string]any `json:"request_overrides"`
 	AllowedExtensions []string       `json:"allowed_extensions"`
+	// Responses billing (方案 L2, docs/design/responses-billing-observability.md):
+	// service-tier price multipliers and per-call tool prices for /v1/responses
+	// settlement. Defaults are neutral (missing multiplier = 1.0, missing tool
+	// price = free) so an unset config never changes behavior.
+	ServiceTierMultipliers map[string]float64 `json:"service_tier_multipliers"`
+	ToolPrices             map[string]float64 `json:"tool_prices"`
 }
 
 func parseExtraConfig(raw json.RawMessage) extraConfig {
