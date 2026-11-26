@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/model"
@@ -131,6 +133,10 @@ var ModelOverrideFields = map[string]string{
 // registered admission dialect params a route may forward upstream.
 var DialectExtensionFields = map[string]bool{
 	"enable_thinking": true,
+	// Phase-1 effort admission (2026-11-25 checklist §6.1): anthropic-inbound
+	// output_config.effort, forwarded on opted-in routes — natively on
+	// anthropic upstreams, translated to reasoning_effort on openai upstreams.
+	"output_config": true,
 }
 
 // ValidateModelExtensionConfig validates the request_overrides and
@@ -160,7 +166,12 @@ func ValidateModelExtensionConfig(raw json.RawMessage) error {
 	}
 	for _, k := range cfg.AllowedExtensions {
 		if !DialectExtensionFields[k] {
-			return fmt.Errorf("allowed_extensions: %q is not a registered dialect param (allowed: enable_thinking)", k)
+			allowed := make([]string, 0, len(DialectExtensionFields))
+			for name := range DialectExtensionFields {
+				allowed = append(allowed, name)
+			}
+			sort.Strings(allowed)
+			return fmt.Errorf("allowed_extensions: %q is not a registered dialect param (allowed: %s)", k, strings.Join(allowed, ", "))
 		}
 	}
 	return nil

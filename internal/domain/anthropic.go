@@ -49,6 +49,13 @@ type ContentBlock struct {
 	// gateway and the upstream's explicit prompt caching never activates.
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 
+	// Raw is the VERBATIM wire bytes of an unrecognized block type (Phase-2
+	// block fidelity): UnmarshalJSON stashes them for types the struct cannot
+	// represent losslessly (e.g. compaction blocks arriving under beta),
+	// MarshalJSON re-emits them byte-for-byte. Recognized types leave it nil
+	// and use the typed fields exactly as before.
+	Raw json.RawMessage `json:"-"`
+
 	// Thinking fidelity (类二): extended-thinking blocks carry a signature
 	// that binds the block's content — clients MUST pass it back exactly, and
 	// redacted_thinking carries an opaque data blob. Without these fields the
@@ -60,6 +67,44 @@ type ContentBlock struct {
 	// tool_result fields
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
+}
+
+// knownBlockTypes lists content-block types the typed struct above represents
+// losslessly; anything else switches to verbatim Raw carry (Phase-2 fidelity).
+var knownBlockTypes = map[string]bool{
+	"text": true, "thinking": true, "redacted_thinking": true,
+	"tool_use": true, "tool_result": true, "image": true, "document": true,
+}
+
+// UnmarshalJSON parses the typed fields; for a type the struct cannot
+// represent it additionally stashes the original bytes in Raw so the block
+// survives a gateway round trip byte-for-byte.
+func (b *ContentBlock) UnmarshalJSON(data []byte) error {
+	type alias ContentBlock
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*b = ContentBlock(a)
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &probe) == nil && !knownBlockTypes[probe.Type] {
+		raw := make(json.RawMessage, len(data))
+		copy(raw, data)
+		b.Raw = raw
+	}
+	return nil
+}
+
+// MarshalJSON re-emits unrecognized-typed blocks verbatim (Raw); recognized
+// types marshal through the typed fields exactly as before.
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+	if len(b.Raw) > 0 {
+		return b.Raw, nil
+	}
+	type alias ContentBlock
+	return json.Marshal(alias(b))
 }
 
 type AnthropicTool struct {
@@ -95,6 +140,10 @@ type AnthropicUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	// Iterations: on-demand compaction reports per-iteration usage here
+	// (Phase-2 compact 前置) — settle-by-iteration accounting must not fold
+	// it into the top-level totals.
+	Iterations int `json:"iterations,omitempty"`
 }
 
 // SSEEvent represents an Anthropic SSE output event.

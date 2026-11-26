@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/crosslink/internal/domain"
@@ -22,12 +23,16 @@ import (
 type AdmissionError struct {
 	Param  string
 	Reason string
+	// Detail carries the offending value for Reason=invalid_value.
+	Detail string
 }
 
 func (e *AdmissionError) Error() string {
 	switch e.Reason {
 	case "beta_token_not_allowed":
 		return fmt.Sprintf("beta token %q is not enabled on this gateway; remove the anthropic-beta header or contact the operator", e.Param)
+	case "invalid_value":
+		return fmt.Sprintf("invalid value %q for parameter %q: not an admitted value on this gateway; remove it or use an admitted value", e.Detail, e.Param)
 	default:
 		return fmt.Sprintf("unsupported parameter %q: not enabled on this gateway; remove it from the request", e.Param)
 	}
@@ -45,8 +50,10 @@ var billingCoupledParams = map[string]map[string]bool{
 		"inference_geo": true, // data-residency coupling
 		"diagnostics":   true, // prior-request server state
 		"cache_control": true, // request-level cache billing
-		"output_config": true, // effort semantics unverified until registered
 		"mcp_servers":   true, // server-side MCP connector: upstream-side tool execution + state
+		// output_config moved to extensionParamRules (Phase-1 effort admission,
+		// 2026-11-25 checklist): effort only, format/task_budget still rejected
+		// by the shape validator below.
 	},
 	"openai": {
 		"web_search_options": true, // introduces tool execution + billing
@@ -82,12 +89,36 @@ var knownTopLevelParams = map[string]map[string]bool{
 }
 
 // allowedBetaTokens is the code-level whitelist for billing/state-coupled
-// tokens (M2 dual track). It ships EMPTY: no token has completed the
-// verification checklist (request/response structure, stream events,
-// permissions, billing), so none is admitted. Entries land here only together
-// with their verification record; purely-semantic tokens move to the
+// tokens (M2 dual track). Entries land here only together with their
+// verification record (Phase-2 checklist §4: 头与请求字段成套生效，并验证
+// SSE、响应块及下一轮回传); purely-semantic tokens move to the
 // settings-configured track later — also not before verification.
-var allowedBetaTokens = map[string]bool{}
+var allowedBetaTokens = map[string]bool{
+	// Thinking progress display (2026-08-18): between-tool-call progress
+	// arrives as thinking blocks — the 类二 fidelity chain (e8678e2) already
+	// round-trips thinking blocks + signatures in both stream and non-stream,
+	// so the token is verified end-to-end.
+	"thinking-display-updates-2026-08-18": true,
+	// Server-side compaction (2026-01-12): compaction blocks now survive the
+	// full gateway round trip in all three lanes (Phase-2 三件套): request-side
+	// replay (UnknownBlocks), non-stream response (ContentBlock.Raw +
+	// AnthropicExtraBlocks) and stream events (PassthroughEvent verbatim,
+	// index-synced), with usage.iterations carried for per-iteration
+	// settlement. Deployed-upstream smoke still applies before relying on it.
+	"compact-2026-01-12": true,
+}
+
+// AllowedBetaTokens returns the sorted code-level beta whitelist — the
+// read-only admin view of what the running gateway admits (Phase-2 frontend
+// capability card). The map above stays the source of truth.
+func AllowedBetaTokens() []string {
+	out := make([]string, 0, len(allowedBetaTokens))
+	for tok := range allowedBetaTokens {
+		out = append(out, tok)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // extensionParamRule registers an ADMISSIBLE dialect parameter (M3.2 first
 // batch). A registered param is typed-validated and CARRIED on the envelope
@@ -108,6 +139,20 @@ var extensionParamRules = map[string]map[string]extensionParamRule{
 		// (thinking is billed as output) — forwarded only on opted-in routes.
 		"enable_thinking": {EnvelopeKey: "dialect.enable_thinking", ValueType: "bool"},
 	},
+	"anthropic": {
+		// Phase-1 effort admission (2026-11-25 checklist §2.1/§6): the object
+		// rides the envelope and is forwarded ONLY on routes that opt in via
+		// allowed_extensions AND whose api_version supports it (candidate-level
+		// eligibility in service.FilterEffortEligibleRoutes). Shape validator
+		// admits the effort subfield only; format/task_budget stay rejected.
+		"output_config": {EnvelopeKey: "anthropic.output_config", ValueType: "output_config"},
+	},
+}
+
+// allowedEfforts is the official output_config.effort enum. The gateway never
+// injects a default — only explicitly sent values ride the envelope.
+var allowedEfforts = map[string]bool{
+	"low": true, "medium": true, "high": true, "xhigh": true, "max": true,
 }
 
 // DialectWireName maps an envelope Params key back to its upstream wire name
@@ -204,8 +249,41 @@ func checkExtensionShape(param string, v json.RawMessage, want string) error {
 		if json.Unmarshal(v, &s) == nil {
 			return nil
 		}
+	case "output_config":
+		return validateOutputConfig(param, v)
 	}
 	return &AdmissionError{Param: param, Reason: "unsupported_parameter"}
+}
+
+// validateOutputConfig enforces the carry surface: effort (official enum,
+// Phase-1) and format (structured outputs, Phase-2 — object shape only, the
+// upstream owns schema validation; its wire shape matches openai's
+// response_format so the openai-side translation is a key rename).
+// task_budget stays rejected until its own verification round (server-side
+// pacing state). Unknown subfields are named in the rejection so the client
+// knows exactly what to remove.
+func validateOutputConfig(param string, v json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(v, &fields); err != nil || len(fields) == 0 {
+		return &AdmissionError{Param: param, Reason: "unsupported_parameter"}
+	}
+	for k, raw := range fields {
+		switch k {
+		case "effort":
+			var effort string
+			if err := json.Unmarshal(raw, &effort); err != nil || !allowedEfforts[effort] {
+				return &AdmissionError{Param: param + ".effort", Reason: "invalid_value", Detail: effort}
+			}
+		case "format":
+			var probe map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &probe); err != nil || len(probe) == 0 {
+				return &AdmissionError{Param: param + ".format", Reason: "invalid_value", Detail: "object required"}
+			}
+		default:
+			return &AdmissionError{Param: param + "." + k, Reason: "unsupported_parameter"}
+		}
+	}
+	return nil
 }
 
 // ParseBetaTokens splits and dedupes an anthropic-beta header value.

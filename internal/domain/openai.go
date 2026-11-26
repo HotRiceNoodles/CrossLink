@@ -142,6 +142,12 @@ type OpenAIMessage struct {
 	// them verbatim onto the rebuilt assistant content; openai-inbound never
 	// sets them.
 	ThinkingBlocks []ContentBlock `json:"-"`
+	// UnknownBlocks carries unrecognized-typed content blocks (Raw bytes
+	// intact — e.g. compaction blocks a client replays from a previous
+	// response, Phase-2 compact 前置): the reverse translation re-emits them
+	// verbatim so the upstream's replace-compacted-history protocol survives
+	// the gateway round trip. json:"-" keeps them off the openai wire.
+	UnknownBlocks []ContentBlock `json:"-"`
 }
 
 // ContentText extracts a text string from Content, which may be nil, a string,
@@ -207,6 +213,11 @@ type OpenAIResponse struct {
 	// re-emitted verbatim to anthropic-inbound clients by OpenAIToAnthropic.
 	// json:"-" keeps them off the OpenAI wire.
 	ThinkingBlocks []ContentBlock `json:"-"`
+	// AnthropicExtraBlocks: unrecognized-typed content blocks captured from an
+	// anthropic upstream response with their Raw wire bytes intact (Phase-2
+	// block fidelity — e.g. compaction blocks under beta): re-emitted verbatim
+	// by OpenAIToAnthropic. json:"-" keeps them off the OpenAI wire.
+	AnthropicExtraBlocks []ContentBlock `json:"-"`
 }
 
 type OpenAIChoice struct {
@@ -228,6 +239,10 @@ type OpenAIUsage struct {
 	// CacheCreationTokens carries Anthropic cache_creation_input_tokens through
 	// the internal pipeline (billing); never serialized to clients (json:"-").
 	CacheCreationTokens int `json:"-"`
+	// AnthropicIterations carries Anthropic usage.iterations (on-demand
+	// compaction per-iteration reporting, Phase-2) for the anthropic-facing
+	// response assembly; never serialized on the openai wire.
+	AnthropicIterations int `json:"-"`
 }
 
 type CompletionTokensDetails struct {
@@ -267,6 +282,12 @@ type OpenAIChunkDelta struct {
 	// content_block object to re-emit verbatim.
 	SignatureDelta   string          `json:"-"`
 	RedactedThinking json.RawMessage `json:"-"`
+	// Phase-2 compact 前置: unrecognized-typed content-block events (e.g.
+	// compaction blocks under beta) ride VERBATIM through the double
+	// translation — PassthroughEvent is the anthropic SSE event type,
+	// PassthroughData its original bytes (upstream block index intact).
+	PassthroughEvent string          `json:"-"`
+	PassthroughData  json.RawMessage `json:"-"`
 }
 
 type OpenAIChunkToolCall struct {

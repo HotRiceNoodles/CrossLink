@@ -52,10 +52,11 @@ func Admission() gin.HandlerFunc {
 		env, err := admission.Admit(sourceForPath(path), body, beta)
 		if err != nil {
 			// Rejections are client errors with a stable message; the UsageLog
-			// middleware (earlier in the chain) records the 400 row.
-			if ae, ok := err.(*admission.AdmissionError); ok && ae.Reason == "beta_token_not_allowed" {
-				c.Set("error_type", "invalid_request_error")
-			}
+			// middleware (earlier in the chain) records the 400 row, pinned to
+			// invalid_request_error + the admission stage so parameter-rule
+			// rejections are distinguishable from other 400s in usage logs.
+			c.Set("error_type", "invalid_request_error")
+			c.Set("error_stage", "admission")
 			if strings.HasSuffix(path, "/v1/messages") {
 				c.JSON(http.StatusBadRequest, gin.H{
 					"type":  "error",

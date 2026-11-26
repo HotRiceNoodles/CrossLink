@@ -21,6 +21,34 @@ type CachedResponse struct {
 	StatusCode int               `json:"status_code"`
 	Body       json.RawMessage   `json:"body"`
 	Headers    map[string]string `json:"headers,omitempty"`
+	// Phase-1 effort replay binding (2026-11-25 checklist §6.2): what was
+	// asked (endpoint + request fingerprint) and what executed (provider/
+	// model). The replay path verifies the CURRENT policy of the ORIGINAL
+	// target — not just "some candidate is still compatible" — so a result
+	// produced by a since-deauthorized route is refused instead of re-served.
+	// Zero values = legacy entry written before the binding existed; callers
+	// apply the conservative full re-check for those.
+	Endpoint     string `json:"endpoint,omitempty"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	ExecProvider string `json:"exec_provider,omitempty"`
+	ExecModel    string `json:"exec_model,omitempty"`
+}
+
+// IdemVerdict is the outcome of a verified idempotency read.
+type IdemVerdict string
+
+const (
+	IdemMiss     IdemVerdict = "miss"
+	IdemOK       IdemVerdict = "ok"
+	IdemConflict IdemVerdict = "conflict"
+)
+
+// IdemBinding carries the replay-binding fields into SetWithBinding.
+type IdemBinding struct {
+	Endpoint     string
+	Fingerprint  string
+	ExecProvider string
+	ExecModel    string
 }
 
 func NewIdempotencyCache(rdb *redis.Client) *IdempotencyCache {
@@ -45,6 +73,35 @@ func (c *IdempotencyCache) Get(ctx context.Context, apiKeyID int64, key string) 
 		return nil, false
 	}
 	return &resp, true
+}
+
+// GetVerified is the SHARED read entry (checklist §6.2): beside the lookup it
+// enforces endpoint + request-fingerprint matching, because one API key's
+// idempotency key space (`idem:<apiKeyID>:<key>`) is shared across
+// /v1/messages, /v1/chat/completions and the video endpoints. A verdict of
+// IdemConflict carries a client-facing reason; zero-upstream-call guarantees
+// are the caller's (it must reply, never re-execute, on conflict).
+func (c *IdempotencyCache) GetVerified(ctx context.Context, apiKeyID int64, key, endpoint, fingerprint string) (*CachedResponse, IdemVerdict, string) {
+	resp, ok := c.Get(ctx, apiKeyID, key)
+	if !ok {
+		return nil, IdemMiss, ""
+	}
+	if resp.Endpoint != "" && resp.Endpoint != endpoint {
+		return nil, IdemConflict, "idempotency key was created on a different endpoint; use a unique key per endpoint"
+	}
+	if resp.Fingerprint != "" && resp.Fingerprint != fingerprint {
+		return nil, IdemConflict, "idempotency key was used with a different request body; use a unique key per request"
+	}
+	return resp, IdemOK, ""
+}
+
+// SetWithBinding stores the response together with its replay binding.
+func (c *IdempotencyCache) SetWithBinding(ctx context.Context, apiKeyID int64, key string, resp *CachedResponse, b IdemBinding) error {
+	resp.Endpoint = b.Endpoint
+	resp.Fingerprint = b.Fingerprint
+	resp.ExecProvider = b.ExecProvider
+	resp.ExecModel = b.ExecModel
+	return c.Set(ctx, apiKeyID, key, resp)
 }
 
 func (c *IdempotencyCache) Set(ctx context.Context, apiKeyID int64, key string, resp *CachedResponse) error {

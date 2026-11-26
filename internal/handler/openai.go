@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -246,6 +248,16 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 	h.handleNonStream(c, routes, &req, maxCtx, maxOut, start, sessionID)
 }
 
+// idemOpenAIBodyFingerprint binds an idempotency entry to the request shape:
+// the parsed struct re-marshals deterministically, so equivalent bodies share
+// a fingerprint while any semantic difference (model, params, messages)
+// changes it (Phase-1 checklist §6.2 same-key-different-body conflict).
+func idemOpenAIBodyFingerprint(req *domain.OpenAIRequest) string {
+	b, _ := json.Marshal(req)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // setFallbackHeaders exposes which model served the request and how many fallbacks
 // occurred, so clients can observe failover behavior. The model header is always set
 // (the serving model); the count header is only set when at least one fallback happened.
@@ -296,7 +308,17 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		if key := middleware.GetAPIKeyFromContext(c); key != nil {
 			idemKeyID = key.ID
 		}
-		if cached, ok := h.idemCache.Get(c.Request.Context(), idemKeyID, idemKey); ok {
+		// Phase-1 replay binding (checklist §6.2): the shared key space is
+		// endpoint-scoped and body-fingerprinted — a mismatch is a definite
+		// conflict; reply, never re-execute.
+		idemFingerprint := idemOpenAIBodyFingerprint(req)
+		cached, verdict, conflictReason := h.idemCache.GetVerified(c.Request.Context(), idemKeyID, idemKey, "/v1/chat/completions", idemFingerprint)
+		if verdict == service.IdemConflict {
+			c.Set("skip_call_count", true) // zero upstream calls, zero new charges
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"type": "idempotency_conflict", "message": conflictReason}})
+			return
+		}
+		if verdict == service.IdemOK {
 			// Re-check the replayed body against the CURRENT response policy —
 			// a cached response must never bypass updated guardrail rules. A
 			// policy rejection REPLIES with an error: an idempotent replay must
@@ -553,9 +575,14 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 
 	// Cache response for idempotency
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
-		h.idemCache.Set(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
+		_ = h.idemCache.SetWithBinding(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
 			StatusCode: http.StatusOK,
 			Body:       respBody,
+		}, service.IdemBinding{
+			Endpoint:     "/v1/chat/completions",
+			Fingerprint:  idemOpenAIBodyFingerprint(req),
+			ExecProvider: route.Provider.Name(),
+			ExecModel:    route.ProviderModel,
 		})
 	}
 

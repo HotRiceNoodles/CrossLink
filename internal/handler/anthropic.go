@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +56,39 @@ func NewAnthropicHandler(svc *service.GatewayService, resolver *router.Resolver,
 // SetBudgetSvc injects the budget service used for pre-request budget
 // reservation (concurrency-safe enforcement, C5). Optional; nil disables it.
 func (h *AnthropicHandler) SetBudgetSvc(b *service.BudgetService) { h.budgetSvc = b }
+
+// idemBodyFingerprint binds an idempotency entry to the exact request body
+// (Phase-1 checklist §6.2: same key + different body = definite conflict).
+func idemBodyFingerprint(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// idemEffortTargetAuthorized re-verifies the CURRENT policy for an
+// effort-carrying replay (checklist §6.2): entries written with a binding
+// re-authorize their exact provider/model ("A revoked, B still compatible"
+// must still refuse); legacy entries without binding fall back to the
+// conservative full re-check — any currently eligible candidate.
+func (h *AnthropicHandler) idemEffortTargetAuthorized(c *gin.Context, req *domain.AnthropicRequest, orgID int64, cached *service.CachedResponse) bool {
+	routes, err := h.resolver.Resolve(c.Request.Context(), req.Model, orgID)
+	if err != nil {
+		return false
+	}
+	expanded := service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
+	if len(expanded) == 0 {
+		expanded = routes
+	}
+	eligible, _ := service.FilterEffortEligibleRoutes(expanded, true)
+	if cached.ExecProvider != "" {
+		for _, r := range eligible {
+			if r.Provider != nil && r.Provider.Name() == cached.ExecProvider && r.ProviderModel == cached.ExecModel {
+				return true
+			}
+		}
+		return false
+	}
+	return len(eligible) > 0
+}
 
 // SetCalibration injects the token-estimation calibration service
 // (context analysis). Optional; nil disables calibration.
@@ -220,7 +255,29 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	var maxCtx *int // primary route's context window, captured synchronously (analysis input)
 	if routes, rerr := h.resolver.Resolve(c.Request.Context(), req.Model, orgID); rerr == nil && len(routes) > 0 {
 		maxCtx = routes[0].MaxContext
-		if !reserveBudgetCeilingForRequest(c, h.budgetSvc, h.resolver, estimateAnthropicInputTokens(&req), req.MaxTokens, routes, orgID) {
+		expanded := service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
+		if len(expanded) == 0 {
+			expanded = routes
+		}
+		// Phase-1 effort eligibility (checklist §6.1): filter BEFORE the
+		// reservation so an incompatible-but-expensive candidate cannot
+		// inflate the ceiling into a spurious 429. GatewayService applies the
+		// same filter to the same expanded chain before the engine (identical
+		// inputs via the cache-backed resolver), so reserve set == execution
+		// set. Empty filtered chain = the stable gateway 400.
+		if service.RequestCarriesEffort(req.Extensions) {
+			filtered, _ := service.FilterEffortEligibleRoutes(expanded, true)
+			if len(filtered) == 0 {
+				logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrNoEffortCompatibleRoute.Error())
+				c.JSON(http.StatusBadRequest, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "invalid_request_error", "message": service.ErrNoEffortCompatibleRoute.Error()},
+				})
+				return
+			}
+			expanded = filtered
+		}
+		if !reserveBudgetCeilingExpanded(c, h.budgetSvc, estimateAnthropicInputTokens(&req), req.MaxTokens, expanded) {
 			return
 		}
 	}
@@ -232,7 +289,21 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			if key := middleware.GetAPIKeyFromContext(c); key != nil {
 				idemKeyID = key.ID
 			}
-			if cached, ok := h.idemCache.Get(c.Request.Context(), idemKeyID, idemKey); ok {
+			// Phase-1 replay binding (checklist §6.2): the shared key space is
+			// endpoint-scoped and body-fingerprinted; a mismatch is a definite
+			// conflict — reply, never re-execute.
+			idemFingerprint := idemBodyFingerprint(bodyBytes)
+			cached, verdict, conflictReason := h.idemCache.GetVerified(c.Request.Context(), idemKeyID, idemKey, "/v1/messages", idemFingerprint)
+			if verdict == service.IdemConflict {
+				c.Set("skip_call_count", true) // zero upstream calls, zero new charges
+				logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusConflict, "idempotency_conflict", "request", conflictReason)
+				c.JSON(http.StatusConflict, gin.H{
+					"type":  "error",
+					"error": gin.H{"type": "idempotency_conflict", "message": conflictReason},
+				})
+				return
+			}
+			if verdict == service.IdemOK {
 				// Re-check the replayed body against the CURRENT response
 				// policy — a cached response must never bypass updated rules. A
 				// policy rejection REPLIES with an error: an idempotent replay
@@ -244,6 +315,21 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 				if !idemReplayPassesGuardrail(c, h.guardrailSvc, cached.Body, req.Model, extractLastUserMessage(req.Messages)) {
 					c.Set("skip_call_count", true) // rejected before any upstream work
 					c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "guardrail_blocked", "message": "blocked by guardrail"}})
+					return
+				}
+				// Effort replay authorization (checklist §6.2): verify the
+				// CURRENT policy of the ORIGINAL execution target. Bounded
+				// entries re-authorize their exact provider/model; legacy
+				// entries (pre-binding) fall back to the conservative full
+				// re-check — ANY currently eligible candidate.
+				if service.RequestCarriesEffort(req.Extensions) && !h.idemEffortTargetAuthorized(c, &req, orgID, cached) {
+					c.Set("skip_call_count", true) // zero upstream calls, zero new charges
+					msg := "idempotency replay refused: the route that produced this result no longer accepts output_config"
+					logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusConflict, "idempotency_conflict", "request", msg)
+					c.JSON(http.StatusConflict, gin.H{
+						"type":  "error",
+						"error": gin.H{"type": "idempotency_conflict", "message": msg},
+					})
 					return
 				}
 				c.Set("skip_call_count", true) // idempotent replay: no new upstream work
@@ -278,6 +364,16 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	result, err := h.svc.Chat(c.Request.Context(), &req, sessionID, orgID)
 	if err != nil {
+		if errors.Is(err, service.ErrNoEffortCompatibleRoute) {
+			// Race path: the chain changed between the handler pre-check and
+			// the gateway's own resolve — same stable 400 (checklist §6.1).
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrNoEffortCompatibleRoute.Error())
+			c.JSON(http.StatusBadRequest, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "invalid_request_error", "message": service.ErrNoEffortCompatibleRoute.Error()},
+			})
+			return
+		}
 		h.logFailure(c, req.Model, gatewayErrorStatus(err), start, err, sessionID)
 		h.writeError(c, err, req.Model)
 		return
@@ -420,9 +516,17 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 
 	// Cache response for idempotency
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
-		h.idemCache.Set(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
+		// Phase-1 binding (checklist §6.2): endpoint + request fingerprint +
+		// the actual execution target, so a later replay re-authorizes THIS
+		// provider/model against the current policy.
+		_ = h.idemCache.SetWithBinding(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
 			StatusCode: http.StatusOK,
 			Body:       respBody,
+		}, service.IdemBinding{
+			Endpoint:     "/v1/messages",
+			Fingerprint:  idemBodyFingerprint(bodyBytes),
+			ExecProvider: result.ProviderName,
+			ExecModel:    result.ModelUsed,
 		})
 	}
 
@@ -872,6 +976,19 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 	}
 
 	if err != nil {
+		if errors.Is(err, service.ErrNoEffortCompatibleRoute) {
+			// Race path (stream): SSE headers may already be committed, so the
+			// stable rejection rides the error event (same body/shape as the
+			// pre-check 400) instead of a status change.
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrNoEffortCompatibleRoute.Error())
+			errData, _ := json.Marshal(map[string]any{
+				"type":  "error",
+				"error": map[string]string{"type": "invalid_request_error", "message": service.ErrNoEffortCompatibleRoute.Error()},
+			})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+			flusher.Flush()
+			return
+		}
 		slog.Error("stream error", "error", err, "model", req.Model)
 		h.logFailure(c, req.Model, gatewayErrorStatus(err), start, err, sessionID)
 		errData, _ := json.Marshal(map[string]any{

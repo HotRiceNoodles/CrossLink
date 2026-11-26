@@ -352,12 +352,22 @@ func GuardrailsRequest(svc *guardrail.GuardrailService, toolObs domain.ToolObser
 		switch result.Action {
 		case "block":
 			observeBlocked()
+			// The rejection row must say WHICH rule fired: the client-facing
+			// body stays generic (no detection detail leaks to the caller),
+			// so rule/reason travel in the guardrail context keys the UsageLog
+			// fallback persists.
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", result.RuleName)
+			setSecurityEvent(c, result, "request rejected")
 			writeGuardrailError(c, result, c.Request.URL.Path)
 			c.Abort()
 			return
 		case "review":
 			// 拦截待人工复核：内容不放行，复核结论只完成审计闭环。
 			observeBlocked()
+			c.Set("guardrail_triggered", true)
+			c.Set("guardrail_rule", result.RuleName)
+			setSecurityEvent(c, result, "pending manual review")
 			writeGuardrailError(c, result, c.Request.URL.Path)
 			c.Abort()
 			return
@@ -433,6 +443,9 @@ func setSecurityEvent(c *gin.Context, result *guardrail.CheckResponse, note stri
 
 func writeGuardrailError(c *gin.Context, result *guardrail.CheckResponse, path string) {
 	msg := "blocked by guardrail"
+	// Stage tag for the usage row the UsageLog fallback writes; rule/reason
+	// detail already traveled via security_events, not into this body.
+	c.Set("error_stage", "guardrail")
 
 	if strings.HasSuffix(path, "/v1/messages") {
 		c.JSON(http.StatusBadRequest, gin.H{

@@ -315,7 +315,10 @@ func ReadBodyWithBudget(maxSize int64, budget *InflightBodyBudget, multipartRese
 			b, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSize+1))
 			c.Request.Body.Close()
 			if err != nil {
-				c.AbortWithStatus(http.StatusBadRequest)
+				// A bare 400 leaves the client guessing; say what failed.
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+					"error": gin.H{"type": "invalid_request_error", "message": "failed to read request body"},
+				})
 				return
 			}
 			if int64(len(b)) > maxSize {
@@ -410,7 +413,9 @@ func ReadBodyWithBudget(maxSize int64, budget *InflightBodyBudget, multipartRese
 					// deferred releaseAll returns every held block.
 					if rerr != nil {
 						c.Request.Body.Close()
-						c.AbortWithStatus(http.StatusBadRequest)
+						c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+							"error": gin.H{"type": "invalid_request_error", "message": "failed to read request body"},
+						})
 						return nil, false
 					}
 				}

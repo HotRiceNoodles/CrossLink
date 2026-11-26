@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crosslink/internal/crypto"
+	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/guardrail"
 	"github.com/crosslink/internal/service"
 	"github.com/gin-gonic/gin"
@@ -126,6 +127,21 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 		if c.GetHeader("X-Idempotency-Key") != "" {
 			c.Next()
 			return
+		}
+
+		// Phase-1 effort (checklist §6.2): effort-carrying requests bypass the
+		// cache read AND write. The key hashes the body (different efforts
+		// never collide) but does not reflect AUTHORIZATION state — a route
+		// deauthorization or candidate switch must not keep serving a cached
+		// result the current policy would not execute. Key-side authorization
+		// versioning is the Phase-2 evolution. The admission middleware (earlier
+		// in the chain) guarantees the envelope is set when we get here.
+		if v, ok := c.Get(AdmissionEnvelopeKey); ok {
+			if env, valid := v.(*domain.ProtocolExtensions); valid && service.RequestCarriesEffort(env) {
+				c.Header("X-Cache", "BYPASS-EFFORT")
+				c.Next()
+				return
+			}
 		}
 
 		ctx := c.Request.Context()

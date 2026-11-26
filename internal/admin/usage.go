@@ -49,6 +49,16 @@ func applyUsageFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
 	if hasFallback := c.Query("has_fallback"); hasFallback == "true" {
 		query = query.Where("fallback_count > 0")
 	}
+	// Guardrail-hit drill-down (护栏管理「拦截记录」): both optional and exact-match
+	// only — an absent or non-"true" guardrail_triggered narrows nothing, same contract
+	// as has_fallback. guardrail_rule is the rule NAME captured at hit time, so rows of
+	// a since-renamed or deleted rule stay reachable by their recorded value.
+	if triggered := c.Query("guardrail_triggered"); triggered == "true" {
+		query = query.Where("guardrail_triggered = ?", true)
+	}
+	if rule := c.Query("guardrail_rule"); rule != "" {
+		query = query.Where("guardrail_rule = ?", rule)
+	}
 	if status := c.Query("status"); status != "" {
 		switch status {
 		case "2xx":

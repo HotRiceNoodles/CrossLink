@@ -51,6 +51,18 @@ func reserveBudgetCeilingForRequest(c *gin.Context, budgetSvc *service.BudgetSer
 	if len(expanded) == 0 {
 		expanded = routes
 	}
+	return reserveBudgetCeilingExpanded(c, budgetSvc, inputTokens, maxOutputTokens, expanded)
+}
+
+// reserveBudgetCeilingExpanded reserves against an ALREADY-EXPANDED (and, for
+// effort-carrying requests, ALREADY-FILTERED — checklist §6.1) candidate set:
+// an expensive-but-incompatible candidate must not inflate the ceiling and
+// push a servable request into 429. The reserve set and the execution set are
+// the same slice.
+func reserveBudgetCeilingExpanded(c *gin.Context, budgetSvc *service.BudgetService, inputTokens, maxOutputTokens int, expanded []*router.RouteResult) bool {
+	if budgetSvc == nil || len(expanded) == 0 {
+		return true
+	}
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = defaultBudgetOutputTokens
 	}

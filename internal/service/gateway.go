@@ -85,6 +85,18 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		return nil, fmt.Errorf("translate request: %w", err)
 	}
 
+	// Phase-1 effort eligibility (checklist §6.1): filter BEFORE the engine —
+	// MaxRetries truncation happens ahead of any closure, and the handler
+	// reserves against the same filtered set. Skips prepend to the attempts
+	// timeline; an empty filtered chain is the stable 400 sentinel.
+	var effortSkips []FallbackAttempt
+	if RequestCarriesEffort(openaiReq.Extensions) {
+		routes, effortSkips = FilterEffortEligibleRoutes(routes, true)
+		if len(routes) == 0 {
+			return nil, &RouteError{Inner: ErrNoEffortCompatibleRoute, Model: req.Model, Attempts: effortSkips}
+		}
+	}
+
 	config := ResolveFallbackConfig(routes)
 	engine := NewFallbackEngine(s.health, config)
 	engine.SetClassifier(s.classifier)
@@ -145,6 +157,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		return openaiResp, nil
 	})
 	AttachStripsToAttempts(result.Attempts, stripBatches)
+	result.Attempts = append(effortSkips, result.Attempts...)
 
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)
@@ -240,6 +253,15 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 	openaiReq.Stream = true
 	openaiReq.StreamOptions = &domain.StreamOptions{IncludeUsage: true}
 
+	// Phase-1 effort eligibility — same placement rule as Chat (checklist §6.1).
+	var effortSkips []FallbackAttempt
+	if RequestCarriesEffort(openaiReq.Extensions) {
+		routes, effortSkips = FilterEffortEligibleRoutes(routes, true)
+		if len(routes) == 0 {
+			return nil, &RouteError{Inner: ErrNoEffortCompatibleRoute, Model: req.Model, Attempts: effortSkips}
+		}
+	}
+
 	config := ResolveFallbackConfig(routes)
 	engine := NewFallbackEngine(s.health, config)
 	engine.SetClassifier(s.classifier)
@@ -299,6 +321,7 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 		return ch, nil
 	})
 	AttachStripsToAttempts(result.Attempts, stripBatches)
+	result.Attempts = append(effortSkips, result.Attempts...)
 
 	if result.FinalError != nil {
 		route := LastAttemptRoute(result, routes)

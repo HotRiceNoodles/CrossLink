@@ -117,9 +117,15 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		}
 	}
 
-	// Idempotency check
+	// Idempotency check — shared read entry (Phase-1 checklist §6.2): the key
+	// space is endpoint-scoped, so a key created on /v1/messages or
+	// /v1/chat/completions cannot be replayed here (or vice versa).
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
-		if cached, ok := h.idemCache.Get(c.Request.Context(), apiKeyID, idemKey); ok {
+		if cached, verdict, conflictReason := h.idemCache.GetVerified(c.Request.Context(), apiKeyID, idemKey, "/v1/videos", ""); verdict == service.IdemConflict {
+			c.Set("skip_call_count", true)
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"type": "idempotency_conflict", "message": conflictReason}})
+			return
+		} else if verdict == service.IdemOK {
 			c.Set("skip_call_count", true) // idempotent replay: no new upstream work
 			c.Data(cached.StatusCode, "application/json", cached.Body)
 			return
@@ -288,12 +294,12 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		return
 	}
 
-	// Cache idempotency result
+	// Cache idempotency result — endpoint-bound (Phase-1 checklist §6.2)
 	if idemKey := c.GetHeader("X-Idempotency-Key"); idemKey != "" && h.idemCache != nil {
-		h.idemCache.Set(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
+		_ = h.idemCache.SetWithBinding(c.Request.Context(), apiKeyID, idemKey, &service.CachedResponse{
 			StatusCode: 200,
 			Body:       respBody,
-		})
+		}, service.IdemBinding{Endpoint: "/v1/videos"})
 	}
 
 	setFallbackHeaders(c, winningRoute.ProviderModel, result.FallbackCount)
