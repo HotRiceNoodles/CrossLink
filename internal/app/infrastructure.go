@@ -88,17 +88,21 @@ func ProvideInfrastructure(deps *InfraDeps) *Infrastructure {
 		resolver, registry, deps.Svcs.LatencySvc, deps.Svcs.ActiveTracker, retryBudget,
 	)
 
-	// P4.5: wire the health-score closure into the resolver (cache-hit reorder)
-	// and the two Community strategies (cache-miss Select). The overlay's 4
-	// strategies are wired separately in their main.go (B2). nil rdb → skip
-	// (HealthScore would fail-open to 1.0 anyway, so wiring is pointless).
+	// P4.5: wire the health-score closure into the resolver (cache-hit
+	// demotion) and the two Community strategies (per-request Select, cache
+	// hits included). The strategies get the resolver's 2s-cached view of the
+	// score: their filterByHealth now runs on every request, and the raw
+	// scorer would cost up to three Redis reads per primary per request. The
+	// overlay's 4 strategies are wired separately in their main.go (B2). nil
+	// rdb → skip (HealthScore would fail-open to 1.0 anyway, so wiring is
+	// pointless).
 	if deps.RDB != nil {
-		healthFn := func(providerName, model string) float64 {
+		resolver.SetHealthScoreFn(func(providerName, model string) float64 {
 			return service.HealthScore(context.Background(), deps.RDB, health, providerName, model)
-		}
-		resolver.SetHealthScoreFn(healthFn)
-		weightedStrategy.SetHealthScoreFn(healthFn)
-		roundRobinStrategy.SetHealthScoreFn(healthFn)
+		})
+		cachedHealthFn := resolver.CachedHealthScoreFn()
+		weightedStrategy.SetHealthScoreFn(cachedHealthFn)
+		roundRobinStrategy.SetHealthScoreFn(cachedHealthFn)
 	}
 
 	var registrySync *provider.RegistrySync

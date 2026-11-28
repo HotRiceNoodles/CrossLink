@@ -123,6 +123,12 @@ func (s *Snapshot) APIMap() map[string]any {
 			setIfNotSensitive(d, s.Behavior.Enabled)
 		case KeyGTuningEnabled:
 			setIfNotSensitive(d, s.GuardrailTuning.Enabled)
+		case KeyImagesMode:
+			setIfNotSensitive(d, s.Images.ArtifactMode)
+		case KeyImagesProxyTTLH:
+			setIfNotSensitive(d, s.Images.ProxyTTLHours)
+		case KeyBillingCurrency:
+			setIfNotSensitive(d, s.BillingCurrency)
 		}
 	}
 	return out
@@ -138,6 +144,9 @@ type APIMeta struct {
 	Type            string   `json:"type"`
 	EnumValues      []string `json:"enum_values,omitempty"`
 	Set             bool     `json:"set,omitempty"`
+	// WriteOnce marks keys immutable after first write (billing_currency):
+	// the UI renders them read-only once the DB row exists.
+	WriteOnce bool `json:"write_once,omitempty"`
 }
 
 func (s *Snapshot) MetaMap() map[string]APIMeta {
@@ -150,6 +159,7 @@ func (s *Snapshot) MetaMap() map[string]APIMeta {
 			Sensitive:       d.Sensitive,
 			Type:            d.Type,
 			EnumValues:      d.EnumValues,
+			WriteOnce:       d.WriteOnce,
 		}
 		if d.Sensitive {
 			m.Set = s.SensitiveSet[d.Name]
@@ -179,6 +189,9 @@ func ParseAndValidate(key string, raw json.RawMessage) (string, error) {
 			if _, err := time.ParseDuration(v); err != nil {
 				return "", fmt.Errorf("%s: invalid duration %q", key, v)
 			}
+		}
+		if d.Normalize != nil {
+			v = d.Normalize(v)
 		}
 		if d.Validate != nil {
 			if err := d.Validate(v); err != nil {

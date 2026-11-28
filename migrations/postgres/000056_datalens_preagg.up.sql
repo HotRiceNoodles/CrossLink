@@ -12,7 +12,6 @@ CREATE TABLE datalens_hourly_metrics (
     route_type      VARCHAR(16),
     status_group    SMALLINT NOT NULL DEFAULT 200,
     hour_bucket     TIMESTAMPTZ NOT NULL,
-    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
 
     request_count       INT     NOT NULL DEFAULT 0,
     input_tokens        BIGINT  NOT NULL DEFAULT 0,
@@ -50,7 +49,7 @@ CREATE UNIQUE INDEX idx_dhm_upsert ON datalens_hourly_metrics (
     org_id, agg_level,
     COALESCE(team_id, -1), COALESCE(api_key_id, -1),
     COALESCE(provider_id, -1), COALESCE(model_name, ''),
-    COALESCE(route_type, ''), status_group, hour_bucket, currency
+    COALESCE(route_type, ''), status_group, hour_bucket
 );
 
 CREATE INDEX idx_dhm_org_hour      ON datalens_hourly_metrics (org_id, hour_bucket);
@@ -76,7 +75,6 @@ CREATE TABLE datalens_daily_metrics (
     route_type      VARCHAR(16),
     status_group    SMALLINT NOT NULL DEFAULT 200,
     day_bucket      DATE NOT NULL,
-    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
 
     request_count       INT     NOT NULL DEFAULT 0,
     input_tokens        BIGINT  NOT NULL DEFAULT 0,
@@ -114,7 +112,7 @@ CREATE UNIQUE INDEX idx_ddm_upsert ON datalens_daily_metrics (
     org_id, agg_level,
     COALESCE(team_id, -1), COALESCE(api_key_id, -1),
     COALESCE(provider_id, -1), COALESCE(model_name, ''),
-    COALESCE(route_type, ''), status_group, day_bucket, currency
+    COALESCE(route_type, ''), status_group, day_bucket
 );
 
 CREATE INDEX idx_ddm_org_day ON datalens_daily_metrics (org_id, day_bucket);

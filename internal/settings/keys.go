@@ -11,8 +11,11 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crosslink/internal/config"
 )
 
 // KeyDef describes one system_settings key managed by this package.
@@ -30,6 +33,13 @@ type KeyDef struct {
 	// route mounting / transport pool); changes need a restart. Honest label,
 	// surfaced in GET meta and the Settings UI.
 	RestartRequired bool
+	// WriteOnce: the key is immutable after its first write — the row may be
+	// created (initial selection at install/onboarding time) but never changed
+	// or deleted afterwards. PUT rejects a differing value with 409; same-value
+	// re-PUTs stay idempotent. billing_currency is the only such key: the
+	// settlement currency must stay fixed for the lifetime of the deployment
+	// (changing it would silently re-denominate every historical cost sum).
+	WriteOnce bool
 	// Min/Max bound int/float values (Min set means >= Min; Max > Min means <= Max).
 	hasRange bool
 	Min      float64
@@ -38,6 +48,11 @@ type KeyDef struct {
 	// origins). Receives the parsed Go value (string, int, float64, bool,
 	// []string).
 	Validate func(v any) error
+	// Normalize optionally canonicalizes a string value BEFORE validation and
+	// storage (billing_currency: " eur " → "EUR"), so that two spellings of
+	// one value are one value — essential for a write-once key, where the
+	// stored form is compared against later writes.
+	Normalize func(string) string
 	// EnumValues is set for string keys restricted to a fixed set; surfaced
 	// in GET meta so the UI can render a select instead of free text.
 	EnumValues []string
@@ -106,6 +121,13 @@ const (
 	KeyToolsetAlertEn   = "toolset_alert_enabled"
 	KeyBehaviorEnabled  = "behavior_enabled"
 	KeyGTuningEnabled   = "guardrail_tuning_enabled"
+	KeyImagesMode       = "images_artifact_mode"   // overlay artifact relay; "" = passthrough
+	KeyImagesProxyTTLH  = "images_proxy_ttl_hours" // signature validity bound, default 24
+	// KeyBillingCurrency is the deployment's single settlement currency
+	// (single-currency design): every price, cost, budget and statistic is
+	// denominated in it. Written once at first install (onboarding wizard or
+	// first PUT), then immutable for the deployment's lifetime.
+	KeyBillingCurrency = "billing_currency"
 )
 
 // section names (meta grouping + UI).
@@ -122,6 +144,8 @@ const (
 	SectionToolset         = "toolset"
 	SectionBehavior        = "behavior"
 	SectionGuardrailTuning = "guardrail_tuning"
+	SectionImages          = "images"
+	SectionBilling         = "billing"
 )
 
 func k(name, typ, section string) KeyDef {
@@ -148,6 +172,12 @@ func sensitive(d KeyDef) KeyDef {
 	return d
 }
 
+// writeOnce marks a key immutable after its first write.
+func writeOnce(d KeyDef) KeyDef {
+	d.WriteOnce = true
+	return d
+}
+
 // kEnum builds a string key restricted to the given values.
 func kEnum(name, section string, vals ...string) KeyDef {
 	d := k(name, TypeString, section)
@@ -160,6 +190,23 @@ func kEnum(name, section string, vals ...string) KeyDef {
 		s, _ := v.(string)
 		if !set[s] {
 			return fmt.Errorf("must be one of: %s", strings.Join(vals, "|"))
+		}
+		return nil
+	}
+	return d
+}
+
+// kCurrency builds the write-once settlement-currency key. Any well-formed
+// ISO 4217-style code is accepted (no enum: the operator may settle in any
+// currency), canonicalized so spellings of one code are one value — which a
+// write-once key depends on, since later writes are compared to the stored form.
+func kCurrency(name, section string) KeyDef {
+	d := writeOnce(k(name, TypeString, section))
+	d.Normalize = config.NormalizeCurrencyCode
+	d.Validate = func(v any) error {
+		s, _ := v.(string)
+		if !config.ValidCurrencyCode(s) {
+			return errors.New("must be a 3-letter ISO 4217 currency code, e.g. CNY, USD, EUR")
 		}
 		return nil
 	}
@@ -242,6 +289,14 @@ var Registry = []KeyDef{
 	// --- behavior baseline (学习开关;热生效——runner 每轮读取快照) ---
 	k(KeyBehaviorEnabled, TypeBool, SectionBehavior),
 	k(KeyGTuningEnabled, TypeBool, SectionGuardrailTuning),
+
+	// --- images (overlay artifact relay; community build has no images
+	// endpoints, the keys no-op there) ---
+	kEnum(KeyImagesMode, SectionImages, "passthrough", "proxy"),
+	kRange(KeyImagesProxyTTLH, TypeInt, SectionImages, 1, 168),
+
+	// --- billing (single-currency settlement; locked at first install) ---
+	kCurrency(KeyBillingCurrency, SectionBilling),
 }
 
 // RegistryMap indexes Registry by key name.

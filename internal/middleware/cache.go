@@ -202,9 +202,6 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 				c.Set("input_price", cached.InputPrice)
 				c.Set("output_price", cached.OutputPrice)
 			}
-			if cached.Currency != "" {
-				c.Set("currency", cached.Currency)
-			}
 			// One durable ledger row per served HIT, before the abort cuts
 			// the chain down to the handlers (the row submit itself is
 			// WAL-first and never blocks on this response path).
@@ -239,11 +236,9 @@ func Cache(cacheSvc service.CacheServiceInterface, cp crypto.CryptoProvider, gua
 			// HITs settle cost 0 until TTL ages them out).
 			inPrice, _ := c.Get("input_price")
 			outPrice, _ := c.Get("output_price")
-			currency, _ := c.Get("currency")
 			ip, _ := inPrice.(float64)
 			op, _ := outPrice.(float64)
-			cur, _ := currency.(string)
-			if err := cacheSvc.Set(ctx, key, probe.Model, c.Request.URL.Path, capture.body.Bytes(), ttl, ip, op, cur); err != nil {
+			if err := cacheSvc.Set(ctx, key, probe.Model, c.Request.URL.Path, capture.body.Bytes(), ttl, ip, op); err != nil {
 				slog.Warn("cache set failed", "error", err)
 			}
 		}

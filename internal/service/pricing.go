@@ -6,10 +6,9 @@ import (
 )
 
 type PricingRule struct {
-	Type     string           `json:"type"`
-	Price    float64          `json:"price"`
-	Currency string           `json:"currency"`
-	Tiers    []ImagePriceTier `json:"tiers,omitempty"`
+	Type  string           `json:"type"`
+	Price float64          `json:"price"`
+	Tiers []ImagePriceTier `json:"tiers,omitempty"`
 }
 
 type ImagePriceTier struct {

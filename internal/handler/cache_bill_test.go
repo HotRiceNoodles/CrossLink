@@ -31,7 +31,6 @@ func TestCacheHitBiller_OneDurableRowPerHit(t *testing.T) {
 		OutputTokens: 6,
 		InputPrice:   3,
 		OutputPrice:  12,
-		Currency:     "CNY",
 	}
 
 	const hits = 3

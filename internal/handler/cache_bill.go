@@ -36,10 +36,6 @@ func NewCacheHitBiller(log usageEntryLogger) middleware.CacheHitBiller {
 		if v, ok := c.Get("cache_hit_latency_ms"); ok {
 			latencyMs, _ = v.(int64)
 		}
-		currency := cached.Currency
-		if currency == "" {
-			currency = "CNY"
-		}
 		entry := &service.UsageEntry{
 			GinRequestID:   c.GetString("request_id"),
 			RouteType:      cacheBillRouteType(c.FullPath()),
@@ -49,7 +45,6 @@ func NewCacheHitBiller(log usageEntryLogger) middleware.CacheHitBiller {
 			OutputTokens:   cached.OutputTokens,
 			InputPrice:     cached.InputPrice,
 			OutputPrice:    cached.OutputPrice,
-			Currency:       currency,
 			StatusCode:     http.StatusOK,
 			LatencyMs:      latencyMs,
 			APIKeyID:       apiKeyID,

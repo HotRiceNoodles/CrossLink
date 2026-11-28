@@ -133,7 +133,6 @@ func ProbeUsageDurability(log usageEntryLogger) error {
 		EventID:    uuid.New().String(),
 		RouteType:  "integrity_probe",
 		StatusCode: 200,
-		Currency:   "USD",
 	}
 	if usageSpool != nil {
 		if !usageSpool.Write(entry) {

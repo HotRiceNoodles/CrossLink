@@ -34,7 +34,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 		Models: []ModelExport{
 			{ProviderName: "openai", ModelName: "gpt-4o", ProviderModel: "gpt-4o",
 				Weight: 1, Priority: 1, InputPrice: 5.0, OutputPrice: 15.0,
-				Currency: "USD", RoutingStrategy: "weighted_random", Status: 1},
+				RoutingStrategy: "weighted_random", Status: 1},
 		},
 		ErrorRules: []ErrorRuleExport{
 			{MatchField: "status", Pattern: "429", Classification: "quota",

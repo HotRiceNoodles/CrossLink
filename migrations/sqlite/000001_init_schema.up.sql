@@ -181,7 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_providers_org_id ON providers(org_id);
 
 -- ============================================================
 -- 10. provider_models
---    Column source: 000001 (base), 000004 (currency), 000013 (routing_strategy),
+--    Column source: 000001 (base), 000013 (routing_strategy),
 --                   000014 (CHECK update — omitted for SQLite),
 --                   000036 (deleted_at), 000047 (org_id)
 --    Note: original UNIQUE(provider_id,model_name,provider_model) replaced by
@@ -198,7 +198,6 @@ CREATE TABLE provider_models (
     max_context      INTEGER,
     input_price      REAL NOT NULL DEFAULT 0,
     output_price     REAL NOT NULL DEFAULT 0,
-    currency         TEXT NOT NULL DEFAULT 'CNY',
     routing_strategy TEXT NOT NULL DEFAULT 'weighted_random',
     extra_config     TEXT,
     org_id           INTEGER REFERENCES organizations(id),
@@ -434,7 +433,6 @@ CREATE TABLE budget_snapshots (
     period_key  TEXT NOT NULL,
     spent       REAL NOT NULL DEFAULT 0,
     budget      REAL NOT NULL DEFAULT 0,
-    currency    TEXT NOT NULL DEFAULT 'CNY',
     org_id      INTEGER,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (target_type, target_id, period_key)
@@ -457,7 +455,6 @@ CREATE TABLE budget_recommendations (
     growth_rate       REAL NOT NULL DEFAULT 0,
     confidence        REAL NOT NULL DEFAULT 0,
     reasoning         TEXT NOT NULL DEFAULT '',
-    currency          TEXT NOT NULL DEFAULT 'CNY',
     org_id            INTEGER,
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -736,7 +733,6 @@ CREATE TABLE datalens_hourly_metrics (
     route_type      TEXT,
     status_group    INTEGER NOT NULL DEFAULT 200,
     hour_bucket     TEXT NOT NULL,
-    currency        TEXT NOT NULL DEFAULT 'CNY',
 
     request_count       INTEGER NOT NULL DEFAULT 0,
     input_tokens        INTEGER NOT NULL DEFAULT 0,
@@ -796,7 +792,6 @@ CREATE TABLE datalens_daily_metrics (
     route_type      TEXT,
     status_group    INTEGER NOT NULL DEFAULT 200,
     day_bucket      TEXT NOT NULL,
-    currency        TEXT NOT NULL DEFAULT 'CNY',
 
     request_count       INTEGER NOT NULL DEFAULT 0,
     input_tokens        INTEGER NOT NULL DEFAULT 0,

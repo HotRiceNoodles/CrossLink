@@ -47,11 +47,11 @@ func TestBuildAndApplyRoundTrip(t *testing.T) {
 	src.Model(&model.Provider{}).Where("name = ?", "openai").Pluck("id", &pid)
 	require.NoError(t, src.Create(&model.ProviderModel{
 		ProviderID: pid, ModelName: "gpt-4o", ProviderModel: "gpt-4o",
-		Weight: 1, Priority: 1, Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+		Weight: 1, Priority: 1, RoutingStrategy: "weighted_random", Status: 1,
 	}).Error)
 	require.NoError(t, src.Create(&model.ProviderModel{
 		ProviderID: pid, ModelName: "gpt-4o-mini", ProviderModel: "gpt-4o-mini",
-		Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+		RoutingStrategy: "weighted_random", Status: 1,
 	}).Error)
 	require.NoError(t, src.Create(&model.ErrorClassificationRule{
 		MatchField: "status", Pattern: "429", Classification: "quota",
@@ -181,7 +181,7 @@ func TestApplyDryRunWithModels(t *testing.T) {
 	for _, name := range []string{"m1", "m2"} {
 		require.NoError(t, src.Create(&model.ProviderModel{
 			ProviderID: pid, ModelName: name, ProviderModel: name,
-			Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+			RoutingStrategy: "weighted_random", Status: 1,
 		}).Error)
 	}
 	bundle, _, err := BuildBundle(src, nil)

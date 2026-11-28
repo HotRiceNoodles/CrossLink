@@ -68,7 +68,6 @@ func BuildBundle(db *gorm.DB, encStore *secret.EncryptedDBStore) (*ExportBundle,
 				Priority:        m.Priority,
 				InputPrice:      m.InputPrice,
 				OutputPrice:     m.OutputPrice,
-				Currency:        m.Currency,
 				RoutingStrategy: m.RoutingStrategy,
 				Status:          m.Status,
 			})

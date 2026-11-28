@@ -7,6 +7,7 @@ import (
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/repository"
+	"github.com/crosslink/internal/settings"
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 )
@@ -109,7 +110,6 @@ type UsageEntry struct {
 	OutputTokens   int
 	InputPrice     float64
 	OutputPrice    float64
-	Currency       string
 	LatencyMs      int64
 	FirstTokenMs   int64
 	StatusCode     int
@@ -185,16 +185,18 @@ func buildUsageLog(entry *UsageEntry) *model.UsageLog {
 		eventID = uuid.New().String()
 	}
 	log := &model.UsageLog{
-		RequestID:           firstNonEmpty(entry.GinRequestID, uuid.New().String()),
-		EventID:             &eventID,
-		RouteType:           entry.RouteType,
-		ModelRequested:      entry.ModelRequested,
-		ModelUsed:           entry.ModelUsed,
-		InputTokens:         entry.InputTokens,
-		OutputTokens:        entry.OutputTokens,
-		Cost:                upstreamCost,
-		BillableCost:        upstreamCost * mult,
-		Currency:            model.ValidCurrency(entry.Currency),
+		RequestID:      firstNonEmpty(entry.GinRequestID, uuid.New().String()),
+		EventID:        &eventID,
+		RouteType:      entry.RouteType,
+		ModelRequested: entry.ModelRequested,
+		ModelUsed:      entry.ModelUsed,
+		InputTokens:    entry.InputTokens,
+		OutputTokens:   entry.OutputTokens,
+		Cost:           upstreamCost,
+		BillableCost:   upstreamCost * mult,
+		// Single-currency: the row currency is the deployment-wide fixed
+		// billing_currency (write-once), never a per-request choice.
+		Currency:            settings.PlatformCurrency(),
 		LatencyMs:           int(entry.LatencyMs),
 		StatusCode:          entry.StatusCode,
 		ErrorType:           entry.ErrorType,

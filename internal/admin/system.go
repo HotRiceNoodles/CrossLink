@@ -30,6 +30,7 @@ type SystemHandler struct {
 	budget     *provider.RetryBudget
 	auditSvc   *service.AuditService
 	settings   *settings.Provider
+	fullCfg    *config.Config
 }
 
 func NewSystemHandler(db *gorm.DB, rdb *redis.Client, cfg config.AdminConfig, usageSvc *service.UsageService, debugStore *debug.Store, health *provider.HealthTracker, budget *provider.RetryBudget, auditSvc *service.AuditService) *SystemHandler {

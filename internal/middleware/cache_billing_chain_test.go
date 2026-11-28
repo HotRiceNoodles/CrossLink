@@ -326,7 +326,6 @@ func TestCacheServes_PricedZeroPriceEntry(t *testing.T) {
 		Model: "free-model", Endpoint: "/v1/test/free",
 		Body:        json.RawMessage(`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`),
 		InputTokens: 7, OutputTokens: 3,
-		InputPrice: 0, OutputPrice: 0, Currency: "CNY",
 		Priced: true,
 	})
 

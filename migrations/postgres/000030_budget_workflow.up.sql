@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS budget_recommendations (
     growth_rate DECIMAL(8,4) NOT NULL DEFAULT 0,         -- period-over-period growth rate
     confidence DECIMAL(5,2) NOT NULL DEFAULT 0,          -- confidence score 0-100
     reasoning TEXT NOT NULL DEFAULT '',                   -- human-readable explanation
-    currency VARCHAR(3) NOT NULL DEFAULT 'CNY',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -162,12 +162,11 @@ CREATE TABLE budget_recommendations_rebuild (
     growth_rate       REAL NOT NULL DEFAULT 0,
     confidence        REAL NOT NULL DEFAULT 0,
     reasoning         TEXT NOT NULL DEFAULT '',
-    currency          TEXT NOT NULL DEFAULT 'CNY',
     org_id            INTEGER,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
-INSERT INTO budget_recommendations_rebuild ("id", "target_type", "target_id", "period", "recommended_budget", "current_budget", "avg_period_spend", "growth_rate", "confidence", "reasoning", "currency", "org_id", "created_at")
-SELECT "id", "target_type", "target_id", "period", "recommended_budget", "current_budget", "avg_period_spend", "growth_rate", "confidence", "reasoning", "currency", "org_id", datetime("created_at")
+INSERT INTO budget_recommendations_rebuild ("id", "target_type", "target_id", "period", "recommended_budget", "current_budget", "avg_period_spend", "growth_rate", "confidence", "reasoning", "org_id", "created_at")
+SELECT "id", "target_type", "target_id", "period", "recommended_budget", "current_budget", "avg_period_spend", "growth_rate", "confidence", "reasoning", "org_id", datetime("created_at")
 FROM budget_recommendations;
 DROP TABLE budget_recommendations;
 ALTER TABLE budget_recommendations_rebuild RENAME TO budget_recommendations;
@@ -214,13 +213,12 @@ CREATE TABLE budget_snapshots_rebuild (
     period_key  TEXT NOT NULL,
     spent       REAL NOT NULL DEFAULT 0,
     budget      REAL NOT NULL DEFAULT 0,
-    currency    TEXT NOT NULL DEFAULT 'CNY',
     org_id      INTEGER,
     created_at DATETIME NOT NULL DEFAULT (datetime('now')),
     UNIQUE (target_type, target_id, period_key)
 );
-INSERT INTO budget_snapshots_rebuild ("id", "target_type", "target_id", "period_key", "spent", "budget", "currency", "org_id", "created_at")
-SELECT "id", "target_type", "target_id", "period_key", "spent", "budget", "currency", "org_id", datetime("created_at")
+INSERT INTO budget_snapshots_rebuild ("id", "target_type", "target_id", "period_key", "spent", "budget", "org_id", "created_at")
+SELECT "id", "target_type", "target_id", "period_key", "spent", "budget", "org_id", datetime("created_at")
 FROM budget_snapshots;
 DROP TABLE budget_snapshots;
 ALTER TABLE budget_snapshots_rebuild RENAME TO budget_snapshots;
@@ -256,7 +254,6 @@ CREATE TABLE datalens_daily_metrics_rebuild (
     route_type      TEXT,
     status_group    INTEGER NOT NULL DEFAULT 200,
     day_bucket DATETIME NOT NULL,
-    currency        TEXT NOT NULL DEFAULT 'CNY',
     request_count       INTEGER NOT NULL DEFAULT 0,
     input_tokens        INTEGER NOT NULL DEFAULT 0,
     output_tokens       INTEGER NOT NULL DEFAULT 0,
@@ -286,8 +283,8 @@ CREATE TABLE datalens_daily_metrics_rebuild (
     latency_bucket_slow INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 , ctx_system_tokens INTEGER NOT NULL DEFAULT 0, ctx_history_tokens INTEGER NOT NULL DEFAULT 0, ctx_question_tokens INTEGER NOT NULL DEFAULT 0, ctx_tool_tokens INTEGER NOT NULL DEFAULT 0, ctx_tool_output_tokens INTEGER NOT NULL DEFAULT 0, ctx_total_window INTEGER NOT NULL DEFAULT 0, ctx_analyzed_count INTEGER NOT NULL DEFAULT 0, ctx_overflow_count INTEGER NOT NULL DEFAULT 0, ctx_window_unknown_count INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_lt50 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_50_80 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_80_95 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_gt95 INTEGER NOT NULL DEFAULT 0);
-INSERT INTO datalens_daily_metrics_rebuild ("id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", "day_bucket", "currency", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", "created_at", "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95")
-SELECT "id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", datetime("day_bucket"), "currency", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", datetime("created_at"), "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95"
+INSERT INTO datalens_daily_metrics_rebuild ("id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", "day_bucket", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", "created_at", "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95")
+SELECT "id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", datetime("day_bucket"), "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", datetime("created_at"), "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95"
 FROM datalens_daily_metrics;
 DROP TABLE datalens_daily_metrics;
 ALTER TABLE datalens_daily_metrics_rebuild RENAME TO datalens_daily_metrics;
@@ -305,7 +302,6 @@ CREATE TABLE datalens_hourly_metrics_rebuild (
     route_type      TEXT,
     status_group    INTEGER NOT NULL DEFAULT 200,
     hour_bucket DATETIME NOT NULL,
-    currency        TEXT NOT NULL DEFAULT 'CNY',
     request_count       INTEGER NOT NULL DEFAULT 0,
     input_tokens        INTEGER NOT NULL DEFAULT 0,
     output_tokens       INTEGER NOT NULL DEFAULT 0,
@@ -335,8 +331,8 @@ CREATE TABLE datalens_hourly_metrics_rebuild (
     latency_bucket_slow INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 , ctx_system_tokens INTEGER NOT NULL DEFAULT 0, ctx_history_tokens INTEGER NOT NULL DEFAULT 0, ctx_question_tokens INTEGER NOT NULL DEFAULT 0, ctx_tool_tokens INTEGER NOT NULL DEFAULT 0, ctx_tool_output_tokens INTEGER NOT NULL DEFAULT 0, ctx_total_window INTEGER NOT NULL DEFAULT 0, ctx_analyzed_count INTEGER NOT NULL DEFAULT 0, ctx_overflow_count INTEGER NOT NULL DEFAULT 0, ctx_window_unknown_count INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_lt50 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_50_80 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_80_95 INTEGER NOT NULL DEFAULT 0, ctx_util_bucket_gt95 INTEGER NOT NULL DEFAULT 0);
-INSERT INTO datalens_hourly_metrics_rebuild ("id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", "hour_bucket", "currency", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", "created_at", "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95")
-SELECT "id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", datetime("hour_bucket"), "currency", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", datetime("created_at"), "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95"
+INSERT INTO datalens_hourly_metrics_rebuild ("id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", "hour_bucket", "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", "created_at", "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95")
+SELECT "id", "org_id", "agg_level", "team_id", "api_key_id", "provider_id", "model_name", "route_type", "status_group", datetime("hour_bucket"), "request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples", "first_token_samples", "total_first_token_ms", "error_count", "fallback_count", "retry_count", "guardrail_blocks", "cache_hits", "distinct_sessions", "distinct_keys", "latency_bucket_50", "latency_bucket_100", "latency_bucket_200", "latency_bucket_500", "latency_bucket_1000", "latency_bucket_2000", "latency_bucket_5000", "latency_bucket_slow", datetime("created_at"), "ctx_system_tokens", "ctx_history_tokens", "ctx_question_tokens", "ctx_tool_tokens", "ctx_tool_output_tokens", "ctx_total_window", "ctx_analyzed_count", "ctx_overflow_count", "ctx_window_unknown_count", "ctx_util_bucket_lt50", "ctx_util_bucket_50_80", "ctx_util_bucket_80_95", "ctx_util_bucket_gt95"
 FROM datalens_hourly_metrics;
 DROP TABLE datalens_hourly_metrics;
 ALTER TABLE datalens_hourly_metrics_rebuild RENAME TO datalens_hourly_metrics;
@@ -709,7 +705,6 @@ CREATE TABLE provider_models_rebuild (
     max_context      INTEGER,
     input_price      REAL NOT NULL DEFAULT 0,
     output_price     REAL NOT NULL DEFAULT 0,
-    currency         TEXT NOT NULL DEFAULT 'CNY',
     routing_strategy TEXT NOT NULL DEFAULT 'weighted_random',
     extra_config     TEXT,
     org_id           INTEGER REFERENCES organizations(id),
@@ -717,8 +712,8 @@ CREATE TABLE provider_models_rebuild (
     updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
     deleted_at DATETIME
 );
-INSERT INTO provider_models_rebuild ("id", "provider_id", "model_name", "provider_model", "weight", "priority", "status", "max_context", "input_price", "output_price", "currency", "routing_strategy", "extra_config", "org_id", "created_at", "updated_at", "deleted_at")
-SELECT "id", "provider_id", "model_name", "provider_model", "weight", "priority", "status", "max_context", "input_price", "output_price", "currency", "routing_strategy", "extra_config", "org_id", datetime("created_at"), datetime("updated_at"), datetime("deleted_at")
+INSERT INTO provider_models_rebuild ("id", "provider_id", "model_name", "provider_model", "weight", "priority", "status", "max_context", "input_price", "output_price", "routing_strategy", "extra_config", "org_id", "created_at", "updated_at", "deleted_at")
+SELECT "id", "provider_id", "model_name", "provider_model", "weight", "priority", "status", "max_context", "input_price", "output_price", "routing_strategy", "extra_config", "org_id", datetime("created_at"), datetime("updated_at"), datetime("deleted_at")
 FROM provider_models;
 DROP TABLE provider_models;
 ALTER TABLE provider_models_rebuild RENAME TO provider_models;

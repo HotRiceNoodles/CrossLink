@@ -116,16 +116,20 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 		Preferences: NewPreferencesHandler(deps.Repos.UserRepo, deps.AuditSvc),
 		ErrorRule:   NewErrorRuleHandler(deps.Repos.ErrorRuleRepo, deps.AuditSvc),
 		Routing:     NewRoutingHandler(deps.DB, deps.Repos.ProviderModelRepo),
-		Onboarding: NewOnboardingHandler(
-			deps.DB,
-			deps.EncStore,
-			deps.Crypto,
-			deps.SecretResolver,
-			deps.Registry,
-			deps.Resolver,
-			deps.CacheSvc,
-			deps.AuditSvc,
-		),
+		Onboarding: func() *OnboardingHandler {
+			h := NewOnboardingHandler(
+				deps.DB,
+				deps.EncStore,
+				deps.Crypto,
+				deps.SecretResolver,
+				deps.Registry,
+				deps.Resolver,
+				deps.CacheSvc,
+				deps.AuditSvc,
+			)
+			h.SetSettingsProvider(deps.Settings)
+			return h
+		}(),
 		Templates:     NewTemplateHandler(deps.DB, deps.TemplateRegistry, deps.TemplateSync, deps.CacheSvc, deps.AuditSvc),
 		Readiness:     NewReadinessHandler(readiness),
 		Setup:         NewSetupHandler(deps.DB, deps.Config, deps.Crypto, deps.EncStore, deps.AuditSvc),
@@ -136,5 +140,8 @@ func ProvideAdminHandlers(deps *AdminDeps) *AdminHandlers {
 	// via setter to keep NewSystemHandler's signature stable for the
 	// commercial overlay's construction path.
 	h.System.SetSettingsProvider(deps.Settings)
+	// Full config for the install summary (master key / currency / crypto
+	// mode live outside AdminConfig). Same additive setter pattern.
+	h.System.SetFullConfig(deps.Config)
 	return h
 }

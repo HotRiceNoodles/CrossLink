@@ -1,0 +1,1 @@
+ALTER TABLE provider_models ADD COLUMN modality VARCHAR(24) NOT NULL DEFAULT '';

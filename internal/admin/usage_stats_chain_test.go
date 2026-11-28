@@ -1,13 +1,14 @@
 package admin
 
-// U-09 regression: Stats must build every aggregation from a FRESH query.
-// The old code ran the currency probe (GROUP BY currency / ORDER BY SUM DESC
-// / LIMIT 1) on the SAME *gorm.DB chain as the main stats, the rate counts
-// and the currency breakdown — GORM keeps those clauses on the reused
-// statement, so mixed-currency deployments got totals for ONLY the top
-// currency, and the per-currency breakdown was truncated to one row by the
-// leftover LIMIT. (NewDB:true was deliberately NOT used: it would drop the
-// Model/tenant/time/request bindings — see the fix comment in Stats.)
+// U-09 regression (single-currency edition): Stats must build every
+// aggregation from a FRESH query. The historic bug ran a currency probe
+// (GROUP BY currency / ORDER BY SUM DESC / LIMIT 1) on the SAME *gorm.DB
+// chain as the main stats and the rate counts — GORM keeps those clauses on
+// the reused statement, so totals covered only the top currency group. The
+// probe itself is GONE under the single-currency design (the deployment's
+// billing_currency is fixed at first install and every row carries it), but
+// the chain-isolation property is still asserted here: totals, rates and
+// cost each aggregate independently and org scoping never leaks.
 
 import (
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/settings"
 )
 
 func newStatsTestDB(t *testing.T) *gorm.DB {
@@ -86,50 +88,50 @@ func runStats(t *testing.T, db *gorm.DB, orgID int64) map[string]any {
 	return resp.Data
 }
 
-func TestStats_MultiCurrencyChainIsolation(t *testing.T) {
+func TestStats_SingleCurrencyChainIsolation(t *testing.T) {
 	t.Parallel()
 	db := newStatsTestDB(t)
 
-	// Org 7: CNY rows (3) with one error + one fallback, and USD rows (2)
-	// whose TOTAL cost is higher (200 > 30) so the currency probe picks USD.
+	// Org 7: five rows, one error + one fallback. (Historic seeds mixed CNY
+	// and USD to exercise the probe; under single-currency the row currency
+	// is lineage only — the currency label comes from the platform setting.)
 	seedUsageRow(t, db, 7, "CNY", 10, 100, 50, 200, 0)
 	seedUsageRow(t, db, 7, "CNY", 10, 200, 60, 500, 1) // 5xx error + fallback
 	seedUsageRow(t, db, 7, "CNY", 10, 300, 70, 200, 0)
-	seedUsageRow(t, db, 7, "USD", 100, 400, 80, 200, 0)
-	seedUsageRow(t, db, 7, "USD", 100, 500, 90, 200, 0)
+	seedUsageRow(t, db, 7, "CNY", 100, 400, 80, 200, 0)
+	seedUsageRow(t, db, 7, "CNY", 100, 500, 90, 200, 0)
 	// Org 8 must not leak into org 7's stats.
 	seedUsageRow(t, db, 8, "CNY", 999, 9999, 9999, 200, 9)
 
 	data := runStats(t, db, 7)
 
-	if got := data["currency"]; got != "USD" {
-		t.Fatalf("primary currency = %v, want USD (probe must still work)", got)
+	// The currency echoed is the deployment's fixed billing currency, never
+	// derived from the rows.
+	if got := data["currency"]; got != settings.PlatformCurrency() {
+		t.Fatalf("currency = %v, want platform currency %s", got, settings.PlatformCurrency())
 	}
-	// THE regression: totals must cover ALL org-7 rows, not just the top
-	// currency group leaked by the old GROUP BY+LIMIT chain.
+	// Chain isolation: totals cover ALL org-7 rows (the historic chain-leak
+	// bug counted only the top currency group).
 	if got := data["total_requests"]; got != float64(5) {
-		t.Fatalf("total_requests = %v, want 5 (old chain-leak bug: only the top currency group was counted)", got)
+		t.Fatalf("total_requests = %v, want 5 (chain-leak regression: a clipped group)", got)
 	}
 	if got := data["total_tokens"]; got != float64(100+50+200+60+300+70+400+80+500+90) {
 		t.Fatalf("total_tokens = %v, want 1850", got)
 	}
-	// total_cost is primary-currency-only BY DESIGN (documented semantics).
-	if got := data["total_cost"]; got != float64(200) {
-		t.Fatalf("total_cost = %v, want 200 (USD primary-currency sum)", got)
+	// Single-currency semantics: cost sums every row — no per-currency
+	// filtering, no cross-currency ambiguity.
+	if got := data["total_cost"]; got != float64(230) {
+		t.Fatalf("total_cost = %v, want 230 (sum of all rows)", got)
 	}
-	// Error/fallback rates must count the CNY error row too (the old chain
-	// computed rates from the top-currency group only).
 	if got := data["error_rate"]; got != 0.2 {
 		t.Fatalf("error_rate = %v, want 0.2 (1 error of 5 rows)", got)
 	}
 	if got := data["fallback_rate"]; got != 0.2 {
 		t.Fatalf("fallback_rate = %v, want 0.2 (1 fallback of 5 rows)", got)
 	}
-	// The per-currency breakdown must list BOTH currencies (the old leftover
-	// LIMIT 1 truncated it to one row).
-	byCur, _ := data["cost_by_currency"].([]any)
-	if len(byCur) != 2 {
-		t.Fatalf("cost_by_currency has %d entries, want 2 (CNY + USD; leftover-LIMIT truncation regression)", len(byCur))
+	// The per-currency breakdown is gone by design.
+	if _, present := data["cost_by_currency"]; present {
+		t.Fatal("cost_by_currency must not be present (removed under single-currency design)")
 	}
 }
 

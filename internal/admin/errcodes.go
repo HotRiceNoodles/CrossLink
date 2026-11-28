@@ -10,6 +10,9 @@ const (
 	ErrNotFound       = "not_found"
 	ErrConflict       = "conflict"
 
+	// Billing currency is write-once (fixed at first install)
+	ErrBillingCurrencyLocked = "billing_currency_locked"
+
 	// Auth / permission
 	ErrForbidden               = "forbidden"
 	ErrInsufficientPermissions = "insufficient_permissions"

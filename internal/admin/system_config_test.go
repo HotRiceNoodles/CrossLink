@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/crosslink/internal/config"
@@ -202,4 +203,85 @@ func TestSystemConfig_ProviderMissingIsHandled(t *testing.T) {
 	c, w := newTestContext(t, http.MethodGet, "/admin/api/system/config", nil)
 	h.GetConfig(c)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// billing_currency is write-once: the first PUT fixes it, later PUTs may only
+// repeat the same value (idempotent) — a different value is 409 and null
+// (delete) is refused outright.
+func TestSystemConfig_BillingCurrencyWriteOnce(t *testing.T) {
+	t.Parallel()
+	h, provider := newSystemConfigHandlerForTest(t)
+	db := h.db
+
+	// First write fixes CNY.
+	c, w := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "CNY"})
+	h.UpdateConfig(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var row model.SystemSetting
+	require.NoError(t, db.Where("key = ?", "billing_currency").First(&row).Error)
+	assert.Equal(t, "CNY", row.Value)
+	assert.Equal(t, "CNY", provider.Get().BillingCurrency)
+
+	// Same value → idempotent 200.
+	c2, w2 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "CNY"})
+	h.UpdateConfig(c2)
+	require.Equal(t, http.StatusOK, w2.Code, w2.Body.String())
+
+	// Different value → 409, row unchanged.
+	c3, w3 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "USD"})
+	h.UpdateConfig(c3)
+	require.Equal(t, http.StatusConflict, w3.Code, w3.Body.String())
+	assert.Contains(t, w3.Body.String(), ErrBillingCurrencyLocked)
+	require.NoError(t, db.Where("key = ?", "billing_currency").First(&row).Error)
+	assert.Equal(t, "CNY", row.Value)
+
+	// null (delete) → refused, row survives.
+	c4, w4 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": nil})
+	h.UpdateConfig(c4)
+	require.Equal(t, http.StatusBadRequest, w4.Code, w4.Body.String())
+	var cnt int64
+	db.Model(&model.SystemSetting{}).Where("key = ?", "billing_currency").Count(&cnt)
+	assert.EqualValues(t, 1, cnt)
+
+	// Malformed code → 400.
+	c5, w5 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "EURO"})
+	h.UpdateConfig(c5)
+	require.Equal(t, http.StatusBadRequest, w5.Code, w5.Body.String())
+}
+
+// billing_currency takes any well-formed ISO 4217 code — the operator's
+// choice, not a fixed list — stored canonically, and the canonical form is
+// what later writes are compared against (write-once).
+func TestSystemConfig_BillingCurrencyAnyCode(t *testing.T) {
+	// Sequential, and restores the process-global currency: other tests in
+	// the package read it (every billing row is stamped with it).
+	t.Cleanup(func() { settings.SetPlatformCurrency(settings.CurrencyCNY) })
+	for _, tc := range []struct{ sent, want string }{{"EUR", "EUR"}, {"JPY", "JPY"}, {"hkd", "HKD"}, {" brl ", "BRL"}} {
+		t.Run(tc.sent, func(t *testing.T) {
+			h, provider := newSystemConfigHandlerForTest(t)
+			db := h.db
+
+			c, w := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": tc.sent})
+			h.UpdateConfig(c)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+			var row model.SystemSetting
+			require.NoError(t, db.Where("key = ?", "billing_currency").First(&row).Error)
+			assert.Equal(t, tc.want, row.Value, "stored canonically")
+			assert.Equal(t, tc.want, provider.Get().BillingCurrency)
+
+			// A different spelling of the same code is the same value.
+			c2, w2 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": strings.ToLower(tc.want)})
+			h.UpdateConfig(c2)
+			require.Equal(t, http.StatusOK, w2.Code, "re-PUT of the same code in another spelling must be idempotent: %s", w2.Body.String())
+
+			// Another currency is a change → 409.
+			c3, w3 := newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "USD"})
+			if tc.want == "USD" {
+				c3, w3 = newTestContext(t, http.MethodPut, "/admin/api/system/config", map[string]any{"billing_currency": "EUR"})
+			}
+			h.UpdateConfig(c3)
+			require.Equal(t, http.StatusConflict, w3.Code, w3.Body.String())
+		})
+	}
 }

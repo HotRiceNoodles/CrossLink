@@ -66,6 +66,8 @@ func (p *Provider) Toolset() config.ToolsetConfig                 { return p.Get
 func (p *Provider) Behavior() config.BehaviorConfig               { return p.Get().Behavior }
 func (p *Provider) GuardrailTuning() config.GuardrailTuningConfig { return p.Get().GuardrailTuning }
 
+func (p *Provider) Images() config.ImagesConfig { return p.Get().Images }
+
 // Subscribe registers a callback invoked with every new snapshot (initial
 // load, poll tick, RefreshNow). Callbacks must be cheap and non-blocking —
 // they run inline on refresh. Used by the captcha gate applier.
@@ -138,6 +140,12 @@ func (p *Provider) load(ctx context.Context) error {
 		decrypt = p.encStore.Decrypt
 	}
 	snap := buildSnapshot(p.baseline, values, decrypt)
+	// Keep the process-global settlement currency in step with the snapshot
+	// (boot, poll tick, and post-PUT RefreshNow all funnel through here). The
+	// value is write-once in practice, so post-first-set loads are no-ops.
+	if snap.BillingCurrency != "" {
+		SetPlatformCurrency(snap.BillingCurrency)
+	}
 
 	p.mu.Lock()
 	p.snap.Store(snap)

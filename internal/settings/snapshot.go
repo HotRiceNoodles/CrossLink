@@ -27,6 +27,11 @@ type Snapshot struct {
 	Toolset         config.ToolsetConfig
 	Behavior        config.BehaviorConfig
 	GuardrailTuning config.GuardrailTuningConfig
+	Images          config.ImagesConfig
+	// BillingCurrency is the deployment's single settlement currency
+	// (billing_currency row > billing.currency yaml/env declaration; "" only
+	// on a fresh install before onboarding). Immutable once the row exists.
+	BillingCurrency string
 
 	// Sources maps every registry key to "db" (row applied), "default"
 	// (yaml/env value in effect), or "db-error" (row present but not
@@ -79,6 +84,8 @@ func buildSnapshot(baseline *config.Config, values map[string]string, decrypt de
 		Toolset:         baseline.Toolset,
 		Behavior:        baseline.Behavior,
 		GuardrailTuning: baseline.GuardrailTuning,
+		Images:          baseline.Images,
+		BillingCurrency: baseline.Billing.Currency,
 		Sources:         make(map[string]string, len(Registry)),
 		SensitiveSet:    make(map[string]bool),
 	}
@@ -257,6 +264,25 @@ func buildSnapshot(baseline *config.Config, values map[string]string, decrypt de
 
 	// --- guardrail_tuning(自适应调参开关,热生效;D10:只停自动化) ---
 	apply(KeyGTuningEnabled, boolean(KeyGTuningEnabled, &snap.GuardrailTuning.Enabled))
+
+	// --- images(工件中继;热生效——每次响应重写时读取快照) ---
+	apply(KeyImagesMode, str(KeyImagesMode, &snap.Images.ArtifactMode))
+	apply(KeyImagesProxyTTLH, integer(KeyImagesProxyTTLH, &snap.Images.ProxyTTLHours))
+
+	// --- billing(单币种结算;WriteOnce——行存在即终身锁定) ---
+	// The row is authoritative and is never rewritten into something else: a
+	// row that is not a well-formed currency code is surfaced as "db-error"
+	// and the env/yaml declaration stays in effect — the same contract as
+	// every other bad row, instead of coercing the value to a default currency.
+	if raw, ok := values[KeyBillingCurrency]; ok {
+		code := config.NormalizeCurrencyCode(raw)
+		if config.ValidCurrencyCode(code) {
+			snap.BillingCurrency = code
+			snap.Sources[KeyBillingCurrency] = SourceDB
+		} else {
+			snap.Sources[KeyBillingCurrency] = SourceDBError
+		}
+	}
 
 	snap.LoadedAt = time.Now().UTC()
 	return snap

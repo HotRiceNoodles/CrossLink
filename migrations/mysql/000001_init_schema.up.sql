@@ -192,7 +192,7 @@ CREATE INDEX idx_providers_org_id ON providers(org_id);
 
 -- ============================================================
 -- 10. provider_models
---    Column source: 000001 (base), 000004 (currency), 000013 (routing_strategy),
+--    Column source: 000001 (base), 000013 (routing_strategy),
 --                   000014 (CHECK update), 000036 (deleted_at), 000047 (org_id)
 --    Note: original UNIQUE(provider_id,model_name,provider_model) replaced by
 --    partial unique index (000045). MySQL has no partial indexes, so we use
@@ -209,7 +209,6 @@ CREATE TABLE provider_models (
     max_context      INT,
     input_price      DECIMAL(10,6) NOT NULL DEFAULT 0,
     output_price     DECIMAL(10,6) NOT NULL DEFAULT 0,
-    currency         VARCHAR(3) NOT NULL DEFAULT 'CNY',
     routing_strategy VARCHAR(32) NOT NULL DEFAULT 'weighted_random',
     extra_config     JSON,
     org_id           BIGINT,
@@ -466,7 +465,6 @@ CREATE TABLE budget_snapshots (
     period_key  VARCHAR(16) NOT NULL,
     spent       DECIMAL(16,8) NOT NULL DEFAULT 0,
     budget      DECIMAL(12,4) NOT NULL DEFAULT 0,
-    currency    VARCHAR(3) NOT NULL DEFAULT 'CNY',
     org_id      BIGINT,
     created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE (target_type, target_id, period_key)
@@ -489,7 +487,6 @@ CREATE TABLE budget_recommendations (
     growth_rate         DECIMAL(8,4) NOT NULL DEFAULT 0,
     confidence          DECIMAL(5,2) NOT NULL DEFAULT 0,
     reasoning           TEXT NOT NULL,
-    currency            VARCHAR(3) NOT NULL DEFAULT 'CNY',
     org_id              BIGINT,
     created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -790,7 +787,6 @@ CREATE TABLE datalens_hourly_metrics (
     route_type      VARCHAR(16),
     status_group    INT NOT NULL DEFAULT 200,
     hour_bucket     DATETIME(3) NOT NULL,
-    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
 
     request_count       INT     NOT NULL DEFAULT 0,
     input_tokens        BIGINT  NOT NULL DEFAULT 0,
@@ -849,7 +845,6 @@ CREATE TABLE datalens_daily_metrics (
     route_type      VARCHAR(16),
     status_group    INT NOT NULL DEFAULT 200,
     day_bucket      DATE NOT NULL,
-    currency        VARCHAR(3) NOT NULL DEFAULT 'CNY',
 
     request_count       INT     NOT NULL DEFAULT 0,
     input_tokens        BIGINT  NOT NULL DEFAULT 0,

@@ -39,7 +39,6 @@ type ModelExport struct {
 	Priority        int     `yaml:"priority"`
 	InputPrice      float64 `yaml:"input_price"`
 	OutputPrice     float64 `yaml:"output_price"`
-	Currency        string  `yaml:"currency"`
 	RoutingStrategy string  `yaml:"routing_strategy"`
 	Status          int16   `yaml:"status"`
 }

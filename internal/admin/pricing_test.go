@@ -136,13 +136,13 @@ func TestUsage_LogBillableCost(t *testing.T) {
 	svc := service.NewUsageService(repository.NewUsageLogRepo(db))
 
 	svc.Log(context.Background(), &service.UsageEntry{
-		RouteType:       "openai",
-		ModelRequested:  "gpt-4o",
-		InputTokens:     1000,
-		OutputTokens:    500,
-		InputPrice:      0.0014,
-		OutputPrice:     0.0028,
-		Currency:        "USD",
+		RouteType:      "openai",
+		ModelRequested: "gpt-4o",
+		InputTokens:    1000,
+		OutputTokens:   500,
+		InputPrice:     0.0014,
+		OutputPrice:    0.0028,
+
 		PriceMultiplier: 1.5,
 	})
 
@@ -162,11 +162,11 @@ func TestUsage_BillableCost_DefaultMultiplier(t *testing.T) {
 
 	// PriceMultiplier = 0 → service defaults to 1.0 → billable = cost
 	svc.Log(context.Background(), &service.UsageEntry{
-		RouteType:       "openai",
-		ModelRequested:  "m",
-		InputTokens:     100,
-		InputPrice:      0.01,
-		Currency:        "USD",
+		RouteType:      "openai",
+		ModelRequested: "m",
+		InputTokens:    100,
+		InputPrice:     0.01,
+
 		PriceMultiplier: 0,
 	})
 

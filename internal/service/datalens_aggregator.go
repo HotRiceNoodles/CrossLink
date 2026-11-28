@@ -270,7 +270,7 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 	}
 	insertCols = append(insertCols, dimInserts...)
 	insertCols = append(insertCols,
-		"status_group", "hour_bucket", "currency",
+		"status_group", "hour_bucket",
 		"request_count", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
 		"total_cost", "total_latency_ms", "min_latency_ms", "max_latency_ms", "latency_samples",
 		"total_first_token_ms", "first_token_samples",
@@ -294,7 +294,7 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 	selectExprs = append(selectExprs,
 		statusGroupCASE(),
 		hourTrunc+" AS hour_bucket",
-		"currency",
+
 		"COUNT(*) AS request_count",
 		"SUM(input_tokens) AS input_tokens",
 		"SUM(output_tokens) AS output_tokens",
@@ -340,7 +340,7 @@ func (s *DataLensAggregatorService) buildHourlySQL(level AggregateLevel, start, 
 	// GROUP BY columns
 	groupBy := []string{"org_id"}
 	groupBy = append(groupBy, dimGroups...)
-	groupBy = append(groupBy, statusGroupCASE(), hourTrunc, "currency")
+	groupBy = append(groupBy, statusGroupCASE(), hourTrunc)
 
 	sql := fmt.Sprintf(
 		"INSERT INTO datalens_hourly_metrics (%s)\nSELECT %s\nFROM usage_logs\nWHERE created_at >= ? AND created_at < ? AND org_id IS NOT NULL\nGROUP BY %s",
@@ -399,7 +399,6 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 		"org_id", "agg_level", "team_id", "api_key_id", "provider_id",
 		"model_name", "route_type", "status_group",
 		dayTrunc+" AS day_bucket",
-		"currency",
 	)
 	for _, col := range sumCols {
 		selectExprs = append(selectExprs, "SUM("+col+") AS "+col)
@@ -414,7 +413,7 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 	// INSERT column list: all dimension + metric columns.
 	insertCols := []string{
 		"org_id", "agg_level", "team_id", "api_key_id", "provider_id",
-		"model_name", "route_type", "status_group", "day_bucket", "currency",
+		"model_name", "route_type", "status_group", "day_bucket",
 	}
 	insertCols = append(insertCols, sumCols...)
 	insertCols = append(insertCols, "min_latency_ms", "max_latency_ms", "distinct_sessions", "distinct_keys")
@@ -423,7 +422,7 @@ func (s *DataLensAggregatorService) aggregateDailyFromHourly(ctx context.Context
 	groupBy := []string{
 		"org_id", "agg_level", "team_id", "api_key_id", "provider_id",
 		"model_name", "route_type", "status_group",
-		dayTrunc, "currency",
+		dayTrunc,
 	}
 
 	sql := fmt.Sprintf(
@@ -505,10 +504,10 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 			whereExtras = append(whereExtras, dim+" IS NOT NULL")
 		}
 
-		groupByCols = append(groupByCols, "sub.day_bucket", "sub.currency", "sub.status_group")
+		groupByCols = append(groupByCols, "sub.day_bucket", "sub.status_group")
 		joinConds = append(joinConds,
 			tq+".day_bucket = sub.day_bucket",
-			tq+".currency = sub.currency",
+
 			tq+".status_group = sub.status_group",
 			fmt.Sprintf("%s.agg_level = '%s'", tq, level.Name),
 		)
@@ -532,7 +531,7 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 		}
 		subSelectParts = append(subSelectParts,
 			dayTrunc+" AS day_bucket",
-			"currency",
+
 			statusGroupCASE()+" AS status_group",
 			"COUNT(DISTINCT CASE WHEN session_id != '' THEN session_id END) AS sessions",
 			// "keys" would collide with MySQL's KEYS keyword (1064 even after
@@ -551,7 +550,7 @@ func (s *DataLensAggregatorService) updateDailyDistinctCounts(ctx context.Contex
 				subGroupBy = append(subGroupBy, col)
 			}
 		}
-		subGroupBy = append(subGroupBy, dayTrunc, "currency", statusGroupCASE())
+		subGroupBy = append(subGroupBy, dayTrunc, statusGroupCASE())
 
 		var sql string
 		if isMySQL {

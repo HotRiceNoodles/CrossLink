@@ -32,7 +32,6 @@ type CacheEntry struct {
 	// exactly one ledger row and one budget settlement.
 	InputPrice  float64 `json:"input_price,omitempty"`
 	OutputPrice float64 `json:"output_price,omitempty"`
-	Currency    string  `json:"currency,omitempty"`
 	// Priced distinguishes "no price snapshot stored" (legacy entries cached
 	// before this field existed — unbillable, must not be served) from a
 	// genuine zero-price model (priced at 0 — billable, serve normally).
@@ -228,7 +227,7 @@ func (s *CacheService) Get(ctx context.Context, key string) (*CacheEntry, bool) 
 	return &entry, true
 }
 
-func (s *CacheService) Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration, inputPrice, outputPrice float64, currency string) error {
+func (s *CacheService) Set(ctx context.Context, key, model, endpoint string, body []byte, ttl time.Duration, inputPrice, outputPrice float64) error {
 	entry := CacheEntry{
 		Model:       model,
 		Endpoint:    endpoint,
@@ -236,7 +235,6 @@ func (s *CacheService) Set(ctx context.Context, key, model, endpoint string, bod
 		Body:        json.RawMessage(body),
 		InputPrice:  inputPrice,
 		OutputPrice: outputPrice,
-		Currency:    currency,
 		Priced:      true,
 	}
 	// Extract token usage from response body for cache hit accounting

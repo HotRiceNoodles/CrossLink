@@ -10,6 +10,7 @@ import (
 
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/settings"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -223,19 +224,10 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 
 	// Determine primary currency (independent query — pollutes nothing).
-	primaryCurrency := "CNY"
-	var topCur struct{ Currency string }
-	newQuery().
-		Select("currency").
-		Group("currency").
-		Order("SUM(cost) DESC").
-		Limit(1).
-		Scan(&topCur)
-	if topCur.Currency != "" {
-		primaryCurrency = topCur.Currency
-	}
-
-	// Main aggregation query
+	// Single-currency design: the deployment's billing_currency is fixed at
+	// first install and every usage row carries it, so no detection query is
+	// needed — read the platform currency directly.
+	primaryCurrency := settings.PlatformCurrency()
 	var stats usageStats
 	newQuery().Select(
 		"COUNT(*) as total_requests, " +
@@ -265,10 +257,9 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			"COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count",
 	).Scan(&rates)
 
-	// Cost: filtered to primary currency only (independent query)
+	// Cost (independent query) — single currency, no filtering needed
 	var costResult struct{ Total float64 }
 	newQuery().
-		Where("currency = ?", primaryCurrency).
 		Select("COALESCE(SUM(cost), 0) as total").
 		Scan(&costResult)
 	stats.TotalCost = costResult.Total
@@ -286,11 +277,8 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		stats.GuardrailRate = float64(rates.GuardrailCount) / float64(stats.TotalRequests)
 	}
 
-	// Per-currency breakdown (backward compat)
-	var currencySums []CurrencyCostSum
-	newQuery().Select("currency, COALESCE(SUM(cost), 0) as total").
-		Group("currency").
-		Scan(&currencySums)
+	// Per-currency breakdown removed (single-currency design): every row is
+	// the deployment currency; "currency" above carries it for display.
 
 	data := gin.H{
 		"total_requests":        stats.TotalRequests,
@@ -313,7 +301,6 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		"retry_rate":            stats.RetryRate,
 		"guardrail_block_rate":  stats.GuardrailRate,
 		"currency":              stats.Currency,
-		"cost_by_currency":      currencySums,
 	}
 
 	// Global-view-only resource totals. These are point-in-time counts of
@@ -330,11 +317,6 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": data})
-}
-
-type CurrencyCostSum struct {
-	Currency string  `json:"currency"`
-	Total    float64 `json:"total"`
 }
 
 type DailyStat struct {
@@ -365,26 +347,15 @@ func (h *UsageHandler) DailyTrend(c *gin.Context) {
 	}
 	var results []DailyStat
 
-	// Filter to primary currency for consistent daily cost comparison
-	primaryCurrency := "CNY"
-	var topCur struct{ Currency string }
-	currencyQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
-		Model(&model.UsageLog{}).
-		Select("currency").
-		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)), c), c), c).
-		Group("currency").
-		Order("SUM(cost) DESC").
-		Limit(1)
-	currencyQuery.Scan(&topCur)
-	if topCur.Currency != "" {
-		primaryCurrency = topCur.Currency
-	}
+	// Single-currency design: every row is the deployment currency, so daily
+	// costs are directly comparable without detection or filtering.
+	primaryCurrency := settings.PlatformCurrency()
 
 	bucketExpr := dayBucketExpr(h.db.Dialector.Name(), "created_at")
 	dataQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select(bucketExpr+" as date, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens, COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens, COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens, COUNT(CASE WHEN fallback_count > 0 THEN 1 END) as fallback_count_daily, COUNT(CASE WHEN retry_count > 0 THEN 1 END) as retry_count_daily, COUNT(CASE WHEN guardrail_triggered THEN 1 END) as guardrail_count_daily, COUNT(CASE WHEN status_code >= 400 THEN 1 END) as error_count_daily, COALESCE(SUM(cost), 0) as cost").
-		Where("created_at >= ? AND currency = ?", localMidnight(time.Now().AddDate(0, 0, -days)), primaryCurrency).
+		Where("created_at >= ?", localMidnight(time.Now().AddDate(0, 0, -days))).
 		Group(bucketExpr).
 		Order("date ASC")
 	rows, err := dataQuery.Rows()
@@ -433,17 +404,8 @@ func localMidnight(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, statsLoc)
 }
 
-// detectPrimaryCurrency returns the currency with the highest total cost in
-// the given query, so mixed-currency sums don't add CNY to USD verbatim
-// (same convention as Stats/DailyTrend/TeamStats).
-func detectPrimaryCurrency(query *gorm.DB) string {
-	var topCur struct{ Currency string }
-	query.Group("currency").Order("SUM(cost) DESC").Limit(1).Scan(&topCur)
-	if topCur.Currency != "" {
-		return topCur.Currency
-	}
-	return "CNY"
-}
+// detectPrimaryCurrency removed (single-currency design): the deployment's
+// billing_currency is fixed at first install; use settings.PlatformCurrency().
 
 // TemplateStats aggregates usage by prompt template (template_id), joining
 // prompt_templates for display names. Only requests that used a template
@@ -455,16 +417,11 @@ func (h *UsageHandler) TemplateStats(c *gin.Context) {
 	}
 	var results []TemplateStat
 
-	primaryCurrency := detectPrimaryCurrency(applyOrgScope(applyTeamScope(applyUsageFilters(
-		h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Select("currency"), c), c), c).
-		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)))
-
 	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("usage_logs.template_id as template_id, prompt_templates.name as template_name, COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(cost), 0) as total_cost").
 		Joins("LEFT JOIN prompt_templates ON prompt_templates.id = usage_logs.template_id").
 		Where("usage_logs.template_id IS NOT NULL AND usage_logs.created_at >= ?", time.Now().AddDate(0, 0, -days)).
-		Where("usage_logs.currency = ?", primaryCurrency).
 		Group("usage_logs.template_id, prompt_templates.name").
 		Order("total_requests DESC").
 		Limit(20).
@@ -483,15 +440,10 @@ func (h *UsageHandler) ModelDistribution(c *gin.Context) {
 	}
 	var results []ModelDist
 
-	primaryCurrency := detectPrimaryCurrency(applyOrgScope(applyTeamScope(applyUsageFilters(
-		h.db.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Select("currency"), c), c), c).
-		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)))
-
 	applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("model_requested as model, COUNT(*) as count, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(SUM(cost), 0) as cost, COALESCE(SUM(CASE WHEN status_code = 200 THEN image_count END), 0) as image_count").
 		Where("created_at >= ?", time.Now().AddDate(0, 0, -days)).
-		Where("currency = ?", primaryCurrency).
 		Group("model_requested").
 		Order("count DESC").
 		Limit(10).
@@ -517,26 +469,14 @@ func (h *UsageHandler) TeamStats(c *gin.Context) {
 		days = d
 	}
 
-	// Determine primary currency (same pattern as DailyTrend)
-	primaryCurrency := "CNY"
-	var topCur struct{ Currency string }
-	currencyQuery := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
-		Model(&model.UsageLog{}).
-		Select("currency"), c), c), c)
-	if days > 0 {
-		currencyQuery = currencyQuery.Where("created_at >= ?", time.Now().AddDate(0, 0, -days))
-	}
-	currencyQuery.Group("currency").Order("SUM(cost) DESC").Limit(1).Scan(&topCur)
-	if topCur.Currency != "" {
-		primaryCurrency = topCur.Currency
-	}
+	// Single-currency design: no detection, no row filtering.
+	primaryCurrency := settings.PlatformCurrency()
 
 	var results []TeamStat
 	query := applyOrgScope(applyTeamScope(applyUsageFilters(h.db.WithContext(c.Request.Context()).
 		Model(&model.UsageLog{}), c), c), c).
 		Select("usage_logs.team_id, COALESCE(teams.display_name, 'Unknown') as team_name, COUNT(*) as total_requests, COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens, COALESCE(SUM(usage_logs.cost), 0) as total_cost").
-		Joins("LEFT JOIN teams ON teams.id = usage_logs.team_id").
-		Where("usage_logs.currency = ?", primaryCurrency)
+		Joins("LEFT JOIN teams ON teams.id = usage_logs.team_id")
 	if days > 0 {
 		query = query.Where("created_at >= ?", time.Now().AddDate(0, 0, -days))
 	}
@@ -617,7 +557,6 @@ type reconciliationRow struct {
 	UpstreamCost float64 `json:"upstream_cost"`
 	BillableCost float64 `json:"billable_cost"`
 	Profit       float64 `json:"profit"`
-	Currency     string  `json:"currency"`
 }
 
 // ReconciliationExport exports per-Key+Model aggregated usage as CSV for
@@ -640,8 +579,7 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 			COALESCE(SUM(CASE WHEN u.status_code = 200 THEN u.image_count END), 0) AS image_count,
 			COALESCE(SUM(u.cost), 0) AS upstream_cost,
 			COALESCE(SUM(u.billable_cost), 0) AS billable_cost,
-			COALESCE(SUM(u.billable_cost - u.cost), 0) AS profit,
-			u.currency`).
+			COALESCE(SUM(u.billable_cost - u.cost), 0) AS profit`).
 		Joins("LEFT JOIN api_keys k ON k.id = u.api_key_id").
 		Where("u.created_at >= ?", time.Now().AddDate(0, 0, -days))
 
@@ -653,7 +591,7 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 	}
 
 	var rows []reconciliationRow
-	q.Group("k.name, k.key_prefix, u.model_used, u.currency").
+	q.Group("k.name, k.key_prefix, u.model_used").
 		Order("billable_cost DESC").
 		Scan(&rows)
 
@@ -672,7 +610,7 @@ func (h *UsageHandler) ReconciliationExport(c *gin.Context) {
 		fmt.Fprintf(&buf, "%s,%s,%s,%d,%d,%d,%d,%.4f,%.4f,%s,%s\n",
 			r.KeyName, r.KeyPrefix, r.ModelUsed, r.Requests,
 			r.InputTokens, r.OutputTokens, r.ImageCount,
-			r.UpstreamCost, r.BillableCost, profit, r.Currency)
+			r.UpstreamCost, r.BillableCost, profit, settings.PlatformCurrency())
 	}
 
 	c.Header("Content-Type", "text/csv; charset=utf-8")

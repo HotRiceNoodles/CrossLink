@@ -30,7 +30,6 @@ type ModelConfig struct {
 	Priority      int     `yaml:"priority"`
 	InputPrice    float64 `yaml:"input_price"`
 	OutputPrice   float64 `yaml:"output_price"`
-	Currency      string  `yaml:"currency"`
 }
 
 func SeedProviders(db *gorm.DB, path string) error {
@@ -75,7 +74,6 @@ func SeedProviders(db *gorm.DB, path string) error {
 					Priority:      m.Priority,
 					InputPrice:    m.InputPrice,
 					OutputPrice:   m.OutputPrice,
-					Currency:      m.Currency,
 					Status:        1,
 				}
 				if err := tx.Create(&pm).Error; err != nil {

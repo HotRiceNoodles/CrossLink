@@ -134,7 +134,7 @@ func ApplyBundle(db *gorm.DB, encStore *secret.EncryptedDBStore, bundle *ExportB
 			m := &model.ProviderModel{
 				ProviderID: providerID, ModelName: me.ModelName, ProviderModel: me.ProviderModel,
 				Weight: me.Weight, Priority: me.Priority, InputPrice: me.InputPrice,
-				OutputPrice: me.OutputPrice, Currency: me.Currency,
+				OutputPrice:     me.OutputPrice,
 				RoutingStrategy: me.RoutingStrategy, Status: me.Status,
 			}
 			if err := db.Create(m).Error; err != nil {

@@ -797,6 +797,9 @@ func FullSetup(cfg *config.Config, db *gorm.DB, rdb *redis.Client, ext *Extensio
 		// Pro-only /system/settings aggregate).
 		adminGroup.GET("/system/config", middleware.RequireAction(permCache, "system:view"), handlers.System.GetConfig)
 		adminGroup.PUT("/system/config", middleware.RequireAction(permCache, "system:update"), handlers.System.UpdateConfig)
+		// Installation summary: the install-time parameters, their effective
+		// values and how each is locked. Secrets are reported as status only.
+		adminGroup.GET("/system/install-summary", middleware.RequireAction(permCache, "system:view"), handlers.System.GetInstallSummary)
 		// SSRF internal allowlist (B5): hot-reload without restart. Writes are
 		// platform-admin only (RequireAction + handler-side IsAdmin); reads
 		// follow the same system:view gate as the rest of system config.

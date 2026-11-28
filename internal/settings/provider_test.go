@@ -242,3 +242,54 @@ func TestRangeValidation(t *testing.T) {
 	rpm := RegistryMap[KeyRateLimitRPM]
 	assert.True(t, rpm.hasRange && rpm.Max == 0, "Max 0 = no upper bound")
 }
+
+// billing_currency resolution: DB row wins over the yaml/env declaration,
+// and the row also syncs the process-global currency on every load.
+func TestProvider_BillingCurrencyResolution(t *testing.T) {
+	db := setupSettingsTestDB(t)
+	cfg := testConfig()
+	cfg.Billing.Currency = "USD" // headless initial declaration
+	p := NewProvider(db, cfg, nil)
+	t.Cleanup(func() { SetPlatformCurrency(CurrencyCNY) })
+
+	// No row yet → the yaml declaration is in effect and synced.
+	assert.Equal(t, "USD", p.Get().BillingCurrency)
+	assert.Equal(t, "USD", PlatformCurrency())
+
+	// A row wins (the fixed selection) and re-syncs the global.
+	require.NoError(t, db.Save(&model.SystemSetting{Key: KeyBillingCurrency, Value: "CNY", UpdatedAt: time.Now().UTC()}).Error)
+	require.NoError(t, p.RefreshNow(context.Background()))
+	assert.Equal(t, "CNY", p.Get().BillingCurrency)
+	assert.Equal(t, "CNY", PlatformCurrency())
+
+	// Provenance surfaced for the UI ("db" once fixed).
+	assert.Equal(t, SourceDB, p.Get().Source(KeyBillingCurrency))
+}
+
+// Any well-formed currency code is a valid settlement currency — the
+// operator's choice, not a fixed CNY/USD list.
+func TestProvider_BillingCurrencyAnyCode(t *testing.T) {
+	t.Cleanup(func() { SetPlatformCurrency(CurrencyCNY) })
+	for _, code := range []string{"EUR", "JPY", "GBP", "HKD", "TWD", "KRW", "CHF", "INR", "BRL", "AED"} {
+		db := setupSettingsTestDB(t)
+		require.NoError(t, db.Save(&model.SystemSetting{Key: KeyBillingCurrency, Value: code, UpdatedAt: time.Now().UTC()}).Error)
+		p := NewProvider(db, &config.Config{}, nil)
+		assert.Equal(t, code, p.Get().BillingCurrency, "currency %s must resolve from the DB row", code)
+		assert.Equal(t, SourceDB, p.Get().Source(KeyBillingCurrency))
+		assert.Equal(t, code, PlatformCurrency(), "process-global must follow the row")
+	}
+}
+
+// A row that is not a well-formed code is surfaced as a bad row and the
+// declaration stays in effect — it is never silently coerced to another
+// currency (the old two-currency behavior).
+func TestProvider_BillingCurrencyBadRowIsNotCoerced(t *testing.T) {
+	t.Cleanup(func() { SetPlatformCurrency(CurrencyCNY) })
+	db := setupSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.SystemSetting{Key: KeyBillingCurrency, Value: "not-a-code", UpdatedAt: time.Now().UTC()}).Error)
+	cfg := &config.Config{}
+	cfg.Billing.Currency = "EUR"
+	p := NewProvider(db, cfg, nil)
+	assert.Equal(t, "EUR", p.Get().BillingCurrency, "a bad row must not replace the declaration")
+	assert.Equal(t, SourceDBError, p.Get().Source(KeyBillingCurrency))
+}

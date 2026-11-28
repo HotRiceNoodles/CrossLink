@@ -23,7 +23,6 @@ CREATE TABLE budget_snapshots (
     period_key VARCHAR(16) NOT NULL,
     spent DECIMAL(16,8) NOT NULL DEFAULT 0,
     budget DECIMAL(12,4) NOT NULL DEFAULT 0,
-    currency VARCHAR(3) NOT NULL DEFAULT 'CNY',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (target_type, target_id, period_key)
 );
