@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/domain"
 	"github.com/crosslink/internal/license"
@@ -18,6 +19,7 @@ import (
 	"github.com/crosslink/internal/router"
 	"github.com/crosslink/internal/secret"
 	"github.com/crosslink/internal/service"
+	"github.com/crosslink/internal/settings"
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -43,6 +45,7 @@ type OnboardingHandler struct {
 	cacheSvc         *service.CacheService
 	auditSvc         *service.AuditService
 	authorizer       ActionAuthorizer
+	settings         *settings.Provider
 	onRegistryChange func(action, providerName string)
 	onModelChange    func(modelName string)
 }
@@ -92,6 +95,14 @@ func (h *OnboardingHandler) SetOnRegistryChange(fn func(action, providerName str
 // instances drop their resolver routes for it (targeted invalidation).
 func (h *OnboardingHandler) SetOnModelChange(fn func(modelName string)) {
 	h.onModelChange = fn
+}
+
+// SetSettingsProvider wires the runtime settings provider so Commit can
+// hot-apply the billing_currency row it just wrote (snapshot refresh +
+// process-global currency sync). nil = commit still works; the next poll tick
+// picks the row up.
+func (h *OnboardingHandler) SetSettingsProvider(p *settings.Provider) {
+	h.settings = p
 }
 
 // ---- Probe: stateless upstream connectivity + model enumeration ----
@@ -211,7 +222,6 @@ type onboardingModelInput struct {
 	Priority        int     `json:"priority"`
 	InputPrice      float64 `json:"input_price"`
 	OutputPrice     float64 `json:"output_price"`
-	Currency        string  `json:"currency"`
 	RoutingStrategy string  `json:"routing_strategy"`
 }
 
@@ -228,6 +238,10 @@ type onboardingKeyInput struct {
 type onboardingRequest struct {
 	Provider onboardingProviderInput `json:"provider" binding:"required"`
 	Models   []onboardingModelInput  `json:"models"`
+	// Currency 是平台唯一结算币种（单币种设计）：首次 Commit 必填（任意 ISO 4217
+	// 三位代码，如 CNY / USD / EUR / JPY），写入 system_settings.billing_currency
+	// 后终身锁定；已锁定后可省略（沿用）或传相同值，传不同值则整个 Commit 被拒（409）。
+	Currency string `json:"currency"`
 	// Key 可选（2026-11-10）：向导只做 供应商+映射 接入——生成的密钥明文从不展示，
 	// 用户拿不到却被动创建属无意义副作用；需要密钥在「API 密钥」页创建（明文只显一次可复制）。传了仍按原规则建。
 	Key           *onboardingKeyInput `json:"key"`
@@ -293,6 +307,53 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "key.expires_at must be in the future")
 			return
 		}
+	}
+
+	// --- billing currency: the write-once platform selection ---
+	// Single-currency design: one settlement currency per deployment, fixed at
+	// first install. The wizard's step-1 choice arrives here; once the
+	// system_settings row exists the value is immutable for the deployment's
+	// lifetime (a later Commit may omit it or repeat it, never change it).
+	currencyInput := config.NormalizeCurrencyCode(input.Currency)
+	if currencyInput != "" && !config.ValidCurrencyCode(currencyInput) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "currency_invalid", "currency": input.Currency}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "currency must be a 3-letter ISO 4217 code such as CNY, USD or EUR")
+		return
+	}
+	var currencyRow model.SystemSetting
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("system_settings.key = ?", settings.KeyBillingCurrency).
+		First(&currencyRow).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			internalErr(c, err, "check billing currency failed")
+			return
+		}
+		// Not fixed yet: the first commit MUST carry the selection — no silent
+		// default on a fresh install.
+		if currencyInput == "" {
+			if h.auditSvc != nil {
+				h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name, service.AuditDetail(map[string]any{"reason": "currency_required"}))
+			}
+			errorResp(c, http.StatusBadRequest, ErrInvalidRequest, "billing currency must be selected on first commit (a 3-letter ISO 4217 code such as CNY, USD or EUR)")
+			return
+		}
+	} else if settings.BillingCurrencySet(currencyRow.Value) && currencyInput != "" && currencyInput != currencyRow.Value {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "onboarding:commit", "provider", "", input.Provider.Name,
+				service.AuditDetail(map[string]any{"reason": "currency_locked", "locked_to": currencyRow.Value, "requested": currencyInput}))
+		}
+		errorResp(c, http.StatusConflict, ErrBillingCurrencyLocked,
+			fmt.Sprintf("billing currency is locked to %s and cannot be changed (fixed at first install)", currencyRow.Value))
+		return
+	}
+	// Effective currency for this commit: a locked row wins; otherwise the
+	// (validated, non-empty) selection about to be written.
+	effectiveCurrency := currencyInput
+	currencyUnset := !settings.BillingCurrencySet(currencyRow.Value)
+	if !currencyUnset {
+		effectiveCurrency = currencyRow.Value
 	}
 
 	orgID := GetOrgID(c)
@@ -418,7 +479,6 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			Priority:        m.Priority,
 			InputPrice:      m.InputPrice,
 			OutputPrice:     m.OutputPrice,
-			Currency:        model.ValidCurrency(m.Currency),
 			RoutingStrategy: m.RoutingStrategy,
 			Status:          1,
 		})
@@ -504,8 +564,30 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		hashAlgo = string(h.cryptoProvider.Algorithms().Hash)
 	}
 
-	// --- transaction: provider → models → (+ key → hash) ---
+	// --- transaction: billing currency → provider → models → (+ key → hash) ---
 	txErr := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		// Fix the settlement currency first (write-once): re-read inside the
+		// transaction so a concurrent first-commit that already fixed a
+		// DIFFERENT value fails this one atomically instead of silently
+		// re-denominating prices committed moments earlier.
+		if currencyUnset && currencyInput != "" {
+			var row model.SystemSetting
+			err := tx.Where("system_settings.key = ?", settings.KeyBillingCurrency).First(&row).Error
+			switch {
+			case err == nil:
+				if row.Value != currencyInput {
+					return fmt.Errorf("billing currency locked to %s by a concurrent commit", row.Value)
+				}
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				if err := tx.Save(&model.SystemSetting{
+					Key: settings.KeyBillingCurrency, Value: currencyInput, UpdatedAt: time.Now().UTC(),
+				}).Error; err != nil {
+					return classifyCreateErr(err, "set billing currency")
+				}
+			default:
+				return err
+			}
+		}
 		if !reuseMode {
 			if err := tx.Create(p).Error; err != nil {
 				return classifyCreateErr(err, "create provider")
@@ -590,6 +672,17 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 	}
 
 	// --- post-commit side effects (best effort) ---
+	// Hot-apply the currency row this commit may have written: swap the
+	// settings snapshot (and the process-global currency) now instead of
+	// waiting for the poll tick. Best-effort — the poll loop converges.
+	if currencyInput != "" {
+		settings.SetPlatformCurrency(effectiveCurrency)
+		if h.settings != nil {
+			if err := h.settings.RefreshNow(c.Request.Context()); err != nil {
+				slog.Warn("onboarding: settings refresh after currency write failed; poll tick will pick it up", "error", err)
+			}
+		}
+	}
 	// Only sync the runtime registry when a NEW provider was created. In reuse
 	// mode the existing provider is already registered from its original creation.
 	var applyErr error
@@ -630,11 +723,12 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 			auditKey = input.Key.Name
 		}
 		h.auditSvc.LogFromContext(c, "onboarding:commit", "provider", fmt.Sprintf("%d", p.ID), p.Name, service.AuditDetail(map[string]any{
-			"provider_id":     p.ID,
-			"model_count":     len(models),
-			"key_name":        auditKey,
-			"api_key_length":  len(input.Provider.APIKey),
-			"reused_provider": reuseMode,
+			"provider_id":      p.ID,
+			"model_count":      len(models),
+			"key_name":         auditKey,
+			"api_key_length":   len(input.Provider.APIKey),
+			"reused_provider":  reuseMode,
+			"billing_currency": effectiveCurrency,
 		}))
 	}
 
@@ -643,10 +737,11 @@ func (h *OnboardingHandler) Commit(c *gin.Context) {
 		modelIDs = append(modelIDs, mm.ID)
 	}
 	resp := gin.H{
-		"provider_id":     p.ID,
-		"model_ids":       modelIDs,
-		"reused_provider": reuseMode,
-		"applied":         applyErr == nil,
+		"provider_id":      p.ID,
+		"model_ids":        modelIDs,
+		"reused_provider":  reuseMode,
+		"applied":          applyErr == nil,
+		"billing_currency": effectiveCurrency,
 	}
 	if applyErr != nil {
 		slog.Error("onboarding: provider saved but not applied to local registry", "name", p.Name, "error", applyErr)

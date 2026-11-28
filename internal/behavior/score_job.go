@@ -259,7 +259,7 @@ func (a *Aggregator) scoreEntity(
 
 	// cost（A，对 DAY 基线的当日累计）。
 	bestCost, costObs, costP50, costP90, costX := 0.0, 0, 0.0, 0.0, 0.0
-	for _, m := range []string{MetricCostCNY, MetricCostUSD} {
+	for _, m := range []string{MetricCost} {
 		x, ok := costDay[e][m]
 		if !ok || x <= 0 {
 			continue
@@ -591,8 +591,8 @@ func (a *Aggregator) costDaySums(ctx context.Context, dayStart time.Time) (map[E
 	if err := raw(a.DB, ctx, `
 SELECT entity_type, entity_id, metric, COALESCE(SUM(value_num), 0) AS value_num, 0 AS value_den, 0 AS sample_count
 FROM behavior_rollups
-WHERE granularity = 'hour' AND bucket_ts >= ? AND metric IN (?, ?)
-GROUP BY entity_type, entity_id, metric`, dayStart, MetricCostCNY, MetricCostUSD).Scan(&rows).Error; err != nil {
+WHERE granularity = 'hour' AND bucket_ts >= ? AND metric IN (?)
+GROUP BY entity_type, entity_id, metric`, dayStart, MetricCost).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("score: cost day sums: %w", err)
 	}
 	out := map[EntityRef]map[string]float64{}

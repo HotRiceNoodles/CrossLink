@@ -150,7 +150,7 @@ func TestResolve_DegradedNotWrittenAcrossGenerations(t *testing.T) {
 func TestInvalidateModel_ExactNameMatching(t *testing.T) {
 	r := newEpochTestResolver(&mockProviderModelRepo{data: nil})
 	for _, k := range []string{"gpt-4:0", "gpt-4:7", "gpt-4o:0", "gpt:4:0", "other:0"} {
-		r.cache.Store(k, &cacheEntry{results: nil, expire: time.Now().Add(time.Minute)})
+		r.cache.Store(k, &cacheEntry{expire: time.Now().Add(time.Minute)})
 	}
 	before := r.epoch.Load()
 	r.InvalidateModel("gpt-4")

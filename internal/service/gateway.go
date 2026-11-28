@@ -56,7 +56,6 @@ type ChatResult struct {
 	ModelUsed       string
 	InputPrice      float64
 	OutputPrice     float64
-	Currency        string
 	FallbackCount   int
 	RetryCount      int
 	ReasoningTokens int
@@ -79,6 +78,14 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 	}
 
 	routes = ExpandFallbackRoutes(ctx, s.resolver, routes, orgID)
+
+	// P3 modality gate (design §5.2): chat/messages serve modality ""|"text";
+	// every route explicitly otherwise = stable 400 sentinel.
+	if gated, gerr := gateRoutesForModality(routes, "text"); gerr != nil {
+		return nil, &RouteError{Inner: gerr, Model: req.Model}
+	} else {
+		routes = gated
+	}
 
 	openaiReq, err := translator.AnthropicToOpenAI(req, "")
 	if err != nil {
@@ -115,7 +122,7 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		// M3.2 execution half: apply the route's request_overrides (admin
 		// wins) and gate client-carried dialect params by allowed_extensions —
 		// on the clone, per candidate.
-		applyRouteRequestOverrides(&reqCopy, route)
+		ApplyRouteRequestOverrides(&reqCopy, route)
 		pn := route.Provider.Name()
 		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
 		if s.guardRDB != nil {
@@ -204,7 +211,6 @@ func (s *GatewayService) Chat(ctx context.Context, req *domain.AnthropicRequest,
 		ModelUsed:           route.ProviderModel,
 		InputPrice:          route.InputPrice,
 		OutputPrice:         route.OutputPrice,
-		Currency:            route.Currency,
 		Attempts:            result.Attempts,
 		FallbackCount:       result.FallbackCount,
 		RetryCount:          totalRetries,
@@ -246,6 +252,13 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 
 	routes = ExpandFallbackRoutes(ctx, s.resolver, routes, orgID)
 
+	// P3 modality gate — same placement rule as Chat (design §5.2).
+	if gated, gerr := gateRoutesForModality(routes, "text"); gerr != nil {
+		return nil, &RouteError{Inner: gerr, Model: req.Model}
+	} else {
+		routes = gated
+	}
+
 	openaiReq, err := translator.AnthropicToOpenAI(req, "")
 	if err != nil {
 		return nil, fmt.Errorf("translate request: %w", err)
@@ -279,7 +292,7 @@ func (s *GatewayService) StreamChatWithConnect(ctx context.Context, req *domain.
 		// M3.2 execution half: apply the route's request_overrides (admin
 		// wins) and gate client-carried dialect params by allowed_extensions —
 		// on the clone, per candidate.
-		applyRouteRequestOverrides(&reqCopy, route)
+		ApplyRouteRequestOverrides(&reqCopy, route)
 		pn := route.Provider.Name()
 		// P3a: per-(provider,model) guardrail counters (count-only; P4 enforces).
 		if s.guardRDB != nil {
@@ -398,7 +411,6 @@ loop:
 		ModelUsed:           route.ProviderModel,
 		InputPrice:          route.InputPrice,
 		OutputPrice:         route.OutputPrice,
-		Currency:            route.Currency,
 		Attempts:            result.Attempts,
 		FallbackCount:       result.FallbackCount,
 		RetryCount:          totalRetries,
@@ -435,7 +447,6 @@ type StreamResult struct {
 	ModelUsed       string
 	InputPrice      float64
 	OutputPrice     float64
-	Currency        string
 	FallbackCount   int
 	RetryCount      int
 	ReasoningTokens int

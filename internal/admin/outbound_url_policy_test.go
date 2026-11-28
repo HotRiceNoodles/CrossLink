@@ -153,8 +153,9 @@ func TestOnboardingCommit_URLPolicy(t *testing.T) {
 				"name": "onprem", "display_name": "On-Prem", "adapter_type": "openai_compatible",
 				"base_url": allowlistTestPrivateURL, "api_key": "sk-test",
 			},
-			"models": []gin.H{{"model_name": "m1", "provider_model": "m1"}},
-			"key":    gin.H{"name": "k"},
+			"models":   []gin.H{{"model_name": "m1", "provider_model": "m1"}},
+			"currency": "CNY",
+			"key":      gin.H{"name": "k"},
 		})
 		setAdminContext(c, 1, 1, "admin")
 		h.Commit(c)

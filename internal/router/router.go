@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +51,11 @@ type Resolver struct {
 	// binary IsHealthyModel filter only. Set via SetHealthScoreFn (Setter, NOT
 	// NewResolver — overlay capability_test.go calls NewResolver positionally).
 	healthFn HealthScoreFn
+	// routeMetricsCache: per-provider short TTL (2s) cache of the latency /
+	// active-request snapshots the cache-hit path hands to the strategies
+	// (least_latency / least_busy read them), so re-selecting per request
+	// costs at most one metrics burst per 2s per provider.
+	routeMetricsCache sync.Map // key providerName -> *routeMetrics
 	// resolveLookupTimeout: r78 availability bound on the resolveUncached DB
 	// round trip (nanoseconds; atomic so SetResolveTimeout needs no lock on
 	// the read path). Set via SetResolveTimeout — NewResolver keeps its
@@ -106,10 +110,25 @@ type resolveProbe struct {
 	cancelled bool
 }
 
+// cacheEntry is one resolved mapping set for a (model, org). It holds the
+// PRE-selection pool: the routing strategy is run for every request, cache
+// hits included (serveFromCache). Caching a post-selection order would instead
+// replay one request's pick for the whole TTL — every strategy degenerated
+// into "first route of the cached order" for all but the cache-filling request.
 type cacheEntry struct {
-	results []*RouteResult
+	candidates   []RouteCandidate
+	strategyName StrategyName
+	expire       time.Time
+}
+
+// routeMetrics is a cached per-provider latency / active-request snapshot.
+type routeMetrics struct {
+	latency float64
+	active  int64
 	expire  time.Time
 }
+
+const routeMetricsTTL = 2 * time.Second
 
 // healthScoreCacheEntry is a cached HealthScore result with a short TTL.
 type healthScoreCacheEntry struct {
@@ -117,10 +136,22 @@ type healthScoreCacheEntry struct {
 	expire time.Time
 }
 
-// SetHealthScoreFn injects the health-score closure used to reorder cached
-// routes on cache hit (P4.4b). nil disables cache-hit reordering; selection
+// SetHealthScoreFn injects the health-score closure used to demote unhealthy
+// routes on cache hit (P4.4b). nil disables health-aware demotion; selection
 // falls back to the binary IsHealthyModel filter (pre-P4 behavior).
 func (r *Resolver) SetHealthScoreFn(fn HealthScoreFn) { r.healthFn = fn }
+
+// CachedHealthScoreFn returns a health-score closure backed by the resolver's
+// 2s per-(provider, model) cache, or nil when no scorer is wired. Strategies
+// run on every request (cache hits included), so they must be handed THIS
+// closure rather than the raw scorer: their filterByHealth would otherwise
+// cost up to three Redis reads per primary per request.
+func (r *Resolver) CachedHealthScoreFn() HealthScoreFn {
+	if r.healthFn == nil {
+		return nil
+	}
+	return r.cachedHealthScore
+}
 
 const healthScoreCacheTTL = 2 * time.Second
 
@@ -137,7 +168,6 @@ type RouteResult struct {
 	ProviderModel  string
 	InputPrice     float64
 	OutputPrice    float64
-	Currency       string
 	ProviderRow    *model.Provider
 	RetryConfig    provider.RetryConfig
 	FallbackModels []string
@@ -149,6 +179,10 @@ type RouteResult struct {
 	Priority int
 	// context window of the provider model, nil = unknown
 	MaxContext *int
+	// Modality (图片方案 P3, design §5.2): the endpoint family this mapping
+	// declares — "" = unclassified (kept everywhere; zero-break legacy), an
+	// explicit value is a hard gate (see FilterRoutesByModality).
+	Modality string
 	// M3.2/P3: model-level extension controls parsed from the mapping's
 	// extra_config (validated at write time by ValidateModelExtensionConfig).
 	// RequestOverrides: admin injection/override of allowed generation params
@@ -212,7 +246,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 	if err := r.degradedError(cacheKey, modelName); err != nil {
 		return nil, err
 	}
-	if routes, err, hit := r.serveFromCache(cacheKey, modelName); hit {
+	if routes, err, hit := r.serveFromCache(ctx, cacheKey, modelName); hit {
 		return routes, err
 	}
 
@@ -240,7 +274,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		if derr := r.degradedError(cacheKey, modelName); derr != nil {
 			return nil, derr
 		}
-		if routes, cerr, hit := r.serveFromCache(cacheKey, modelName); hit {
+		if routes, cerr, hit := r.serveFromCache(ctx, cacheKey, modelName); hit {
 			return routes, cerr
 		}
 		// M1 bounded re-resolve loop: when an invalidation races this query,
@@ -248,13 +282,13 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 		// contention error instead of looping, caching stale routes, or
 		// serving a result from an unpinnable generation.
 		for attempt := 0; ; attempt++ {
-			ordered, err := r.resolveUncached(pctx, modelName, orgID)
+			plan, err := r.resolvePlan(pctx, modelName, orgID)
 			if err != nil {
 				// Negative-cache ONLY the degradation case (the DB lookup
 				// itself failed on the DB's merits), and only on the
 				// generation the query started on — an old query's failure
 				// must not suppress the next generation's lookups. Cancellations
-				// come back as raw ctx errors from resolveUncached and must
+				// come back as raw ctx errors from resolvePlan and must
 				// NOT poison the negative cache.
 				if errors.Is(err, ErrResolveDegraded) {
 					r.markDegradedIfEpoch(cacheKey, e)
@@ -265,12 +299,13 @@ func (r *Resolver) Resolve(ctx context.Context, modelName string, orgID int64) (
 			cur := r.epoch.Load()
 			if cur == e {
 				r.cache.Store(cacheKey, &cacheEntry{
-					results: ordered,
-					expire:  time.Now().Add(r.ttl),
+					candidates:   plan.candidates,
+					strategyName: plan.strategyName,
+					expire:       time.Now().Add(r.ttl),
 				})
 				r.invalidationMu.Unlock()
 				r.clearDegraded(cacheKey)
-				return ordered, nil
+				return plan.selectRoutes(pctx, r), nil
 			}
 			r.invalidationMu.Unlock()
 			if attempt >= 1 {
@@ -292,11 +327,14 @@ func (r *Resolver) markDegradedIfEpoch(cacheKey string, e uint64) {
 	r.markDegraded(cacheKey)
 }
 
-// serveFromCache returns the cached routes for cacheKey with circuit-open
-// providers filtered out, or hit=false when no fresh entry exists. Extracted
-// from the Resolve fast path so the single-flight probe owner can re-check it
-// as a tail-race guard.
-func (r *Resolver) serveFromCache(cacheKey, modelName string) ([]*RouteResult, error, bool) {
+// serveFromCache answers from a fresh cache entry, or reports hit=false when
+// none exists. Extracted from the Resolve fast path so the single-flight
+// probe owner can re-check it as a tail-race guard.
+//
+// The entry holds the pre-selection candidate pool, so the routing strategy
+// runs again for THIS request (see cacheEntry) instead of replaying the order
+// chosen when the entry was filled.
+func (r *Resolver) serveFromCache(ctx context.Context, cacheKey, modelName string) ([]*RouteResult, error, bool) {
 	v, ok := r.cache.Load(cacheKey)
 	if !ok {
 		return nil, nil, false
@@ -306,44 +344,42 @@ func (r *Resolver) serveFromCache(cacheKey, modelName string) ([]*RouteResult, e
 		r.cache.Delete(cacheKey)
 		return nil, nil, false
 	}
-	// Filter out circuit-open providers from cached results via a
-	// PURE READ (healthAllows → CircuitState). Resolve must NOT use
-	// IsHealthyModel here: it claims the half-open probe lease
-	// (probeInFlight), and the FallbackEngine re-checks
-	// IsHealthyModel before each attempt — it would see the lease
-	// Resolve just claimed, skip the provider, and never run the
-	// attempt whose deferred ClearProbe releases it. The leaked
-	// lease then permanently filters the provider out of Resolve
-	// ("no available route for model" deadlock). P4.4b health-score
-	// reorder stays ON TOP of this filter.
+	candidates := entry.candidates
+	// Filter out circuit-open providers via a PURE READ (healthAllows →
+	// CircuitState). Resolve must NOT use IsHealthyModel here: it claims the
+	// half-open probe lease (probeInFlight), and the FallbackEngine re-checks
+	// IsHealthyModel before each attempt — it would see the lease Resolve
+	// just claimed, skip the provider, and never run the attempt whose
+	// deferred ClearProbe releases it. The leaked lease then permanently
+	// filters the provider out of Resolve ("no available route for model"
+	// deadlock).
 	if r.health != nil {
-		var healthy []*RouteResult
-		for _, rr := range entry.results {
-			if r.healthAllows(rr.Provider.Name(), rr.ProviderModel) {
-				healthy = append(healthy, rr)
+		healthy := make([]RouteCandidate, 0, len(candidates))
+		for _, c := range candidates {
+			if r.healthAllows(c.Provider.Name(), c.ProviderModel) {
+				healthy = append(healthy, c)
 			}
 		}
-		if len(healthy) > 0 {
-			if r.healthFn != nil {
-				healthy = r.reorderByHealth(healthy)
-			}
-			return healthy, nil, true
+		if len(healthy) == 0 {
+			// All cached providers circuit-open: serve the REJECTION from
+			// the cached mappings instead of falling through to the DB.
+			// The previous fallthrough re-queried provider_models for EVERY
+			// rejected request — an upstream outage under load became a DB
+			// query storm (measured in soak r2: 178k slow provider_models
+			// queries at ~200ms each saturated Postgres, exhausting its
+			// connections and cascading into resolve-degraded errors).
+			// Circuit state is still checked live per request (pure read
+			// above); mapping edits invalidate this cache explicitly.
+			return nil, r.unroutableFromCache(modelName, candidatesToRouteResults(candidates)), true
 		}
-		// All cached providers circuit-open: serve the REJECTION from
-		// the cached mappings instead of falling through to the DB.
-		// The previous fallthrough re-queried provider_models for EVERY
-		// rejected request — an upstream outage under load became a DB
-		// query storm (measured in soak r2: 178k slow provider_models
-		// queries at ~200ms each saturated Postgres, exhausting its
-		// connections and cascading into resolve-degraded errors).
-		// Circuit state is still checked live per request (pure read
-		// above); mapping edits invalidate this cache explicitly.
-		return nil, r.unroutableFromCache(modelName, entry.results), true
+		candidates = healthy
 	}
-	if r.healthFn != nil {
-		return r.reorderByHealth(entry.results), nil, true
+	if len(candidates) == 0 {
+		// Unreachable for entries Resolve stores (resolvePlan returns at
+		// least one candidate); an empty entry must never answer as a hit.
+		return nil, nil, false
 	}
-	return entry.results, nil, true
+	return r.applyStrategy(ctx, r.prepareCandidates(ctx, candidates), entry.strategyName), nil, true
 }
 
 // probeResolve runs fn for cacheKey at most once among concurrent callers.
@@ -471,8 +507,29 @@ func (r *Resolver) degradedError(cacheKey, modelName string) error {
 
 // resolveUncached performs the DB query, candidate filtering, strategy selection,
 // and returns the ordered routes. It does NOT touch the cache — the caller owns
-// caching (Resolve stores; the alias resolver bypasses).
+// caching (Resolve stores the plan; the alias resolver bypasses).
 func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID int64) ([]*RouteResult, error) {
+	plan, err := r.resolvePlan(ctx, modelName, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return plan.selectRoutes(ctx, r), nil
+}
+
+// routePlan is one resolved mapping set: the route candidates (secrets
+// resolved) and the strategy that orders them. Resolve caches the plan so a
+// cache hit can run selectRoutes for its own request.
+type routePlan struct {
+	candidates   []RouteCandidate
+	strategyName StrategyName
+}
+
+func (p *routePlan) selectRoutes(ctx context.Context, r *Resolver) []*RouteResult {
+	return r.applyStrategy(ctx, p.candidates, p.strategyName)
+}
+
+// resolvePlan is resolveUncached without the selection step.
+func (r *Resolver) resolvePlan(ctx context.Context, modelName string, orgID int64) (*routePlan, error) {
 	// r78 availability bound: an unreachable DB previously held this probe
 	// (and every request waiting on the single-flight) for the full driver
 	// dial timeout before the degraded negative-cache kicked in. Bounding the
@@ -532,14 +589,12 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 		return nil, fmt.Errorf("%w for model: %s", ErrNoActiveProvider, modelName)
 	}
 
-	// Determine strategy from first candidate
+	// Determine strategy from first candidate. One that is not registered
+	// (e.g. an overlay strategy under a community build) falls back to
+	// weighted_random at selection time (applyStrategy).
 	strategyName := StrategyName(candidates[0].RoutingStrategy)
 	if strategyName == "" {
 		strategyName = StrategyWeightedRandom
-	}
-	strategy := r.strategies[strategyName]
-	if strategy == nil {
-		strategy = r.strategies[StrategyWeightedRandom]
 	}
 
 	// Build route candidates with runtime metrics
@@ -576,10 +631,10 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 			ProviderRow:    &m.Provider,
 			InputPrice:     m.InputPrice,
 			OutputPrice:    m.OutputPrice,
-			Currency:       m.Currency,
 			Weight:         m.Weight,
 			Priority:       m.Priority,
 			MaxContext:     m.MaxContext,
+			Modality:       m.Modality,
 			ModelID:        m.ID,
 			ModelName:      m.ModelName,
 			AvgLatencyMs:   meta[i].latency,
@@ -622,10 +677,7 @@ func (r *Resolver) resolveUncached(ctx context.Context, modelName string, orgID 
 		}
 	}
 
-	// Strategy selection
-	_, ordered := strategy.Select(ctx, routeCandidates)
-
-	return ordered, nil
+	return &routePlan{candidates: routeCandidates, strategyName: strategyName}, nil
 }
 
 // healthAllows is Resolve's health filter: a pure CircuitState read that only
@@ -691,34 +743,104 @@ func (r *Resolver) invalidateWhere(match func(string) bool) {
 	r.invalidationMu.Unlock()
 }
 
-// reorderByHealth sorts cached routes by effective weight DESC, Priority ASC
-// (P4.4b). Effective weight = Weight × healthScore. Routes with Weight=0
-// (configured fallbacks) or healthScore=0 (demoted primaries) sort last — the
-// sort naturally demotes them without a separate step. Health scores are read
-// through cachedHealthScore (2s local cache) so the cache-hit hot path doesn't
-// do N Redis reads per request.
-func (r *Resolver) reorderByHealth(routes []*RouteResult) []*RouteResult {
-	type item struct {
-		rr  *RouteResult
-		ew  float64
-		pri int
-	}
-	items := make([]item, len(routes))
-	for i, rr := range routes {
-		score := r.cachedHealthScore(rr.Provider.Name(), rr.ProviderModel)
-		items[i] = item{rr: rr, ew: float64(rr.Weight) * score, pri: rr.Priority}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].ew != items[j].ew {
-			return items[i].ew > items[j].ew
-		}
-		return items[i].pri < items[j].pri
-	})
-	out := make([]*RouteResult, len(items))
-	for i, it := range items {
-		out[i] = it.rr
-	}
+// prepareCandidates readies cached candidates for one selection: it copies
+// them (the cached pool is shared by every request and never mutated),
+// refreshes the latency / active-request snapshots the latency- and
+// load-aware strategies read, and demotes health=0 primaries.
+func (r *Resolver) prepareCandidates(ctx context.Context, candidates []RouteCandidate) []RouteCandidate {
+	out := make([]RouteCandidate, len(candidates))
+	copy(out, candidates)
+	r.refreshRouteMetrics(ctx, out)
+	r.demoteOnHealth(out)
 	return out
+}
+
+// refreshRouteMetrics updates each candidate's latency / active-request
+// snapshot in place. Both are Redis reads per provider, so they go through a
+// 2s per-provider cache: re-selecting on every cache hit costs at most one
+// burst per 2s per provider instead of two reads per candidate per request.
+// A single candidate has nothing to choose between and skips the reads.
+func (r *Resolver) refreshRouteMetrics(ctx context.Context, candidates []RouteCandidate) {
+	if (r.latencySvc == nil && r.activeTracker == nil) || len(candidates) < 2 {
+		return
+	}
+	now := time.Now()
+	// provider name -> candidate indexes waiting on a fresh snapshot
+	pending := make(map[string][]int)
+	for i, c := range candidates {
+		if v, ok := r.routeMetricsCache.Load(c.Provider.Name()); ok {
+			if m, ok := v.(*routeMetrics); ok && now.Before(m.expire) {
+				candidates[i].AvgLatencyMs, candidates[i].ActiveRequests = m.latency, m.active
+				continue
+			}
+		}
+		pending[c.Provider.Name()] = append(pending[c.Provider.Name()], i)
+	}
+	if len(pending) == 0 {
+		return
+	}
+	names := make([]string, 0, len(pending))
+	for name := range pending {
+		names = append(names, name)
+	}
+	fetched := make([]routeMetrics, len(names))
+	var wg sync.WaitGroup
+	for k, name := range names {
+		wg.Add(1)
+		go func(k int, name string) {
+			defer wg.Done()
+			if r.latencySvc != nil {
+				fetched[k].latency = r.latencySvc.GetAvgLatency(ctx, name)
+			}
+			if r.activeTracker != nil {
+				fetched[k].active = r.activeTracker.Get(ctx, name)
+			}
+		}(k, name)
+	}
+	wg.Wait()
+	expire := time.Now().Add(routeMetricsTTL)
+	for k, name := range names {
+		m := fetched[k]
+		m.expire = expire
+		r.routeMetricsCache.Store(name, &m)
+		for _, i := range pending[name] {
+			candidates[i].AvgLatencyMs, candidates[i].ActiveRequests = m.latency, m.active
+		}
+	}
+}
+
+// demoteOnHealth moves primaries whose cached health score is 0 into the
+// fallback pool for this selection only. Doing it here keeps the P4.4b
+// guarantee — a demoted route is never picked while a healthy one exists —
+// independent of whether the strategy was wired with a health scorer.
+func (r *Resolver) demoteOnHealth(candidates []RouteCandidate) {
+	if r.healthFn == nil || len(candidates) < 2 {
+		return
+	}
+	for i := range candidates {
+		if candidates[i].Weight > 0 && r.cachedHealthScore(candidates[i].Provider.Name(), candidates[i].ProviderModel) <= 0 {
+			candidates[i].Weight = 0
+		}
+	}
+}
+
+// applyStrategy orders candidates for ONE request: the strategy picks the
+// first route and arranges the rest (the remaining primaries, then the
+// fallback pool) — the same shape the uncached path has always produced. An
+// unregistered strategy (e.g. an overlay strategy under a community build)
+// falls back to weighted_random; with no strategy at all the candidates are
+// only split into that shape.
+func (r *Resolver) applyStrategy(ctx context.Context, candidates []RouteCandidate, name StrategyName) []*RouteResult {
+	strategy := r.strategies[name]
+	if strategy == nil {
+		strategy = r.strategies[StrategyWeightedRandom]
+	}
+	if strategy != nil {
+		_, ordered := strategy.Select(ctx, candidates)
+		return ordered
+	}
+	primaries, fallbacks := splitPrimariesFallbacks(candidates)
+	return append(candidatesToRouteResults(primaries), candidatesToRouteResults(fallbacks)...)
 }
 
 // cachedHealthScore returns the health score for (provider, model) from the

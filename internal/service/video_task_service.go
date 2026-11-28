@@ -42,7 +42,6 @@ type VideoSubmitParams struct {
 	OrgID           int64
 	APIKeyID        int64
 	TeamID          int64
-	Currency        string
 	PriceMultiplier float64
 	InputPrice      float64
 	Prompt          string
@@ -61,7 +60,6 @@ type VideoTaskState struct {
 	OrgID           int64
 	APIKeyID        int64
 	TeamID          int64
-	Currency        string
 	PriceMultiplier float64
 	InputPrice      float64
 	BudgetScopes    []BudgetScope
@@ -135,7 +133,6 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 			"org_id":           strconv.FormatInt(params.OrgID, 10),
 			"api_key_id":       strconv.FormatInt(params.APIKeyID, 10),
 			"team_id":          strconv.FormatInt(params.TeamID, 10),
-			"currency":         params.Currency,
 			"price_multiplier": strconv.FormatFloat(params.PriceMultiplier, 'f', -1, 64),
 			"input_price":      strconv.FormatFloat(params.InputPrice, 'f', -1, 64),
 			"model":            params.Model,
@@ -160,7 +157,6 @@ func (s *VideoTaskService) SubmitTask(ctx context.Context, params VideoSubmitPar
 				OrgID:           params.OrgID,
 				APIKeyID:        params.APIKeyID,
 				TeamID:          params.TeamID,
-				Currency:        params.Currency,
 				PriceMultiplier: params.PriceMultiplier,
 				InputPrice:      params.InputPrice,
 				BudgetScopes:    params.BudgetScopes,
@@ -296,7 +292,6 @@ func (s *VideoTaskService) getStoredState(ctx context.Context, gwTaskID string) 
 			OrgID:           orgID,
 			APIKeyID:        apiKeyID,
 			TeamID:          teamID,
-			Currency:        m["currency"],
 			PriceMultiplier: priceMultiplier,
 			InputPrice:      inputPrice,
 			BudgetScopes:    budgetScopes,
@@ -370,7 +365,6 @@ func (s *VideoTaskService) ensureBilled(ctx context.Context, gwTaskID string, st
 		OrgID:           state.OrgID,
 		APIKeyID:        state.APIKeyID,
 		TeamID:          state.TeamID,
-		Currency:        state.Currency,
 		PriceMultiplier: state.PriceMultiplier,
 		StatusCode:      200,
 		PrecomputedCost: cost,

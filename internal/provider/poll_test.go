@@ -105,6 +105,11 @@ func TestPollConfigFromExtra(t *testing.T) {
 		{"empty → defaults", ``, PollConfig{Timeout: 120 * time.Second, Interval: 3 * time.Second, MaxInterval: 5 * time.Second}},
 		{"valid values", `{"poll_timeout_seconds":300,"poll_interval_ms":2000,"poll_max_interval_ms":8000}`,
 			PollConfig{Timeout: 300 * time.Second, Interval: 2 * time.Second, MaxInterval: 8 * time.Second}},
+		// The admin form seeds untouched defaults as JSON STRINGS ("120" not
+		// 120) — the runtime read side must honor them, not discard the whole
+		// config (int-typed unmarshal fails on the first quoted value).
+		{"quoted-string values (admin form wire form)", `{"poll_timeout_seconds":"300","poll_interval_ms":"2000","poll_max_interval_ms":"8000"}`,
+			PollConfig{Timeout: 300 * time.Second, Interval: 2 * time.Second, MaxInterval: 8 * time.Second}},
 		{"timeout too low → default", `{"poll_timeout_seconds":5}`, PollConfig{Timeout: 120 * time.Second, Interval: 3 * time.Second, MaxInterval: 5 * time.Second}},
 		{"timeout too high → default", `{"poll_timeout_seconds":7200}`, PollConfig{Timeout: 120 * time.Second, Interval: 3 * time.Second, MaxInterval: 5 * time.Second}},
 		{"interval too low → default", `{"poll_interval_ms":100}`, PollConfig{Timeout: 120 * time.Second, Interval: 3 * time.Second, MaxInterval: 5 * time.Second}},

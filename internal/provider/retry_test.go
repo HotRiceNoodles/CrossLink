@@ -204,3 +204,25 @@ func TestBackoffDuration_CustomMaxBackoff(t *testing.T) {
 		t.Errorf("backoff %v exceeds custom max 3s", d)
 	}
 }
+
+// ClampRetryConfig is the single source of the retry bounds: the write-side
+// validation (router.ValidateModelExtensionConfig) reports the same limits.
+func TestClampRetryConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		in   RetryConfig
+		want RetryConfig
+	}{
+		{"within bounds is untouched", RetryConfig{NumRetries: 20, InitialMs: 60000, MaxBackoffMs: 300000}, RetryConfig{NumRetries: 20, InitialMs: 60000, MaxBackoffMs: 300000}},
+		{"over the bounds", RetryConfig{NumRetries: 60, InitialMs: 60001, MaxBackoffMs: 300001}, RetryConfig{NumRetries: RetryMaxNumRetries, InitialMs: RetryMaxInitialMs, MaxBackoffMs: RetryMaxBackoffMs}},
+		{"negative values clamp to zero", RetryConfig{NumRetries: -1, InitialMs: -5000, MaxBackoffMs: -1}, RetryConfig{}},
+		{"backoff type is carried through", RetryConfig{NumRetries: 2, BackoffType: "fixed"}, RetryConfig{NumRetries: 2, BackoffType: "fixed"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClampRetryConfig(tc.in); got != tc.want {
+				t.Errorf("ClampRetryConfig(%+v) = %+v, want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

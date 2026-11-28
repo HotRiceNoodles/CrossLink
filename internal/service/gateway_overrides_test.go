@@ -70,7 +70,7 @@ func TestApplyRouteRequestOverrides(t *testing.T) {
 		t.Parallel()
 		req := &domain.OpenAIRequest{Temperature: f64(0.9)}
 		route := &router.RouteResult{RequestOverrides: map[string]any{"temperature": 0.2}}
-		applyRouteRequestOverrides(req, route)
+		ApplyRouteRequestOverrides(req, route)
 		require.NotNil(t, req.Temperature)
 		assert.Equal(t, 0.2, *req.Temperature)
 	})
@@ -80,7 +80,7 @@ func TestApplyRouteRequestOverrides(t *testing.T) {
 		req := &domain.OpenAIRequest{Extensions: &domain.ProtocolExtensions{
 			Params: map[string]json.RawMessage{"dialect.enable_thinking": json.RawMessage(`true`)},
 		}}
-		applyRouteRequestOverrides(req, &router.RouteResult{})
+		ApplyRouteRequestOverrides(req, &router.RouteResult{})
 		assert.Empty(t, req.Extensions.Params, "no opt-in → dialect param must not ride to the upstream")
 	})
 
@@ -89,14 +89,14 @@ func TestApplyRouteRequestOverrides(t *testing.T) {
 		req := &domain.OpenAIRequest{Extensions: &domain.ProtocolExtensions{
 			Params: map[string]json.RawMessage{"dialect.enable_thinking": json.RawMessage(`false`)},
 		}}
-		applyRouteRequestOverrides(req, &router.RouteResult{AllowedExtensions: []string{"enable_thinking"}})
+		ApplyRouteRequestOverrides(req, &router.RouteResult{AllowedExtensions: []string{"enable_thinking"}})
 		assert.Equal(t, json.RawMessage(`false`), req.Extensions.Params["dialect.enable_thinking"])
 	})
 
 	t.Run("override implies opt-in and injects", func(t *testing.T) {
 		t.Parallel()
 		req := &domain.OpenAIRequest{}
-		applyRouteRequestOverrides(req, &router.RouteResult{RequestOverrides: map[string]any{"enable_thinking": true}})
+		ApplyRouteRequestOverrides(req, &router.RouteResult{RequestOverrides: map[string]any{"enable_thinking": true}})
 		require.NotNil(t, req.Extensions)
 		assert.Equal(t, json.RawMessage(`true`), req.Extensions.Params["dialect.enable_thinking"])
 	})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -64,7 +65,6 @@ type RouteCandidate struct {
 	ProviderRow    *model.Provider
 	InputPrice     float64
 	OutputPrice    float64
-	Currency       string
 	Weight         int
 	Priority       int
 	ModelID        int64
@@ -77,6 +77,10 @@ type RouteCandidate struct {
 	FallbackCfg    FallbackConfig
 	ExtraConfig    json.RawMessage
 	MaxContext     *int
+	// Modality: endpoint family this mapping declares (图片方案 P3, design
+	// §5.2). "" = unclassified, kept by every endpoint family (zero-break
+	// legacy semantics); explicit values gate below.
+	Modality string
 	// M3.2/P3 model-level extension controls (see RouteResult).
 	RequestOverrides  map[string]any
 	AllowedExtensions []string
@@ -104,7 +108,6 @@ func candidateToRouteResult(c RouteCandidate) *RouteResult {
 		ProviderModel:     c.ProviderModel,
 		InputPrice:        c.InputPrice,
 		OutputPrice:       c.OutputPrice,
-		Currency:          c.Currency,
 		ProviderRow:       c.ProviderRow,
 		RetryConfig:       c.RetryConfig,
 		FallbackModels:    c.FallbackModels,
@@ -113,6 +116,7 @@ func candidateToRouteResult(c RouteCandidate) *RouteResult {
 		Weight:            c.Weight,
 		Priority:          c.Priority,
 		MaxContext:        c.MaxContext,
+		Modality:          c.Modality,
 		RequestOverrides:  c.RequestOverrides,
 		AllowedExtensions: c.AllowedExtensions,
 	}
@@ -139,11 +143,11 @@ var DialectExtensionFields = map[string]bool{
 	"output_config": true,
 }
 
-// ValidateModelExtensionConfig validates the request_overrides and
-// allowed_extensions keys of a model mapping's extra_config BEFORE the row is
-// persisted (M3.2 "配置写入和实际执行双重校验" — write half). Values are
-// shape-checked against the allow-table types; the execution half re-checks
-// at dispatch.
+// ValidateModelExtensionConfig validates the request_overrides,
+// allowed_extensions, Responses billing and in-route retry keys of a model
+// mapping's extra_config BEFORE the row is persisted (M3.2 "配置写入和实际执行
+// 双重校验" — write half). Values are shape-checked against the allow-table
+// types; the execution half re-checks at dispatch.
 func ValidateModelExtensionConfig(raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return nil
@@ -188,6 +192,62 @@ func ValidateModelExtensionConfig(raw json.RawMessage) error {
 		if price < 0 {
 			return fmt.Errorf("tool_prices: %q must be >= 0 (got %v)", tool, price)
 		}
+	}
+	return validateRetryConfig(raw)
+}
+
+// validateRetryConfig range-checks the flat in-route retry keys of a mapping's
+// extra_config (read by parseExtraConfig): num_retries / initial_ms /
+// max_backoff_ms must be integers within the bounds ClampRetryConfig enforces
+// on read, and backoff_type one of the implemented schedules.
+//
+// Decoded as `any` on purpose: a typed struct would turn a wrong-typed value
+// (e.g. "3") into an unmarshal error, and the "not this validator's lane"
+// return in the caller would let it through as a silently-ignored key.
+func validateRetryConfig(raw json.RawMessage) error {
+	var retry struct {
+		NumRetries   any `json:"num_retries"`
+		BackoffType  any `json:"backoff_type"`
+		InitialMs    any `json:"initial_ms"`
+		MaxBackoffMs any `json:"max_backoff_ms"`
+	}
+	if err := json.Unmarshal(raw, &retry); err != nil {
+		return nil // unreachable with `any` fields; same lane rule as the caller
+	}
+	for _, k := range []struct {
+		name  string
+		value any
+		max   int
+	}{
+		{"num_retries", retry.NumRetries, provider.RetryMaxNumRetries},
+		{"initial_ms", retry.InitialMs, provider.RetryMaxInitialMs},
+		{"max_backoff_ms", retry.MaxBackoffMs, provider.RetryMaxBackoffMs},
+	} {
+		if k.value == nil {
+			continue // absent or null: nothing configured
+		}
+		n, ok := k.value.(float64)
+		if !ok || n != math.Trunc(n) {
+			return fmt.Errorf("retry: %s must be an integer (got %v)", k.name, k.value)
+		}
+		if n < 0 || n > float64(k.max) {
+			return fmt.Errorf("retry: %s must be within [0, %d] (got %v)", k.name, k.max, k.value)
+		}
+	}
+	switch t := retry.BackoffType.(type) {
+	case nil:
+	case string:
+		if t == "" {
+			break // empty selects the default schedule
+		}
+		for _, known := range provider.RetryBackoffTypes {
+			if t == known {
+				return nil
+			}
+		}
+		return fmt.Errorf("retry: backoff_type %q is not a supported schedule (allowed: %s)", t, strings.Join(provider.RetryBackoffTypes, ", "))
+	default:
+		return fmt.Errorf("retry: backoff_type must be a string (got %v)", t)
 	}
 	return nil
 }
@@ -279,6 +339,16 @@ func parseExtraConfig(raw json.RawMessage) extraConfig {
 	if cfg.CanaryPercent < 0 || cfg.CanaryPercent > 100 {
 		cfg.CanaryPercent = 0
 	}
+	// Same bounds on read as on write: a row that predates the validation, or
+	// was edited by hand, must not run unbounded retries or a defeated backoff
+	// (a negative initial_ms makes every backoff timer fire immediately).
+	rc := provider.ClampRetryConfig(provider.RetryConfig{
+		NumRetries:   cfg.NumRetries,
+		BackoffType:  cfg.BackoffType,
+		InitialMs:    cfg.InitialMs,
+		MaxBackoffMs: cfg.MaxBackoffMs,
+	})
+	cfg.NumRetries, cfg.BackoffType, cfg.InitialMs, cfg.MaxBackoffMs = rc.NumRetries, rc.BackoffType, rc.InitialMs, rc.MaxBackoffMs
 	return cfg
 }
 

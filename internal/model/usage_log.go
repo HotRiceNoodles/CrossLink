@@ -46,15 +46,18 @@ type UsageLog struct {
 	// Attempts is the fallback timeline [{provider, model, error_type,
 	// upstream_status, latency_ms, success, persistent}]; NULL when the first
 	// attempt succeeded cleanly (error observability L2).
-	Attempts           datatypes.JSON `gorm:"default:null" json:"attempts,omitempty"`
-	Currency           string         `gorm:"size:3;not null;default:'CNY'" json:"currency"`
-	TeamID             *int64         `gorm:"index" json:"team_id"`
-	UserMessage        *string        `gorm:"type:text" json:"user_message,omitempty"`
-	ModelResponse      *string        `gorm:"type:text" json:"model_response,omitempty"`
-	FallbackCount      int            `gorm:"not null;default:0" json:"fallback_count"`
-	RetryCount         int            `gorm:"not null;default:0" json:"retry_count"`
-	GuardrailTriggered bool           `gorm:"not null;default:false" json:"guardrail_triggered"`
-	GuardrailRule      string         `gorm:"size:255" json:"guardrail_rule,omitempty"`
+	Attempts datatypes.JSON `gorm:"default:null" json:"attempts,omitempty"`
+	// Currency is row-level lineage only (single-currency design): it always
+	// equals the deployment's write-once billing_currency, written explicitly
+	// by the usage pipeline so exported rows stay self-describing.
+	Currency           string  `gorm:"size:3;not null;default:'CNY'" json:"currency"`
+	TeamID             *int64  `gorm:"index" json:"team_id"`
+	UserMessage        *string `gorm:"type:text" json:"user_message,omitempty"`
+	ModelResponse      *string `gorm:"type:text" json:"model_response,omitempty"`
+	FallbackCount      int     `gorm:"not null;default:0" json:"fallback_count"`
+	RetryCount         int     `gorm:"not null;default:0" json:"retry_count"`
+	GuardrailTriggered bool    `gorm:"not null;default:false" json:"guardrail_triggered"`
+	GuardrailRule      string  `gorm:"size:255" json:"guardrail_rule,omitempty"`
 	// GuardrailTruncated marks partial-coverage checks: content exceeded the
 	// 500K-rune inspection limit and only its prefix was inspected.
 	GuardrailTruncated bool           `gorm:"not null;default:false" json:"guardrail_truncated"`
@@ -95,10 +98,3 @@ type UsageLog struct {
 }
 
 func (UsageLog) TableName() string { return "usage_logs" }
-
-func ValidCurrency(c string) string {
-	if c == "USD" {
-		return "USD"
-	}
-	return "CNY"
-}

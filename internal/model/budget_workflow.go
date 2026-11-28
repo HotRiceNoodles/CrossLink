@@ -14,7 +14,6 @@ type BudgetRecommendation struct {
 	GrowthRate        float64   `gorm:"type:decimal(8,4);not null;default:0" json:"growth_rate"`
 	Confidence        float64   `gorm:"type:decimal(5,2);not null;default:0" json:"confidence"`
 	Reasoning         string    `gorm:"type:text;not null;default:''" json:"reasoning"`
-	Currency          string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	CreatedAt         time.Time `gorm:"not null" json:"created_at"`
 }
 

@@ -24,6 +24,17 @@ type ImageProvider interface {
 	GenerateImage(ctx context.Context, req *domain.ImageRequest, apiKey string) (*domain.ImageResponse, error)
 }
 
+// ImageEditorProvider serves /v1/images/edits (图片方案 P2, design §4.1 评审
+// F1). OPTIONAL and deliberately separate from ImageProvider: adding the
+// method there would break every existing implementation at once. Type-asserted
+// at the dispatch site (same pattern as ResponsesProvider) — adapters whose
+// upstream has no edit API simply don't serve the endpoint, and the handler
+// rejects with a clear error naming the requirement.
+type ImageEditorProvider interface {
+	Provider
+	EditImage(ctx context.Context, req *domain.ImageEditRequest, apiKey string) (*domain.ImageResponse, error)
+}
+
 type VideoProvider interface {
 	Provider
 	SubmitVideoTask(ctx context.Context, req *domain.VideoRequest, apiKey string) (*domain.VideoTask, error)

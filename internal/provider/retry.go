@@ -15,6 +15,40 @@ type RetryConfig struct {
 	MaxBackoffMs int    `json:"max_backoff_ms"` // default 60000
 }
 
+// Per-mapping retry bounds. Enforced on write by
+// router.ValidateModelExtensionConfig and applied on read by ClampRetryConfig,
+// so a row written before the validation existed — or edited by hand — can
+// never run unbounded retries or a defeated backoff.
+const (
+	RetryMaxNumRetries = 20
+	RetryMaxInitialMs  = 60000
+	RetryMaxBackoffMs  = 300000
+)
+
+// RetryBackoffTypes lists the schedules backoffDuration implements; an empty
+// backoff_type selects the default (exponential).
+var RetryBackoffTypes = []string{"exponential", "fixed", "linear"}
+
+// ClampRetryConfig bounds a decoded per-mapping retry config. A zero
+// initial_ms / max_backoff_ms is left as zero: backoffDuration reads it as
+// "use the default".
+func ClampRetryConfig(cfg RetryConfig) RetryConfig {
+	cfg.NumRetries = clampInt(cfg.NumRetries, 0, RetryMaxNumRetries)
+	cfg.InitialMs = clampInt(cfg.InitialMs, 0, RetryMaxInitialMs)
+	cfg.MaxBackoffMs = clampInt(cfg.MaxBackoffMs, 0, RetryMaxBackoffMs)
+	return cfg
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 func ParseRetryConfig(extraConfig json.RawMessage) RetryConfig {
 	if len(extraConfig) == 0 {
 		return RetryConfig{}
@@ -28,30 +62,12 @@ func ParseRetryConfig(extraConfig json.RawMessage) RetryConfig {
 	if json.Unmarshal(extraConfig, &cfg) != nil {
 		return RetryConfig{}
 	}
-	if cfg.NumRetries < 0 {
-		cfg.NumRetries = 0
-	}
-	if cfg.NumRetries > 20 {
-		cfg.NumRetries = 20
-	}
-	if cfg.InitialMs < 0 {
-		cfg.InitialMs = 0
-	}
-	if cfg.InitialMs > 60000 {
-		cfg.InitialMs = 60000
-	}
-	if cfg.MaxBackoffMs < 0 {
-		cfg.MaxBackoffMs = 0
-	}
-	if cfg.MaxBackoffMs > 300000 {
-		cfg.MaxBackoffMs = 300000
-	}
-	return RetryConfig{
+	return ClampRetryConfig(RetryConfig{
 		NumRetries:   cfg.NumRetries,
 		BackoffType:  cfg.BackoffType,
 		InitialMs:    cfg.InitialMs,
 		MaxBackoffMs: cfg.MaxBackoffMs,
-	}
+	})
 }
 
 type RetryResult struct {

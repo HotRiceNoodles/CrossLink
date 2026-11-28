@@ -28,7 +28,6 @@ func buildResolver(numProviders int) *Resolver {
 			Status:          1,
 			InputPrice:      0.03,
 			OutputPrice:     0.06,
-			Currency:        "USD",
 			RoutingStrategy: "weighted_random",
 			Provider:        model.Provider{Name: name, Status: 1},
 		}

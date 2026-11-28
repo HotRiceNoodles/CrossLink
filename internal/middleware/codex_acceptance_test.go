@@ -29,7 +29,7 @@ func (f codexAcceptanceCache) Get(context.Context, string) (*service.CacheEntry,
 	// legacy-entry bypass; a priced entry reaches the guardrail branch.
 	return &service.CacheEntry{Body: f.body, Priced: true}, true
 }
-func (f codexAcceptanceCache) Set(context.Context, string, string, string, []byte, time.Duration, float64, float64, string) error {
+func (f codexAcceptanceCache) Set(context.Context, string, string, string, []byte, time.Duration, float64, float64) error {
 	return nil
 }
 

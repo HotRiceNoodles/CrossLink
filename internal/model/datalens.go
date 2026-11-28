@@ -18,7 +18,6 @@ type DataLensHourlyMetric struct {
 	RouteType             *string   `gorm:"size:16" json:"route_type"`
 	StatusGroup           int       `gorm:"not null;default:200" json:"status_group"`
 	HourBucket            time.Time `gorm:"not null;index:idx_dhm_org_hour" json:"hour_bucket"`
-	Currency              string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	RequestCount          int       `gorm:"not null;default:0" json:"request_count"`
 	InputTokens           int64     `gorm:"not null;default:0" json:"input_tokens"`
 	OutputTokens          int64     `gorm:"not null;default:0" json:"output_tokens"`
@@ -76,7 +75,6 @@ type DataLensDailyMetric struct {
 	RouteType             *string   `gorm:"size:16" json:"route_type"`
 	StatusGroup           int       `gorm:"not null;default:200" json:"status_group"`
 	DayBucket             time.Time `gorm:"not null;type:date" json:"day_bucket"`
-	Currency              string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	RequestCount          int       `gorm:"not null;default:0" json:"request_count"`
 	InputTokens           int64     `gorm:"not null;default:0" json:"input_tokens"`
 	OutputTokens          int64     `gorm:"not null;default:0" json:"output_tokens"`

@@ -28,7 +28,6 @@ type BudgetSnapshot struct {
 	PeriodKey  string    `gorm:"size:16;not null;uniqueIndex:idx_snapshots_unique" json:"period_key"`
 	Spent      float64   `gorm:"type:decimal(16,8);not null;default:0" json:"spent"`
 	Budget     float64   `gorm:"type:decimal(12,4);not null;default:0" json:"budget"`
-	Currency   string    `gorm:"size:3;not null;default:'CNY'" json:"currency"`
 	CreatedAt  time.Time `gorm:"not null" json:"created_at"`
 }
 

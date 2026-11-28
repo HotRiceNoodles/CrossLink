@@ -20,7 +20,7 @@ import (
 //
 // 指标命名（§5.5 规范表）：
 //
-//	A 类（hour）: request_rate / tokens:in / tokens:out / tokens:reasoning / cost:CNY / cost:USD
+//	A 类（hour）: request_rate / tokens:in / tokens:out / tokens:reasoning / cost
 //	C 类（hour）: err:gw / err:up / gr:trigger（value_num=分子，value_den=该桶请求数）
 //	B 类（day） : latency / first_token（value_hist=log₂ 直方图，D11）
 //	N 类（hour）: model:{name} / grule:{name}（计数，供新颖度与展示）
@@ -33,8 +33,7 @@ const (
 	MetricTokensIn    = "tokens:in"
 	MetricTokensOut   = "tokens:out"
 	MetricTokensRea   = "tokens:reasoning"
-	MetricCostCNY     = "cost:CNY"
-	MetricCostUSD     = "cost:USD"
+	MetricCost        = "cost"
 	MetricErrGw       = "err:gw"
 	MetricErrUp       = "err:up"
 	MetricGrTrigger   = "gr:trigger"
@@ -69,8 +68,7 @@ type entityAgg struct {
 	TokIn    int64
 	TokOut   int64
 	TokRea   int64
-	CostCNY  float64
-	CostUSD  float64
+	Cost     float64
 	ErrGw    int64
 	ErrUp    int64
 	GrTrig   int64
@@ -90,8 +88,7 @@ SELECT %[1]s AS entity_id,
        COALESCE(SUM(input_tokens), 0)      AS tok_in,
        COALESCE(SUM(output_tokens), 0)     AS tok_out,
        COALESCE(SUM(reasoning_tokens), 0)  AS tok_rea,
-       COALESCE(SUM(CASE WHEN currency = 'CNY' THEN billable_cost ELSE 0 END), 0) AS cost_cny,
-       COALESCE(SUM(CASE WHEN currency = 'USD' THEN billable_cost ELSE 0 END), 0) AS cost_usd,
+       COALESCE(SUM(billable_cost), 0) AS cost,
        SUM(CASE WHEN status_code >= 400 AND upstream_status IS NULL THEN 1 ELSE 0 END)      AS err_gw,
        SUM(CASE WHEN status_code >= 400 AND upstream_status IS NOT NULL THEN 1 ELSE 0 END)  AS err_up,
        SUM(CASE WHEN guardrail_triggered THEN 1 ELSE 0 END)                                  AS gr_trig
@@ -126,8 +123,7 @@ func (a *Aggregator) ReaggregateHour(ctx context.Context, hourStart time.Time) (
 				rl(et, g.EntityID, MetricTokensIn, "hour", hour, num(float64(g.TokIn)), nil, g.Requests),
 				rl(et, g.EntityID, MetricTokensOut, "hour", hour, num(float64(g.TokOut)), nil, g.Requests),
 				rl(et, g.EntityID, MetricTokensRea, "hour", hour, num(float64(g.TokRea)), nil, g.Requests),
-				rl(et, g.EntityID, MetricCostCNY, "hour", hour, num(g.CostCNY), nil, g.Requests),
-				rl(et, g.EntityID, MetricCostUSD, "hour", hour, num(g.CostUSD), nil, g.Requests),
+				rl(et, g.EntityID, MetricCost, "hour", hour, num(g.Cost), nil, g.Requests),
 				rl(et, g.EntityID, MetricErrGw, "hour", hour, num(float64(g.ErrGw)), &req, g.Requests),
 				rl(et, g.EntityID, MetricErrUp, "hour", hour, num(float64(g.ErrUp)), &req, g.Requests),
 				rl(et, g.EntityID, MetricGrTrigger, "hour", hour, num(float64(g.GrTrig)), &req, g.Requests),
@@ -604,7 +600,7 @@ func isRatioMetric(metric string) bool {
 }
 
 func isCostMetric(metric string) bool {
-	return metric == MetricCostCNY || metric == MetricCostUSD
+	return metric == MetricCost
 }
 
 // nearestRank 最近秩分位数（经验分布，28 观测下 P90≈第 3 大值——D12）。

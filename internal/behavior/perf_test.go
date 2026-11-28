@@ -234,7 +234,7 @@ func TestBehaviorPerfSpecScale(t *testing.T) {
 	} else {
 		// ── 快模式：历史 rollups 直插 + 近 48h usage ──
 		t0 := time.Now()
-		coreMetrics := []string{MetricRequestRate, MetricTokensIn, MetricTokensOut, MetricTokensRea, MetricCostCNY, MetricErrGw, MetricErrUp, MetricGrTrigger}
+		coreMetrics := []string{MetricRequestRate, MetricTokensIn, MetricTokensOut, MetricTokensRea, MetricCost, MetricErrGw, MetricErrUp, MetricGrTrigger}
 		type rrow struct {
 			et  string
 			id  int64

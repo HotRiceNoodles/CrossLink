@@ -9,7 +9,7 @@ import (
 	"github.com/crosslink/internal/router"
 )
 
-// applyRouteRequestOverrides is the EXECUTION half of the M3.2 model-level
+// ApplyRouteRequestOverrides is the EXECUTION half of the M3.2 model-level
 // extension controls (the write half is router.ValidateModelExtensionConfig
 // at config time — double validation per the plan). It runs inside the
 // per-candidate closure, on the CLONED request + envelope, so two candidates
@@ -21,7 +21,7 @@ import (
 // Dialect gating: a client-carried dialect param (envelope Params) is only
 // forwarded when the route opted in via allowed_extensions; an admin
 // request_overrides entry implies opt-in for that param.
-func applyRouteRequestOverrides(req *domain.OpenAIRequest, route *router.RouteResult) {
+func ApplyRouteRequestOverrides(req *domain.OpenAIRequest, route *router.RouteResult) {
 	if route == nil {
 		return
 	}

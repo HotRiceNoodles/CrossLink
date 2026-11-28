@@ -480,6 +480,88 @@ func (p *OpenAICompatibleProvider) GenerateImage(ctx context.Context, req *domai
 	return &result, nil
 }
 
+// EditImage forwards /v1/images/edits (图片方案 P2): the inbound multipart is
+// rebuilt part-for-part — image and mask as file parts, everything else as form
+// fields — because the domain model carries bytes, not a re-parseable request.
+// Part Content-Type is the multipart writer's default (octet-stream); upstreams
+// sniff image content, as they do for hand-rolled SDK clients.
+func (p *OpenAICompatibleProvider) EditImage(ctx context.Context, req *domain.ImageEditRequest, apiKey string) (*domain.ImageResponse, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	imageName := req.ImageFilename
+	if imageName == "" {
+		imageName = "image.png"
+	}
+	if err := writeMultipartFile(w, "image", imageName, req.Image); err != nil {
+		return nil, fmt.Errorf("build image part: %w", err)
+	}
+	if len(req.Mask) > 0 {
+		maskName := req.MaskFilename
+		if maskName == "" {
+			maskName = "mask.png"
+		}
+		if err := writeMultipartFile(w, "mask", maskName, req.Mask); err != nil {
+			return nil, fmt.Errorf("build mask part: %w", err)
+		}
+	}
+	for k, v := range map[string]string{
+		"prompt":          req.Prompt,
+		"model":           req.Model,
+		"n":               strconv.Itoa(req.N),
+		"size":            req.Size,
+		"quality":         req.Quality,
+		"response_format": req.ResponseFormat,
+		"user":            req.User,
+	} {
+		if v == "" || (k == "n" && req.N <= 0) {
+			continue // absent on our side = absent on the wire
+		}
+		if err := w.WriteField(k, v); err != nil {
+			return nil, fmt.Errorf("build field %s: %w", k, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/images/edits", &buf)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", w.FormDataContentType())
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseProviderError(resp)
+	}
+	var result domain.ImageResponse
+	if err := decodeBoundedJSON(resp, &result, maxResponseRead, "provider response"); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &result, nil
+}
+
+// writeMultipartFile appends one file part to a multipart writer.
+func writeMultipartFile(w *multipart.Writer, field, filename string, data []byte) error {
+	fw, err := w.CreateFormFile(field, filename)
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write(data)
+	return err
+}
+
+// Compile-time assertions: the OpenAI-compatible adapter serves every image
+// modality surface (generation and editing).
+var (
+	_ ImageProvider       = (*OpenAICompatibleProvider)(nil)
+	_ ImageEditorProvider = (*OpenAICompatibleProvider)(nil)
+)
+
 func (p *OpenAICompatibleProvider) SubmitVideoTask(ctx context.Context, req *domain.VideoRequest, apiKey string) (*domain.VideoTask, error) {
 	u := p.baseURL + "/videos"
 

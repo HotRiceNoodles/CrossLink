@@ -11,6 +11,7 @@ import (
 
 	"github.com/crosslink/internal/dialect"
 	"github.com/crosslink/internal/model"
+	"github.com/crosslink/internal/settings"
 	"gorm.io/gorm"
 )
 
@@ -157,7 +158,6 @@ var queryableDimensions = map[string]bool{
 	"key":      true,
 	"provider": true,
 	"status":   true,
-	"currency": true,
 	"tool":     true, // M3b: routes to datalens_tool_daily_metrics
 }
 
@@ -170,7 +170,6 @@ var dimensionColumnMap = map[string]string{
 	"status":     "status_group",
 	"error_type": "error_type",
 	"agent":      "agent_type",
-	"currency":   "currency",
 	"tool":       "tool_name",
 }
 
@@ -207,7 +206,7 @@ func initMetricDefs() {
 			Format: "number",
 		},
 		"cost": {
-			Expr:   "SUM(CASE WHEN currency = '{currency}' THEN total_cost ELSE 0 END)",
+			Expr:   "SUM(total_cost)",
 			IsCost: true,
 			Label:  "Cost",
 			Format: "currency",
@@ -243,13 +242,13 @@ func initMetricDefs() {
 			Format: "ms",
 		},
 		"cost_per_1k": {
-			Expr:   "CASE WHEN SUM(input_tokens + output_tokens) > 0 THEN SUM(CASE WHEN currency = '{currency}' THEN total_cost ELSE 0 END) / SUM(input_tokens + output_tokens) * 1000 ELSE 0 END",
+			Expr:   "CASE WHEN SUM(input_tokens + output_tokens) > 0 THEN SUM(total_cost) / SUM(input_tokens + output_tokens) * 1000 ELSE 0 END",
 			IsCost: true,
 			Label:  "Cost per 1K Tokens",
 			Format: "currency",
 		},
 		"cost_per_request": {
-			Expr:   "CASE WHEN SUM(request_count) > 0 THEN SUM(CASE WHEN currency = '{currency}' THEN total_cost ELSE 0 END) / SUM(request_count) ELSE 0 END",
+			Expr:   "CASE WHEN SUM(request_count) > 0 THEN SUM(total_cost) / SUM(request_count) ELSE 0 END",
 			IsCost: true,
 			Label:  "Cost per Request",
 			Format: "currency",
@@ -567,46 +566,17 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		bucketCol = "hour_bucket"
 	}
 
-	// 3b. Resolve aggregation level early - needed by primaryCurrency and WHERE.
+	// 3b. Resolve aggregation level early - needed by WHERE.
 	aggLevel := resolveAggLevel(params.Dimensions)
 	slog.Info("datalens query: resolved agg level", "aggLevel", aggLevel, "table", table,
 		"dimensions", params.Dimensions, "timeMs", time.Since(start).Milliseconds())
 
-	// 4. Determine primary currency for conditional cost aggregation.
-	// Only needed when at least one requested metric uses the {currency} placeholder.
+	// 4. Currency resolution removed (single-currency design): every row is
+	// denominated in the deployment's fixed billing_currency, cost metrics
+	// aggregate plain SUM(total_cost), and the meta echoes the platform
+	// currency for display.
 	defs := getMetricDefs()
-	needsCurrency := false
-	for _, m := range params.Metrics {
-		if d, ok := defs[m]; ok && d.IsCost {
-			needsCurrency = true
-			break
-		}
-	}
-	primaryCurrency := ""
-	if needsCurrency {
-		hasCurrencyFilter := false
-		for _, f := range params.Filters {
-			if f.Dimension == "currency" {
-				hasCurrencyFilter = true
-				if str, ok := f.Value.(string); ok {
-					primaryCurrency = str
-				}
-				break
-			}
-		}
-		if !hasCurrencyFilter {
-			cur, err := s.primaryCurrency(queryCtx, params.OrgID, table, bucketCol, aggLevel, rangeStart, rangeEnd)
-			if err != nil {
-				return nil, fmt.Errorf("detect primary currency: %w", err)
-			}
-			primaryCurrency = cur
-		}
-	}
-	if primaryCurrency == "" {
-		primaryCurrency = "CNY"
-	}
-	slog.Info("datalens query: currency resolved", "currency", primaryCurrency,
-		"needsCurrency", needsCurrency, "timeMs", time.Since(start).Milliseconds())
+	primaryCurrency := settings.PlatformCurrency()
 
 	// 5. Build SELECT columns.
 	var selectCols []string
@@ -648,8 +618,7 @@ func (s *PgMetricsStore) Query(ctx context.Context, params QueryParams) (*QueryR
 		if !ok {
 			return nil, fmt.Errorf("unknown metric: %s", m)
 		}
-		expr := strings.ReplaceAll(def.Expr, "{currency}", primaryCurrency)
-		selectCols = append(selectCols, expr+" AS "+m)
+		selectCols = append(selectCols, def.Expr+" AS "+m)
 		columnMeta = append(columnMeta, ColumnMeta{
 			Key: m, Label: def.Label, Type: "metric", Format: def.Format,
 		})
@@ -830,33 +799,6 @@ func (s *PgMetricsStore) GetAggStatus(ctx context.Context) (*AggregationStatus, 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-// primaryCurrency returns the currency with the highest total_cost in the given
-// time range, used for conditional cost aggregation when no currency filter
-// is specified by the caller.
-func (s *PgMetricsStore) primaryCurrency(ctx context.Context, orgID int64, table, bucketCol, aggLevel string, start, end time.Time) (string, error) {
-	var result struct {
-		Currency string
-	}
-	// orgID == 0 (super admin) picks the primary currency across all orgs.
-	orgCond := ""
-	var orgArgs []any
-	if orgID > 0 {
-		orgCond = "org_id = ? AND "
-		orgArgs = append(orgArgs, orgID)
-	}
-	err := s.db.WithContext(ctx).Raw(
-		fmt.Sprintf(
-			"SELECT currency FROM %s WHERE "+orgCond+"agg_level = ? AND %s >= ? AND %s < ? GROUP BY currency ORDER BY SUM(total_cost) DESC LIMIT 1",
-			table, bucketCol, bucketCol,
-		),
-		append(orgArgs, aggLevel, start, end)...,
-	).Scan(&result).Error
-	if err != nil {
-		return "", err
-	}
-	return result.Currency, nil
-}
 
 // resolveDimensionNames replaces numeric IDs with display names for
 // team_id, api_key_id, and provider_id columns.
@@ -1047,7 +989,6 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 		if !ok {
 			return fmt.Errorf("comparison base metric %q not found", comp.baseMetric)
 		}
-		baseExpr := strings.ReplaceAll(baseDef.Expr, "{currency}", primaryCurrency)
 
 		var prevSelectCols []string
 		var prevGroupCols []string
@@ -1061,7 +1002,7 @@ func (s *PgMetricsStore) computeComparisonMetrics(
 			prevSelectCols = append(prevSelectCols, col)
 			prevGroupCols = append(prevGroupCols, col)
 		}
-		prevSelectCols = append(prevSelectCols, baseExpr+" AS "+comp.baseMetric)
+		prevSelectCols = append(prevSelectCols, baseDef.Expr+" AS "+comp.baseMetric)
 
 		// Build WHERE for previous period — clone conditions, replace time bounds.
 		var prevWhereConds []string
@@ -1301,8 +1242,6 @@ func dimLabel(dim string) string {
 		return "Error Type"
 	case "agent":
 		return "Agent"
-	case "currency":
-		return "Currency"
 	case "tool":
 		return "Tool"
 	default:

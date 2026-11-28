@@ -72,6 +72,11 @@ func TestReaggregateHourAndBaselines(t *testing.T) {
 	if r := getRl(EntityTypeKey, 1, MetricRequestRate); r.ValueNum == nil || *r.ValueNum != 10 {
 		t.Errorf("key1 request_rate = %v, want 10", r.ValueNum)
 	}
+	// 单币种设计：cost 是单一指标（不再按 cost:CNY/cost:USD 拆分），
+	// 直接求和 billable_cost——key1 十行 × 1.5 = 15。
+	if r := getRl(EntityTypeKey, 1, MetricCost); r.ValueNum == nil || *r.ValueNum != 15 {
+		t.Errorf("key1 cost = %v, want 15 (single merged cost metric)", r.ValueNum)
+	}
 	// org10 = 13 条。
 	if r := getRl(EntityTypeOrg, 10, MetricRequestRate); r.ValueNum == nil || *r.ValueNum != 13 {
 		t.Errorf("org request_rate = %v, want 13", r.ValueNum)
@@ -115,10 +120,10 @@ func TestReaggregateHourAndBaselines(t *testing.T) {
 	}
 	var rlCount int64
 	db.Model(&model.BehaviorRollup{}).Where("bucket_ts=?", hour).Count(&rlCount)
-	// key1: 9 指标 + 2 model + 1 grule = 12；key2: 9 + 1 model = 10；
-	// org10: 9 指标 + model:gpt-x + model:gpt-y + grule:rag-kb = 12。
-	if rlCount != 34 {
-		t.Errorf("rollup rows after re-run = %d, want 34 (idempotent)", rlCount)
+	// key1: 8 指标（单币种设计后 cost 合并为单一指标）+ 2 model + 1 grule = 11；
+	// key2: 8 + 1 model = 9；org10: 8 指标 + model:gpt-x + model:gpt-y + grule:rag-kb = 11。
+	if rlCount != 31 {
+		t.Errorf("rollup rows after re-run = %d, want 31 (idempotent)", rlCount)
 	}
 
 	// B 类日直方图：key1 的 10 行 latency（150-208ms）。

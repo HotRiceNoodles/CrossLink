@@ -10,6 +10,7 @@ import (
 	"github.com/crosslink/internal/middleware"
 	"github.com/crosslink/internal/model"
 	"github.com/crosslink/internal/provider"
+	"github.com/crosslink/internal/settings"
 	"github.com/gin-gonic/gin"
 	sqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -37,7 +38,7 @@ func setupOnboardingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Provider{}, &model.ProviderModel{}, &model.APIKey{}, &model.APIKeyHash{}))
+	require.NoError(t, db.AutoMigrate(&model.Provider{}, &model.ProviderModel{}, &model.APIKey{}, &model.APIKeyHash{}, &model.SystemSetting{}))
 	return db
 }
 
@@ -153,7 +154,8 @@ func TestOnboarding_Commit_HappyPath(t *testing.T) {
 			{"model_name": "gpt-4o", "provider_model": "gpt-4o"},
 			{"model_name": "gpt-4o-mini", "provider_model": "gpt-4o-mini"},
 		},
-		"key": gin.H{"name": "onboarding-key"},
+		"currency": "CNY",
+		"key":      gin.H{"name": "onboarding-key"},
 	})
 	setAdminContext(c, 1, 1, "admin")
 	h.Commit(c)
@@ -193,6 +195,150 @@ func TestOnboarding_Commit_HappyPath(t *testing.T) {
 	assert.EqualValues(t, 1, hashCount)
 }
 
+// --- Commit: billing currency (write-once platform selection) ---
+
+// A first commit without a currency must be rejected — no silent default on a
+// fresh install — and must leave no rows behind.
+func TestOnboarding_Commit_CurrencyRequiredOnFirstCommit(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+
+	body := wizardBody("no-currency")
+	delete(body, "currency")
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "billing currency")
+	var providerCount, settingCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	db.Model(&model.SystemSetting{}).Count(&settingCount)
+	assert.EqualValues(t, 0, providerCount)
+	assert.EqualValues(t, 0, settingCount)
+}
+
+// A malformed currency value is rejected before any write.
+func TestOnboarding_Commit_CurrencyInvalid(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+
+	body := wizardBody("bad-currency")
+	body["currency"] = "EURO"
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "ISO 4217")
+	var providerCount, settingCount int64
+	db.Model(&model.Provider{}).Count(&providerCount)
+	db.Model(&model.SystemSetting{}).Count(&settingCount)
+	assert.EqualValues(t, 0, providerCount)
+	assert.EqualValues(t, 0, settingCount)
+}
+
+// The currency is the operator's choice: any well-formed ISO 4217 code is
+// accepted, stored canonically, echoed, and synced to the process-global
+// currency that every billing row is stamped with.
+func TestOnboarding_Commit_AnyCurrency(t *testing.T) {
+	t.Cleanup(func() { settings.SetPlatformCurrency(settings.CurrencyCNY) })
+	for _, tc := range []struct{ sent, want string }{
+		{"EUR", "EUR"}, {"JPY", "JPY"}, {"GBP", "GBP"}, {"HKD", "HKD"}, {"TWD", "TWD"}, {"KRW", "KRW"},
+		{"eur", "EUR"}, {" jpy ", "JPY"}, // a lower-case spelling is the same code
+	} {
+		t.Run(tc.sent, func(t *testing.T) {
+			db := setupOnboardingTestDB(t)
+			h := newOnboardingHandlerForTest(db)
+			body := wizardBody("any-currency")
+			body["currency"] = tc.sent
+			c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+			setAdminContext(c, 1, 1, "admin")
+			h.Commit(c)
+			require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+			var resp struct {
+				Data struct {
+					BillingCurrency string `json:"billing_currency"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tc.want, resp.Data.BillingCurrency)
+
+			var row model.SystemSetting
+			require.NoError(t, db.Where("system_settings.key = ?", "billing_currency").First(&row).Error)
+			assert.Equal(t, tc.want, row.Value, "stored canonically")
+			assert.Equal(t, tc.want, settings.PlatformCurrency(), "process-global currency follows the choice")
+		})
+	}
+}
+
+// A later commit spelling the locked currency differently is the SAME value
+// (idempotent), not an attempt to change it.
+func TestOnboarding_Commit_LockedCurrencyCaseInsensitive(t *testing.T) {
+	t.Cleanup(func() { settings.SetPlatformCurrency(settings.CurrencyCNY) })
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("first"))
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String()) // wizardBody fixes CNY
+
+	body := wizardBody("second")
+	body["currency"] = "cny"
+	c2, w2 := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c2, 2, 1, "admin")
+	h.Commit(c2)
+	require.Equal(t, http.StatusCreated, w2.Code, "body: %s", w2.Body.String())
+}
+
+// The first commit fixes billing_currency; later commits may repeat it or omit
+// it, but a DIFFERENT value is a 409 and creates nothing.
+func TestOnboarding_Commit_CurrencyLockedAfterFirstCommit(t *testing.T) {
+	db := setupOnboardingTestDB(t)
+	h := newOnboardingHandlerForTest(db)
+
+	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("first"))
+	setAdminContext(c, 1, 1, "admin")
+	h.Commit(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var first struct {
+		Data struct {
+			BillingCurrency string `json:"billing_currency"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &first))
+	assert.Equal(t, "CNY", first.Data.BillingCurrency)
+
+	var row model.SystemSetting
+	require.NoError(t, db.Where("system_settings.key = ?", "billing_currency").First(&row).Error)
+	assert.Equal(t, "CNY", row.Value)
+
+	// Same value → idempotent success.
+	c2, w2 := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", wizardBody("second"))
+	setAdminContext(c2, 2, 1, "admin")
+	h.Commit(c2)
+	require.Equal(t, http.StatusCreated, w2.Code, "body: %s", w2.Body.String())
+
+	// Different value → 409, nothing created for that request.
+	body := wizardBody("third")
+	body["currency"] = "USD"
+	c3, w3 := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", body)
+	setAdminContext(c3, 3, 1, "admin")
+	h.Commit(c3)
+	require.Equal(t, http.StatusConflict, w3.Code, "body: %s", w3.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &resp))
+	assert.Equal(t, ErrBillingCurrencyLocked, resp["error_code"])
+
+	var providerCount int64
+	db.Model(&model.Provider{}).Where("name = ?", "third").Count(&providerCount)
+	assert.EqualValues(t, 0, providerCount, "locked-currency commit must create nothing")
+	require.NoError(t, db.Where("system_settings.key = ?", "billing_currency").First(&row).Error)
+	assert.Equal(t, "CNY", row.Value, "currency row unchanged")
+}
+
 // TestOnboarding_Commit_NoKey: 向导不再强制建首密钥（生成的明文从不展示，被动创建属
 // 无意义副作用）——不带 key 时事务只建 供应商+映射，APIKey/APIKeyHash 零行，
 // 响应不含 key/key_prefix 字段。
@@ -205,7 +351,8 @@ func TestOnboarding_Commit_NoKey(t *testing.T) {
 			"name": "nokey-provider", "display_name": "NoKey", "adapter_type": "openai_compatible",
 			"base_url": "https://api.openai.com/v1", "api_key": "sk-test",
 		},
-		"models": []gin.H{{"model_name": "gpt-4o", "provider_model": "gpt-4o"}},
+		"models":   []gin.H{{"model_name": "gpt-4o", "provider_model": "gpt-4o"}},
+		"currency": "CNY",
 	})
 	setAdminContext(c, 1, 1, "admin")
 	h.Commit(c)
@@ -250,8 +397,9 @@ func TestOnboarding_Commit_TransactionRollback(t *testing.T) {
 			"name": "taken", "display_name": "Dup", "adapter_type": "openai_compatible",
 			"base_url": "https://api.openai.com/v1", "api_key": "sk-test",
 		},
-		"models": []gin.H{{"model_name": "m1", "provider_model": "m1"}},
-		"key":    gin.H{"name": "k1"},
+		"models":   []gin.H{{"model_name": "m1", "provider_model": "m1"}},
+		"currency": "CNY",
+		"key":      gin.H{"name": "k1"},
 	})
 	setAdminContext(c, 1, 1, "admin")
 	h.Commit(c)
@@ -290,6 +438,7 @@ func TestOnboarding_Commit_ExistingProviderReturnsStructured409(t *testing.T) {
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
 		"provider": gin.H{"name": "deepseek", "display_name": "DeepSeek", "adapter_type": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-new"},
 		"models":   []gin.H{{"model_name": "deepseek-chat", "provider_model": "deepseek-chat"}},
+		"currency": "CNY",
 		"key":      gin.H{"name": "k"},
 	})
 	setAdminContext(c, 1, 1, "admin")
@@ -322,12 +471,13 @@ func TestOnboarding_Commit_ReuseProviderCreatesKeyOnly(t *testing.T) {
 	// An existing model under deepseek (should be skipped, not duplicated).
 	require.NoError(t, db.Create(&model.ProviderModel{
 		ProviderID: pid, ModelName: "deepseek-chat", ProviderModel: "deepseek-chat",
-		Currency: "USD", RoutingStrategy: "weighted_random", Status: 1,
+		RoutingStrategy: "weighted_random", Status: 1,
 	}).Error)
 
 	c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
 		"provider":       gin.H{"name": "deepseek", "display_name": "DeepSeek", "adapter_type": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-new"},
 		"models":         []gin.H{{"model_name": "deepseek-chat", "provider_model": "deepseek-chat"}, {"model_name": "deepseek-reasoner", "provider_model": "deepseek-reasoner"}},
+		"currency":       "CNY",
 		"key":            gin.H{"name": "reused-key"},
 		"reuse_provider": true,
 	})
@@ -389,8 +539,9 @@ func wizardBody(providerName string) gin.H {
 	return gin.H{
 		"provider": gin.H{"name": providerName, "display_name": "X", "adapter_type": "openai_compatible",
 			"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
-		"models": []gin.H{{"model_name": "m1", "provider_model": "m1"}},
-		"key":    gin.H{"name": "k1"},
+		"models":   []gin.H{{"model_name": "m1", "provider_model": "m1"}},
+		"currency": "CNY",
+		"key":      gin.H{"name": "k1"},
 	}
 }
 

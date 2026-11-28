@@ -56,6 +56,7 @@ func TestOnboarding_Commit_SQLiteMigrationSchema(t *testing.T) {
 			c, w := newTestContext(t, http.MethodPost, "/admin/api/system/onboarding", gin.H{
 				"provider": gin.H{"name": "migration-provider", "display_name": "迁移接入测试", "adapter_type": "openai_compatible", "base_url": "https://8.8.8.8/v1", "api_key": "test-only"},
 				"models":   []gin.H{{"model_name": "migration-model", "provider_model": "upstream-model"}},
+				"currency": "CNY",
 				"key":      gin.H{"name": "migration-key"},
 			})
 			// 不引用不存在的用户；本测试只验证真实迁移后的接入事务。

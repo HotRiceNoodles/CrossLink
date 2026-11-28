@@ -291,6 +291,12 @@ func ValidateCommonExtraConfig(extraConfig []byte) error {
 // fall back to the default with a warning (defense-in-depth: write-time
 // validation already rejects them, but a stale row written before validation
 // existed must not produce a mis-behaving loop — and must not fail silently).
+//
+// Values arrive as json.Number (NOT int): the admin form seeds untouched
+// defaults into extra_config as JSON strings ("120" not 120), the same wire
+// quirk ResolveHTTPTimeout already tolerates — an int-typed struct would
+// fail the whole unmarshal on the first quoted value and silently discard
+// every knob.
 func PollConfigFromExtra(extraConfig []byte) PollConfig {
 	cfg := PollConfig{
 		Timeout:     120 * time.Second,
@@ -301,34 +307,47 @@ func PollConfigFromExtra(extraConfig []byte) PollConfig {
 		return cfg
 	}
 	var v struct {
-		TimeoutSec    int `json:"poll_timeout_seconds"`
-		IntervalMs    int `json:"poll_interval_ms"`
-		MaxIntervalMs int `json:"poll_max_interval_ms"`
+		TimeoutSec    json.Number `json:"poll_timeout_seconds"`
+		IntervalMs    json.Number `json:"poll_interval_ms"`
+		MaxIntervalMs json.Number `json:"poll_max_interval_ms"`
 	}
 	if json.Unmarshal(extraConfig, &v) != nil {
 		return cfg
 	}
-	if v.TimeoutSec != 0 {
-		if v.TimeoutSec >= minPollTimeoutSeconds && v.TimeoutSec <= maxPollTimeoutSeconds {
-			cfg.Timeout = time.Duration(v.TimeoutSec) * time.Second
-		} else {
-			slog.Warn("ignoring invalid poll_timeout_seconds, using default", "value", v.TimeoutSec)
-		}
+	if sec, ok := numIn(v.TimeoutSec, minPollTimeoutSeconds, maxPollTimeoutSeconds); ok {
+		cfg.Timeout = time.Duration(sec) * time.Second
+	} else if v.TimeoutSec != "" {
+		slog.Warn("ignoring invalid poll_timeout_seconds, using default", "value", v.TimeoutSec.String())
 	}
-	if v.IntervalMs != 0 {
-		if v.IntervalMs >= minPollIntervalMs && v.IntervalMs <= maxPollIntervalMs {
-			cfg.Interval = time.Duration(v.IntervalMs) * time.Millisecond
-		} else {
-			slog.Warn("ignoring invalid poll_interval_ms, using default", "value", v.IntervalMs)
-		}
+	if ms, ok := numIn(v.IntervalMs, minPollIntervalMs, maxPollIntervalMs); ok {
+		cfg.Interval = time.Duration(ms) * time.Millisecond
+	} else if v.IntervalMs != "" {
+		slog.Warn("ignoring invalid poll_interval_ms, using default", "value", v.IntervalMs.String())
 	}
-	if v.MaxIntervalMs != 0 {
-		if v.MaxIntervalMs >= int(cfg.Interval/time.Millisecond) && v.MaxIntervalMs <= maxPollMaxIntervalMs {
-			cfg.MaxInterval = time.Duration(v.MaxIntervalMs) * time.Millisecond
+	if v.MaxIntervalMs != "" {
+		if ms, ok := numIn(v.MaxIntervalMs, minPollMaxIntervalMs, maxPollMaxIntervalMs); ok && ms >= float64(cfg.Interval.Milliseconds()) {
+			cfg.MaxInterval = time.Duration(ms) * time.Millisecond
 		} else {
-			slog.Warn("ignoring invalid poll_max_interval_ms, capping at interval (no backoff)", "value", v.MaxIntervalMs)
+			slog.Warn("ignoring invalid poll_max_interval_ms, capping at interval (no backoff)", "value", v.MaxIntervalMs.String())
 			cfg.MaxInterval = cfg.Interval // degenerate: cap at interval (no backoff)
 		}
-	} // v.MaxIntervalMs == 0 (not set): keep default
+	} // absent (not set): keep default
 	return cfg
+}
+
+// numIn parses an extra_config json.Number (tolerating the quoted-string form
+// the admin form emits for untouched defaults) and reports whether it lies
+// within [min, max]. Absent/empty or non-numeric → (0, false).
+func numIn(n json.Number, min, max int) (float64, bool) {
+	if n == "" {
+		return 0, false
+	}
+	v, err := n.Float64()
+	if err != nil {
+		return 0, false
+	}
+	if v < float64(min) || v > float64(max) {
+		return 0, false
+	}
+	return v, true
 }
