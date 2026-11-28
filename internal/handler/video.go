@@ -171,6 +171,17 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	}
 
 	videoRoutes = service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, videoRoutes, orgID)
+	// P3 modality gate (design §5.2): video serves ""|"video".
+	if kept, allBlocked := router.FilterRoutesByModality(videoRoutes, "video"); allBlocked {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"message": service.ErrModalityMismatch.Error(),
+			"type":    "invalid_request_error",
+			"code":    "modality_mismatch",
+		}})
+		return
+	} else {
+		videoRoutes = kept
+	}
 	config := service.ResolveFallbackConfig(videoRoutes)
 	engine := service.NewFallbackEngine(h.health, config)
 	engine.SetClassifier(h.classifier)
@@ -268,7 +279,6 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		OrgID:           orgID,
 		APIKeyID:        apiKeyID,
 		TeamID:          teamID,
-		Currency:        winningRoute.Currency,
 		PriceMultiplier: readPriceMultiplier(c),
 		InputPrice:      inputPrice,
 		Prompt:          truncateStr(req.Prompt, 200),

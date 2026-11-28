@@ -91,10 +91,8 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 			teamID = *key.TeamID
 		}
 	}
-	var currency string
 	var providerID int64
 	if route := service.LastAttemptRoute(result, routes); route != nil {
-		currency = route.Currency
 		providerID = route.ProviderRow.ID
 	}
 	// Error observability L1/L1.5: sanitized upstream message, status/type/
@@ -110,7 +108,6 @@ func (h *OpenAIHandler) logFailure(c *gin.Context, reqModel string, statusCode i
 		APIKeyID:           keyID,
 		TeamID:             teamID,
 		OrgID:              orgID,
-		Currency:           currency,
 		StatusCode:         statusCode,
 		ErrorType:          "provider_error",
 		ErrorMessage:       det.Message,
@@ -241,6 +238,17 @@ func (h *OpenAIHandler) HandleChatCompletions(c *gin.Context) {
 		expanded := service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 		if len(expanded) == 0 {
 			expanded = routes
+		}
+		// P3 modality gate (design §5.2): chat serves ""|"text" mappings only;
+		// every route explicitly otherwise = stable 400 (GatewayService
+		// re-applies the same gate on its own resolve — same double-gate
+		// pattern as effort eligibility).
+		if gated, gerr := service.GateRoutesForText(expanded); gerr != nil {
+			logRequestStageError(h.usageSvc, c, "openai", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", gerr.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": gerr.Error()}})
+			return
+		} else {
+			expanded = gated
 		}
 		if service.RequestCarriesEffort(req.Extensions) {
 			filtered, _ := service.FilterEffortEligibleRoutes(expanded, req.Extensions)
@@ -385,6 +393,16 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	result := engine.ExecuteNonStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (any, error) {
 		reqCopy := *req
 		reqCopy.Model = route.ProviderModel
+		// M3 §1.3: the shallow struct copy shares the envelope pointer — clone
+		// it so per-candidate mutation (overrides/gating below) can never leak
+		// into a sibling candidate.
+		reqCopy.Extensions = reqCopy.Extensions.Clone()
+		// M3.2 execution half (matrix G-R1 audit): model-level
+		// request_overrides + dialect-param gating must apply on the
+		// openai-chat closures too — previously only the GatewayService
+		// (messages) closures applied them, silently ignoring admin
+		// overrides on /v1/chat/completions.
+		service.ApplyRouteRequestOverrides(&reqCopy, route)
 		pn := route.Provider.Name()
 		// P3a: per-(provider,model) guardrail counters (concurrency + RPM).
 		// Count-only here; enforcement is in P4 via health-score reading the
@@ -613,7 +631,6 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 	c.Set("output_tokens", outputTokens)
 	c.Set("input_price", route.InputPrice)
 	c.Set("output_price", route.OutputPrice)
-	c.Set("currency", route.Currency)
 
 	latency := time.Since(start).Milliseconds()
 	pn := route.Provider.Name()
@@ -631,7 +648,6 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, routes []*router.RouteRe
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
 		InputPrice:     route.InputPrice,
-		Currency:       route.Currency,
 		OutputPrice:    route.OutputPrice,
 		StatusCode:     http.StatusOK,
 		LatencyMs:      latency,
@@ -745,6 +761,10 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 	result := engine.ExecuteStream(c.Request.Context(), routes, func(ctx context.Context, route *router.RouteResult) (<-chan domain.SSEChunk, error) {
 		reqCopy := *req
 		reqCopy.Model = route.ProviderModel
+		// M3 §1.3 + G-R1 audit: envelope clone + overrides — mirror of the
+		// non-stream closure above (and the GatewayService closures).
+		reqCopy.Extensions = reqCopy.Extensions.Clone()
+		service.ApplyRouteRequestOverrides(&reqCopy, route)
 		reqCopy.Stream = true
 		if reqCopy.StreamOptions == nil {
 			reqCopy.StreamOptions = &domain.StreamOptions{IncludeUsage: true}
@@ -1075,7 +1095,6 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, routes []*router.RouteResul
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
 		InputPrice:     route.InputPrice,
-		Currency:       route.Currency,
 		OutputPrice:    route.OutputPrice,
 		StatusCode:     http.StatusOK,
 		LatencyMs:      latency,

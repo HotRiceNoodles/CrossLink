@@ -67,13 +67,15 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		Priority        *int            `json:"priority"`
 		InputPrice      float64         `json:"input_price"`
 		OutputPrice     float64         `json:"output_price"`
-		Currency        string          `json:"currency"`
 		RoutingStrategy string          `json:"routing_strategy"`
 		ExtraConfig     json.RawMessage `json:"extra_config"`
 		// MaxContext: the upstream model's context window (tokens). Consumed
 		// by context analysis and budget estimation; absent (nil) = unknown,
 		// analysis degrades to the FlagWindowUnknown path.
 		MaxContext *int `json:"max_context"`
+		// Modality (图片方案 P3): endpoint family this mapping serves;
+		// "" = unclassified (legacy semantics, kept by every family).
+		Modality string `json:"modality"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		if h.auditSvc != nil {
@@ -151,6 +153,14 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, "invalid routing strategy")
 		return
 	}
+	// P3 modality: enum-validated before persist ("" is valid = unclassified).
+	if !model.IsValidModality(input.Modality) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:create", "model", "", input.ModelName, service.AuditDetail(map[string]any{"reason": "invalid_modality", "value": input.Modality}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, fmt.Sprintf("invalid modality %q (valid: text, image, video, audio_speech, audio_transcription, embedding)", input.Modality))
+		return
+	}
 
 	m := &model.ProviderModel{
 		ProviderID:      input.ProviderID,
@@ -160,10 +170,10 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		Priority:        priority,
 		InputPrice:      input.InputPrice,
 		OutputPrice:     input.OutputPrice,
-		Currency:        model.ValidCurrency(input.Currency),
 		RoutingStrategy: input.RoutingStrategy,
 		ExtraConfig:     datatypes.JSON(input.ExtraConfig),
 		MaxContext:      input.MaxContext,
+		Modality:        input.Modality,
 		Status:          1,
 	}
 	orgID := GetOrgID(c)
@@ -239,7 +249,6 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		Priority        *int            `json:"priority"`
 		InputPrice      *float64        `json:"input_price"`
 		OutputPrice     *float64        `json:"output_price"`
-		Currency        *string         `json:"currency"`
 		Status          *int16          `json:"status"`
 		RoutingStrategy *string         `json:"routing_strategy"`
 		ExtraConfig     json.RawMessage `json:"extra_config"`
@@ -252,6 +261,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		// desynchronize every cache; delete + recreate is the sanctioned path.
 		ModelName     *string `json:"model_name"`
 		ProviderModel *string `json:"provider_model"`
+		// Modality (图片方案 P3): nil leaves unchanged; non-nil sets (""
+		// reclassifies back to unclassified).
+		Modality *string `json:"modality"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		if h.auditSvc != nil {
@@ -284,6 +296,14 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		errorResp(c, http.StatusBadRequest, ErrInvalidRoutingStrategy, "invalid routing strategy")
 		return
 	}
+	// P3 modality: same enum rule as Create (nil = untouched).
+	if input.Modality != nil && !model.IsValidModality(*input.Modality) {
+		if h.auditSvc != nil {
+			h.auditSvc.LogFailure(c, "model:update", "model", fmt.Sprintf("%d", id), "", service.AuditDetail(map[string]any{"reason": "invalid_modality", "value": *input.Modality}))
+		}
+		errorResp(c, http.StatusBadRequest, ErrInvalidRequest, fmt.Sprintf("invalid modality %q (valid: text, image, video, audio_speech, audio_transcription, embedding)", *input.Modality))
+		return
+	}
 	// M3.2 write half (same rule as Create): extension control keys must be
 	// valid before the rewrite is persisted.
 	if input.ExtraConfig != nil {
@@ -305,7 +325,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		errorResp(c, http.StatusNotFound, ErrNotFound, "not found")
 		return
 	}
-	before := map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "currency": m.Currency, "status": m.Status, "routing_strategy": m.RoutingStrategy}
+	before := map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "status": m.Status, "routing_strategy": m.RoutingStrategy}
 	// supports_responses capability gate (same rule as Create, here against
 	// the loaded mapping's provider).
 	if input.ExtraConfig != nil {
@@ -329,6 +349,9 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	if input.Weight != nil {
 		m.Weight = *input.Weight
 	}
+	if input.Modality != nil {
+		m.Modality = *input.Modality
+	}
 	if input.Priority != nil {
 		m.Priority = *input.Priority
 	}
@@ -340,9 +363,6 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	}
 	if input.Status != nil {
 		m.Status = *input.Status
-	}
-	if input.Currency != nil {
-		m.Currency = model.ValidCurrency(*input.Currency)
 	}
 	if input.RoutingStrategy != nil {
 		m.RoutingStrategy = *input.RoutingStrategy
@@ -372,7 +392,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		h.OnModelChange(m.ModelName)
 	}
 	if h.auditSvc != nil {
-		h.auditSvc.LogFromContext(c, "model:update", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "currency": m.Currency, "status": m.Status, "routing_strategy": m.RoutingStrategy}}))
+		h.auditSvc.LogFromContext(c, "model:update", "model", fmt.Sprintf("%d", id), m.ModelName, service.AuditDetail(map[string]any{"before": before, "after": map[string]any{"model_name": m.ModelName, "provider_id": m.ProviderID, "weight": m.Weight, "priority": m.Priority, "input_price": m.InputPrice, "output_price": m.OutputPrice, "status": m.Status, "routing_strategy": m.RoutingStrategy}}))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": m})
 }

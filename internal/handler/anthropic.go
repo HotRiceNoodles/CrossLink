@@ -126,11 +126,9 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 			teamID = *key.TeamID
 		}
 	}
-	var currency string
 	var providerID int64
 	var routeErr *service.RouteError
 	if errors.As(gatewayErr, &routeErr) && routeErr.Route != nil {
-		currency = routeErr.Route.Currency
 		providerID = routeErr.Route.ProviderRow.ID
 	}
 	var fallbackCount int
@@ -156,7 +154,6 @@ func (h *AnthropicHandler) logFailure(c *gin.Context, model string, statusCode i
 		APIKeyID:           keyID,
 		TeamID:             teamID,
 		OrgID:              orgID,
-		Currency:           currency,
 		StatusCode:         statusCode,
 		ErrorType:          "provider_error",
 		ErrorMessage:       det.Message,
@@ -258,6 +255,20 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		expanded := service.ExpandFallbackRoutes(c.Request.Context(), h.resolver, routes, orgID)
 		if len(expanded) == 0 {
 			expanded = routes
+		}
+		// P3 modality gate (design §5.2): messages serves ""|"text" only.
+		// GatewayService re-applies the gate on its own resolve (double-gate,
+		// same pattern as effort eligibility); this early gate keeps the
+		// budget reservation from holding against incompatible candidates.
+		if gated, gerr := service.GateRoutesForText(expanded); gerr != nil {
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", gerr.Error())
+			c.JSON(http.StatusBadRequest, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "invalid_request_error", "message": gerr.Error()},
+			})
+			return
+		} else {
+			expanded = gated
 		}
 		// Phase-1 effort eligibility (checklist §6.1): filter BEFORE the
 		// reservation so an incompatible-but-expensive candidate cannot
@@ -371,6 +382,16 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"type":  "error",
 				"error": gin.H{"type": "invalid_request_error", "message": service.ErrNoEffortCompatibleRoute.Error()},
+			})
+			return
+		}
+		if errors.Is(err, service.ErrModalityMismatch) {
+			// P3 race path: mapping reclassified between the handler pre-check
+			// and the gateway's resolve — same stable 400.
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrModalityMismatch.Error())
+			c.JSON(http.StatusBadRequest, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "invalid_request_error", "message": service.ErrModalityMismatch.Error()},
 			})
 			return
 		}
@@ -535,7 +556,6 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 	c.Set("output_tokens", result.OutputTokens)
 	c.Set("input_price", result.InputPrice)
 	c.Set("output_price", result.OutputPrice)
-	c.Set("currency", result.Currency)
 	c.Set("usage_logged", true)
 
 	// Cache-aware cost so the usage row and ReportBudgetUsage agree (the budget
@@ -557,7 +577,6 @@ func (h *AnthropicHandler) HandleMessages(c *gin.Context) {
 		OutputTokens:   result.OutputTokens,
 		InputPrice:     result.InputPrice,
 		OutputPrice:    result.OutputPrice,
-		Currency:       result.Currency,
 		LatencyMs:      result.LatencyMs,
 		StatusCode:     http.StatusOK,
 		// M0: strips audit rides the attempts timeline even on success.
@@ -989,6 +1008,17 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 			flusher.Flush()
 			return
 		}
+		if errors.Is(err, service.ErrModalityMismatch) {
+			// P3 race path (stream): same SSE error-event treatment as effort.
+			logRequestStageError(h.usageSvc, c, "anthropic", req.Model, http.StatusBadRequest, "invalid_request_error", "resolve", service.ErrModalityMismatch.Error())
+			errData, _ := json.Marshal(map[string]any{
+				"type":  "error",
+				"error": map[string]string{"type": "invalid_request_error", "message": service.ErrModalityMismatch.Error()},
+			})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
+			flusher.Flush()
+			return
+		}
 		slog.Error("stream error", "error", err, "model", req.Model)
 		h.logFailure(c, req.Model, gatewayErrorStatus(err), start, err, sessionID)
 		errData, _ := json.Marshal(map[string]any{
@@ -1037,7 +1067,6 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, req *domain.AnthropicReq
 		OutputTokens:   result.OutputTokens,
 		InputPrice:     result.InputPrice,
 		OutputPrice:    result.OutputPrice,
-		Currency:       result.Currency,
 		LatencyMs:      result.LatencyMs,
 		FirstTokenMs:   firstTokenMsValue(start, firstTokenAt),
 		StatusCode:     http.StatusOK,

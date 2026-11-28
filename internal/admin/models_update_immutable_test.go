@@ -31,7 +31,7 @@ func newImmutableModelEnv(t *testing.T) (*ModelHandler, int64) {
 
 	p := &model.Provider{Name: "p-imm", DisplayName: "p", AdapterType: "openai_compatible", BaseURL: "https://x", APIKey: "k", Status: 1}
 	require.NoError(t, db.Create(p).Error)
-	m := &model.ProviderModel{ProviderID: p.ID, ModelName: "m-old", ProviderModel: "up-old", Weight: 1, Priority: 1, Status: 1, RoutingStrategy: "weighted_random", Currency: "CNY"}
+	m := &model.ProviderModel{ProviderID: p.ID, ModelName: "m-old", ProviderModel: "up-old", Weight: 1, Priority: 1, Status: 1, RoutingStrategy: "weighted_random"}
 	require.NoError(t, db.Create(m).Error)
 
 	// FlushByModel hits Redis unconditionally (no disabled-mode guard), so the

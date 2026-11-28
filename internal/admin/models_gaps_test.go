@@ -32,7 +32,7 @@ func newModelGapEnv(t *testing.T) (*ModelHandler, *repository.ProviderModelCRUDR
 
 	p := &model.Provider{Name: "p-gaps", DisplayName: "p", AdapterType: "openai_compatible", BaseURL: "https://api.openai.com/v1", APIKey: "k", Status: 1}
 	require.NoError(t, db.Create(p).Error)
-	m := &model.ProviderModel{ProviderID: p.ID, ModelName: "g-model", ProviderModel: "up-1", Weight: 1, Priority: 1, Status: 1, RoutingStrategy: "weighted_random", Currency: "CNY"}
+	m := &model.ProviderModel{ProviderID: p.ID, ModelName: "g-model", ProviderModel: "up-1", Weight: 1, Priority: 1, Status: 1, RoutingStrategy: "weighted_random"}
 	require.NoError(t, db.Create(m).Error)
 
 	// FlushByModel hits Redis unconditionally — real client via miniredis.
