@@ -11,6 +11,7 @@ import (
 	"github.com/crosslink/internal/config"
 	"github.com/crosslink/internal/crypto"
 	"github.com/crosslink/internal/dialect"
+	"github.com/crosslink/internal/install"
 	"github.com/crosslink/internal/license"
 	"github.com/crosslink/internal/mcp"
 	"github.com/crosslink/internal/middleware"
@@ -46,6 +47,15 @@ func setupLogger(cfg *config.Config) {
 }
 
 func main() {
+	// Install-time one-shot modes — `crosslink -preflight` validates the
+	// install-time configuration against the boot guards' own rules and
+	// exits; `crosslink init` is the interactive installer. Dispatched on raw
+	// argv BEFORE flag.Parse (which would reject -preflight as unknown), and
+	// it never returns after starting anything: what follows is a normal start.
+	if install.Dispatch(os.Args[1:]) {
+		return
+	}
+
 	// -migrate-only: one-shot schema migration for the controlled Job flow
 	// (templates/kubernetes/migrate-job.yaml). Exit contract: 0 = migrations
 	// applied (or already up to date — idempotent), non-zero = failure. The

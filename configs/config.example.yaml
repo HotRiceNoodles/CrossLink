@@ -271,3 +271,12 @@ mcp:
 # 通过后进人工确认队列——未过门禁/未确认的候选永不生效。
 # guardrail_tuning:
 #   enabled: false
+
+# Billing currency (单币种结算;只读一次的初始声明)。
+# 平台所有计价/计费/预算/统计使用同一种币种: 任意 ISO 4217 三位货币代码
+# (CNY 人民币 / USD 美元 / EUR 欧元 / JPY 日元 / HKD 港币 ...)。
+# 此处仅为无 UI 安装(headless)的初始声明——首次启动/onboarding 向导选定后,
+# 值被固化进 system_settings(billing_currency, 写后锁定),之后本字段与任何
+# API 都无法再修改;更换币种必须重新部署。
+# billing:
+#   currency: CNY

@@ -39,6 +39,26 @@ type Config struct {
 	Toolset         ToolsetConfig         `mapstructure:"toolset"`
 	Behavior        BehaviorConfig        `mapstructure:"behavior"`
 	GuardrailTuning GuardrailTuningConfig `mapstructure:"guardrail_tuning"`
+	Images          ImagesConfig          `mapstructure:"images"`
+	Billing         BillingConfig         `mapstructure:"billing"`
+}
+
+// BillingConfig declares the deployment's single settlement currency. This is
+// the INITIAL declaration only (headless installs): once a value is fixed —
+// onboarding wizard or first admin write — it is persisted to system_settings
+// (billing_currency, write-once) and this yaml/env field never overrides the
+// stored row again.
+type BillingConfig struct {
+	// Currency is an ISO 4217-style code (CNY, USD, EUR, JPY, ...); "" = undecided.
+	Currency string `mapstructure:"currency"`
+}
+
+// ArtifactMode: "passthrough" (default — upstream URL verbatim) | "proxy"
+// (gateway-signed relay URL /v1/images/files/{token}). ProxyTTLHours bounds
+// the signature validity; 0 = 24h (matching the common upstream retention).
+type ImagesConfig struct {
+	ArtifactMode  string `mapstructure:"artifact_mode"`
+	ProxyTTLHours int    `mapstructure:"proxy_ttl_hours"`
 }
 
 // BehaviorConfig 控制实体行为基线聚合作业（docs/plans/2026-11-19-behavior-baseline-defense.md，
@@ -654,6 +674,13 @@ func (c *Config) Validate() error {
 	if c.Crypto.Mode != "" && c.Crypto.Mode != "standard" && c.Crypto.Mode != "gm" {
 		return fmt.Errorf("crypto.mode must be 'standard' or 'gm', got: %s", c.Crypto.Mode)
 	}
+	// "" = not yet chosen (the wizard / first commit fixes it). Anything else
+	// must be a well-formed currency code. The value is normalized (like the
+	// database driver aliases above) so "eur" and "EUR" are the same choice.
+	c.Billing.Currency = NormalizeCurrencyCode(c.Billing.Currency)
+	if cur := c.Billing.Currency; cur != "" && !ValidCurrencyCode(cur) {
+		return fmt.Errorf("billing.currency must be a 3-letter ISO 4217 currency code such as CNY, USD or EUR (or empty, to choose in the setup wizard), got: %q", cur)
+	}
 	if c.Crypto.Mode == "gm" && c.SecretManager.EncryptionKey != "" {
 		encKey, err := base64.StdEncoding.DecodeString(c.SecretManager.EncryptionKey)
 		if err != nil {
@@ -684,7 +711,21 @@ func (a AdminConfig) IsJWTSecretInsecure() bool {
 // configFilePath stores the resolved config file path from Load() for later writes.
 var configFilePath string
 
+// Load reads config.yaml (if present) layered with CL_* env vars and
+// validates the result. A config that fails validation is not returned.
 func Load(configPath string) (*Config, error) {
+	return load(configPath, true)
+}
+
+// LoadUnvalidated is Load without the final Validate step: the parsed config
+// is returned even when invalid. Used by preflight, which reports every
+// invalid field as its own checklist line instead of failing on the first.
+// Callers that START the server must use Load.
+func LoadUnvalidated(configPath string) (*Config, error) {
+	return load(configPath, false)
+}
+
+func load(configPath string, validate bool) (*Config, error) {
 	v := viper.New()
 
 	v.SetConfigName("config")
@@ -745,8 +786,10 @@ func Load(configPath string) (*Config, error) {
 		cfg.Gateway.InternalAllowCIDRs = cidrs
 		cfg.Gateway.InternalAllowCIDRsFromEnv = true
 	}
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	if validate {
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid config: %w", err)
+		}
 	}
 	return &cfg, nil
 }
@@ -984,6 +1027,13 @@ func setDefaults(v *viper.Viper) {
 	// Allow both short and long env var names for the encryption key
 	v.BindEnv("secret_manager.encryption_key", "CL_ENCRYPTION_KEY", "CL_SECRET_MANAGER_ENCRYPTION_KEY")
 	v.BindEnv("secret_manager.allow_wizard_generation", "CL_SECRET_MANAGER_ALLOW_WIZARD_GENERATION")
+	// Install-time decisions (single .env install manifest): short aliases so
+	// the manifest reads CL_BILLING_CURRENCY / CL_CRYPTO_MODE instead of the
+	// dotted long form. billing.currency is registered with an empty default
+	// ("" = not yet chosen); viper's AutomaticEnv only resolves known keys.
+	v.SetDefault("billing.currency", "")
+	v.BindEnv("billing.currency", "CL_BILLING_CURRENCY")
+	v.BindEnv("crypto.mode", "CL_CRYPTO_MODE")
 }
 
 // WriteLicenseKey updates the license.license_key field in the YAML config file.
